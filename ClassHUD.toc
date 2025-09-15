@@ -9,5 +9,8 @@
 ## OptionalDeps: LibSharedMedia-3.0
 
 ClassHUD.lua
+ClassHUD_Bars.lua
+ClassHUD_Classbar.lua
+ClassHUD_Spells.lua
 ClassHUD_SpellSuggestions.lua
 ClassHUD_Options.lua
