@@ -412,10 +412,15 @@ end
 local castTicker
 
 local function StopCast()
-  if castTicker then
-    castTicker:Cancel(); castTicker = nil
+  -- Don’t stop if player is still casting or channeling something
+  local casting = UnitCastingInfo("player")
+  local channeling = UnitChannelInfo("player")
+  if casting or channeling then
+    return
   end
+
   if UI.cast then
+    UI.cast:SetScript("OnUpdate", nil)
     UI.cast:Hide()
     UI.cast:SetValue(0)
     UI.cast.time:SetText("")
@@ -424,45 +429,72 @@ local function StopCast()
   end
 end
 
+
 local function StartCast(name, icon, startMS, endMS)
   if not ClassHUD.db.profile.show.cast then return end
   local total = (endMS - startMS) / 1000
   local start = startMS / 1000
+
   UI.cast:Show()
   UI.cast.spell:SetText(name or "")
   UI.cast.icon:SetTexture(icon or 136243) -- generic
-  local r, g, b = 1, .7, 0
-  UI.cast:SetStatusBarColor(r, g, b)
-  if castTicker then castTicker:Cancel() end
-  castTicker = C_Timer.NewTicker(0.02, function()
+  UI.cast:SetStatusBarColor(1, .7, 0)
+
+  UI.cast:SetScript("OnUpdate", function(self)
     local now = GetTime()
     local elapsed = now - start
-    UI.cast:SetMinMaxValues(0, total)
-    UI.cast:SetValue(elapsed)
-    UI.cast.time:SetFormattedText("%.1f / %.1f", math.max(0, elapsed), total)
-    if elapsed >= total then StopCast() end
+    self:SetMinMaxValues(0, total)
+    self:SetValue(elapsed)
+    self.time:SetFormattedText("%.1f / %.1f", math.max(0, elapsed), total)
+
+    if elapsed >= total then
+      self:SetScript("OnUpdate", nil)
+      self:Hide()
+    end
   end)
 end
+
 
 function ClassHUD:UNIT_SPELLCAST_START(_, unit)
   if unit ~= "player" then return end
   local name, _, icon, startMS, endMS = UnitCastingInfo("player")
-  if name then StartCast(name, icon, startMS, endMS) end
+  if name then
+    StartCast(name, icon, startMS, endMS)
+  end
 end
 
 function ClassHUD:UNIT_SPELLCAST_CHANNEL_START(_, unit)
   if unit ~= "player" then return end
   local name, _, icon, startMS, endMS = UnitChannelInfo("player")
-  if name then StartCast(name, icon, startMS, endMS) end
+  if name then
+    StartCast(name, icon, startMS, endMS)
+  end
 end
 
-function ClassHUD:UNIT_SPELLCAST_STOP(_, unit) if unit == "player" then StopCast() end end
+function ClassHUD:UNIT_SPELLCAST_SUCCEEDED(_, unit, spellID)
+  if unit ~= "player" then return end
+  local name, _, icon = C_Spell.GetSpellInfo(spellID)
+  -- Only show if the spell is instant (no cast/channel active)
+  if name and not UnitCastingInfo("player") and not UnitChannelInfo("player") then
+    StartCast(name, icon, GetTime() * 1000, (GetTime() + 1) * 1000) -- show 1s fake bar
+  end
+end
 
-function ClassHUD:UNIT_SPELLCAST_CHANNEL_STOP(_, unit) if unit == "player" then StopCast() end end
+function ClassHUD:UNIT_SPELLCAST_STOP(_, unit)
+  if unit == "player" then StopCast() end
+end
 
-function ClassHUD:UNIT_SPELLCAST_INTERRUPTED(_, unit) if unit == "player" then StopCast() end end
+function ClassHUD:UNIT_SPELLCAST_CHANNEL_STOP(_, unit)
+  if unit == "player" then StopCast() end
+end
 
-function ClassHUD:UNIT_SPELLCAST_FAILED(_, unit) if unit == "player" then StopCast() end end
+function ClassHUD:UNIT_SPELLCAST_INTERRUPTED(_, unit)
+  if unit == "player" then StopCast() end
+end
+
+function ClassHUD:UNIT_SPELLCAST_FAILED(_, unit)
+  if unit == "player" then StopCast() end
+end
 
 local function UpdateHP()
   if not ClassHUD.db.profile.show.hp then return end
