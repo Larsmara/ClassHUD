@@ -31,6 +31,11 @@ Built with [Ace3](https://www.wowace.com/projects/ace3) and LibSharedMedia.
 - Supports aura glow, aura stack counts, and icon swap on aura active
 - Fully movable and resizable bars
 
+## 🦴 Todo
+
+- [ ] - Clean up the Options. Better the flow
+- [ ] - Add sound notification
+
 ---
 
 ## 📜 License
