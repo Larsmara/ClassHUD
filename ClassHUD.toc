@@ -1,0 +1,13 @@
+## Interface: 110100
+## Title: ClassHUD
+## Notes: Simple class HUD: cast bar, HP, primary resource, special power (segments/runes)
+## Author: You
+## Version: 0.1.0
+## SavedVariables: ClassHUDDB
+
+## Dependencies: Ace3
+## OptionalDeps: LibSharedMedia-3.0
+
+ClassHUD.lua
+ClassHUD_SpellSuggestions.lua
+ClassHUD_Options.lua

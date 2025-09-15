@@ -1,0 +1,51 @@
+name: Release Addon
+
+on:
+  push:
+    tags:
+      - "v*.*.*" # e.g. v1.0.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up addon metadata
+        run: |
+          ADDON_NAME="ClassHUD"
+          echo "ADDON_NAME=$ADDON_NAME" >> $GITHUB_ENV
+
+      - name: Package addon
+        run: |
+          mkdir -p build/${{ env.ADDON_NAME }}
+          # Copy all addon files except git/github stuff
+          rsync -av --exclude='.git*' --exclude='.github' ./ build/${{ env.ADDON_NAME }}/
+          cd build
+          zip -r ../${{ env.ADDON_NAME }}.zip ${{ env.ADDON_NAME }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ADDON_NAME }}-zip
+          path: ./${{ env.ADDON_NAME }}.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ClassHUD-zip
+          path: .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ClassHUD.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
