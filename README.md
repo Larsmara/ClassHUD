@@ -35,6 +35,7 @@ Built with [Ace3](https://www.wowace.com/projects/ace3) and LibSharedMedia.
 
 - [ ] - Clean up the Options. Better the flow
 - [ ] - Add sound notification
+- [ ] - Add more classes
 
 ---
 
