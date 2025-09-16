@@ -1,5 +1,6 @@
 -- ClassHUD_Classbar.lua
-local ClassHUD = LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
+---@type ClassHUD
+local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local UI = ClassHUD.UI
 
 -- ========= Advanced Class Resource System =========

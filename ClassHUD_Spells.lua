@@ -1,5 +1,6 @@
 -- ClassHUD_Spells.lua
-local ClassHUD = LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
+---@type ClassHUD
+local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local UI = ClassHUD.UI
 
 -- ===================================
@@ -82,7 +83,7 @@ end
 local function LayoutTopBarSpells(frames)
   if not UI.attachments or not UI.attachments.TOP then return end
 
-  local width    = ClassHUD.db.profile.width
+  local width    = (ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.width) or 250
   local perRow   = (ClassHUD.db.profile.topBar and ClassHUD.db.profile.topBar.perRow) or 8
   local spacingX = (ClassHUD.db.profile.topBar and ClassHUD.db.profile.topBar.spacingX) or 4
   local spacingY = (ClassHUD.db.profile.topBar and ClassHUD.db.profile.topBar.spacingY) or 4
@@ -138,7 +139,7 @@ end
 local function LayoutBottomBarSpells(frames)
   if not UI.attachments or not UI.attachments.BOTTOM then return end
 
-  local width    = ClassHUD.db.profile.width
+  local width    = (ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.width) or 250
   local perRow   = (ClassHUD.db.profile.bottomBar and ClassHUD.db.profile.bottomBar.perRow) or 8
   local spacingX = (ClassHUD.db.profile.bottomBar and ClassHUD.db.profile.bottomBar.spacingX) or 4
   local spacingY = (ClassHUD.db.profile.bottomBar and ClassHUD.db.profile.bottomBar.spacingY) or 4
@@ -266,6 +267,8 @@ function ClassHUD:UpdateAllFrames()
 end
 
 function ClassHUD:BuildFramesForSpec()
+  if not self.db or not self.db.profile then return end
+
   for _, f in ipairs(activeFrames) do f:Hide() end
   wipe(activeFrames)
 

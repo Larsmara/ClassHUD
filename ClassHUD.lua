@@ -6,13 +6,36 @@ local AceConsole = LibStub("AceConsole-3.0")
 local AceDB      = LibStub("AceDB-3.0")
 local LSM        = LibStub("LibSharedMedia-3.0")
 
+---@class ClassHUD : AceAddon, AceEvent, AceConsole
+---@field BuildFramesForSpec fun(self:ClassHUD)  -- defined in Spells.lua
+---@field UpdateAllFrames fun(self:ClassHUD)     -- defined in Spells.lua
+---@field Layout fun(self:ClassHUD)              -- defined in Bars.lua
+---@field ApplyBarSkins fun(self:ClassHUD)       -- defined in Bars.lua
+---@field UpdateHP fun(self:ClassHUD)            -- defined in Bars.lua
+---@field UpdatePrimaryResource fun(self:ClassHUD) -- defined in Bars.lua
+---@field UpdateSpecialPower fun(self:ClassHUD)  -- defined in Classbar.lua
+---@field UpdateSegmentsAdvanced fun(self:ClassHUD, ptype:number, max:number, partial:boolean)|nil
+---@field UpdateEssenceSegments fun(self:ClassHUD, ptype:number)|nil
+---@field UpdateRunes fun(self:ClassHUD)|nil
+
 local ClassHUD   = AceAddon:NewAddon("ClassHUD", "AceEvent-3.0", "AceConsole-3.0")
 ClassHUD:SetDefaultModuleState(true)
+_G.ClassHUD = ClassHUD -- explicit global bridge so split files can always find it
 
 -- Make shared libs available to submodules
 ClassHUD.LSM = LSM
 
--- Global UI state (shared across modules)
+---@class ClassHUDUI
+---@field anchor Frame|nil
+---@field cast StatusBar|nil
+---@field hp StatusBar|nil
+---@field resource StatusBar|nil
+---@field power Frame|nil
+---@field powerSegments StatusBar[]
+---@field runeBars StatusBar[]
+---@field icons Frame|nil
+---@field iconFrames Frame[]
+---@field attachments table<string, Frame>
 ClassHUD.UI = {
   anchor        = nil,
   cast          = nil,
@@ -118,7 +141,7 @@ local defaults = {
       yOffset  = 0,
     },
 
-    colors = {
+    colors          = {
       hp = { r = 0.10, g = 0.80, b = 0.10 },
       resourceClass = true,                     -- use class color for primary resource
       resource = { r = 0.00, g = 0.55, b = 1.00 },
@@ -143,7 +166,7 @@ end
 function ClassHUD:ApplyAnchorPosition()
   local UI = self.UI
   if not UI.anchor then return end
-  local pos = self.db.profile.position or { x = 0, y = -350 }
+  local pos = (self.db and self.db.profile and self.db.profile.position) or { x = 0, y = -350 }
   UI.anchor:ClearAllPoints()
   UI.anchor:SetPoint("CENTER", UIParent, "CENTER", pos.x or 0, pos.y or 0)
 end
@@ -169,6 +192,7 @@ end
 -- Lifecycle
 -- ---------------------------------------------------------------------------
 function ClassHUD:OnInitialize()
+  -- IMPORTANT: Ensure your TOC has "## SavedVariables: ClassHUDDB"
   self.db = AceDB:New("ClassHUDDB", defaults, true)
 end
 
@@ -258,6 +282,11 @@ function ClassHUD:OnEnable()
 
   if self.Layout then self:Layout() end
   if self.ApplyBarSkins then self:ApplyBarSkins() end
+
+  -- Rebuild spells after DB exists & layout is ready
+  if self.BuildFramesForSpec then
+    self:BuildFramesForSpec()
+  end
 end
 
 -- ========= Event wiring =========
@@ -358,7 +387,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
 
   -- Spells (auras + cooldowns)
   if (event == "UNIT_AURA" and unit == "player") or
-     event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES" or event == "UNIT_SPELLCAST_SUCCEEDED" then
+      event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES" or event == "UNIT_SPELLCAST_SUCCEEDED" then
     if ClassHUD.UpdateAllFrames then ClassHUD:UpdateAllFrames() end
     -- Also show instant-cast fake bar if bars module hooked SUCCEEDED
     if event == "UNIT_SPELLCAST_SUCCEEDED" and ClassHUD.UNIT_SPELLCAST_SUCCEEDED then

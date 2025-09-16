@@ -3,7 +3,7 @@
 ## Notes: Simple class HUD: cast bar, HP, primary resource, special power (segments/runes)
 ## Author: Lars-Martin Antonsen
 ## Version: 0.1.0
-## SavedVariables: ClassHUD
+## SavedVariables: ClassHUDDB
 
 ## Dependencies: Ace3
 ## OptionalDeps: LibSharedMedia-3.0

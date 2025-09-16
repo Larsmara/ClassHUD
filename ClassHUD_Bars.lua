@@ -1,5 +1,6 @@
 -- ClassHUD_Bars.lua
-local ClassHUD = LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
+---@type ClassHUD
+local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local UI = ClassHUD.UI
 
 -- Anchor
@@ -79,7 +80,7 @@ function ClassHUD:Layout()
   local w   = self.db.profile.width
   local gap = self.db.profile.spacing
 
-  UI.anchor:SetWidth(w)
+  if UI.anchor then UI.anchor:SetWidth(w) end
 
   local y = 0
 
@@ -220,10 +221,13 @@ function ClassHUD:UNIT_SPELLCAST_SUCCEEDED(unit, spellID)
   end
 end
 
-function ClassHUD:UNIT_SPELLCAST_STOP(unit)         if unit == "player" then self:StopCast() end end
+function ClassHUD:UNIT_SPELLCAST_STOP(unit) if unit == "player" then self:StopCast() end end
+
 function ClassHUD:UNIT_SPELLCAST_CHANNEL_STOP(unit) if unit == "player" then self:StopCast() end end
-function ClassHUD:UNIT_SPELLCAST_INTERRUPTED(unit)  if unit == "player" then self:StopCast() end end
-function ClassHUD:UNIT_SPELLCAST_FAILED(unit)       if unit == "player" then self:StopCast() end end
+
+function ClassHUD:UNIT_SPELLCAST_INTERRUPTED(unit) if unit == "player" then self:StopCast() end end
+
+function ClassHUD:UNIT_SPELLCAST_FAILED(unit) if unit == "player" then self:StopCast() end end
 
 -- HP/Primary updates
 function ClassHUD:UpdateHP()
