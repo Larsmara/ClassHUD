@@ -21,6 +21,7 @@ function ClassHUD_BuildOptions(addon)
   local opts            = {
     type = "group",
     name = "ClassHUD",
+    childGroups = "tab",
     args = {
       bars = {
         type = "group",
@@ -249,7 +250,7 @@ function ClassHUD_BuildOptions(addon)
           },
         },
       },
-      spellConfig = {
+      sidebarConfig = {
         type = "group",
         name = "Sidebar config",
         order = 2,
@@ -287,18 +288,17 @@ function ClassHUD_BuildOptions(addon)
             end,
             get = function() return db.profile.sideBars.offset or 6 end,
           },
-
         },
       },
       topBar = {
         type = "group",
         name = "Top Bar",
         order = 2,
+        childGroups = "tab", -- tabs inside Top Bar
         args = {
           layout = {
             type = "group",
             name = "Layout",
-            inline = true,
             order = 1,
             args = {
               perRow = {
@@ -310,7 +310,7 @@ function ClassHUD_BuildOptions(addon)
                 set = function(_, v)
                   db.profile.topBar.perRow = v; addon:BuildFramesForSpec()
                 end,
-                get = function() return (db.profile.topBar and db.profile.topBar.perRow) or 8 end,
+                get = function() return db.profile.topBar.perRow or 8 end,
               },
               spacingX = {
                 type = "range",
@@ -321,7 +321,7 @@ function ClassHUD_BuildOptions(addon)
                 set = function(_, v)
                   db.profile.topBar.spacingX = v; addon:BuildFramesForSpec()
                 end,
-                get = function() return (db.profile.topBar and db.profile.topBar.spacingX) or 4 end,
+                get = function() return db.profile.topBar.spacingX or 4 end,
               },
               spacingY = {
                 type = "range",
@@ -332,7 +332,7 @@ function ClassHUD_BuildOptions(addon)
                 set = function(_, v)
                   db.profile.topBar.spacingY = v; addon:BuildFramesForSpec()
                 end,
-                get = function() return (db.profile.topBar and db.profile.topBar.spacingY) or 4 end,
+                get = function() return db.profile.topBar.spacingY or 4 end,
               },
               yOffset = {
                 type = "range",
@@ -348,86 +348,68 @@ function ClassHUD_BuildOptions(addon)
             },
           },
 
-          -- Add spell
-          addSpell = {
-            type = "input",
-            name = "Add Spell ID",
-            order = 2,
-            set = function(_, val)
-              local id = tonumber(val)
-              local info = id and C_Spell.GetSpellInfo(id)
-              if not info then
-                print("|cffff0000Invalid spell ID:|r", val)
-                return
-              end
-              local specID = GetSpecializationInfo(GetSpecialization() or 0)
-              db.profile.topBarSpells[specID] = db.profile.topBarSpells[specID] or {}
-              table.insert(db.profile.topBarSpells[specID], {
-                spellID = id,
-                trackCooldown = true, -- default
-              })
-              addon._selectedSpellIndex = #db.profile.topBarSpells[specID]
-              addon:BuildFramesForSpec()
-              LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
-            end,
-            get = function() return "" end,
-          },
-          addFromList = {
-            type = "select",
-            name = "Add From List",
-            order = 3,
-            values = function()
-              local _, class    = UnitClass("player")
-              local specID      = GetSpecializationInfo(GetSpecialization() or 0)
-              local out         = {}
-
-              local specList    = suggestedSpells[class][specID] or {}
-              local utilityList = suggestedSpells[class].UTILITY or {}
-
-              -- Merge spec + utility
-              for _, spell in ipairs(specList) do
-                local info = C_Spell.GetSpellInfo(spell.id)
-                if info then
-                  out[spell.id] = ("|T%d:16|t %s (%d)"):format(info.iconID, info.name, spell.id)
-                end
-              end
-
-              for _, spell in ipairs(utilityList) do
-                local info = C_Spell.GetSpellInfo(spell.id)
-                if info then
-                  out[spell.id] = ("|T%d:16|t %s (%d) [Utility]"):format(info.iconID, info.name, spell.id)
-                end
-              end
-
-              return out
-            end,
-            set = function(_, val)
-              local specID = GetSpecializationInfo(GetSpecialization() or 0)
-              db.profile.topBarSpells[specID] = db.profile.topBarSpells[specID] or {}
-              table.insert(db.profile.topBarSpells[specID], {
-                spellID = val,
-                trackCooldown = true,
-              })
-              addon:BuildFramesForSpec()
-              LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
-            end,
-            get = function() return nil end,
-          },
-
-          -- List + per-spell config
-          spellSettings = {
+          spells = {
             type = "group",
             name = "Tracked Spells",
-            inline = true,
-            order = 3,
+            order = 2,
             args = {
+              addSpell = {
+                type = "input",
+                name = "Add Spell ID",
+                order = 1,
+                set = function(_, val)
+                  local id = tonumber(val)
+                  local info = id and C_Spell.GetSpellInfo(id)
+                  if not info then
+                    print("|cffff0000Invalid spell ID:|r", val)
+                    return
+                  end
+                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
+                  db.profile.topBarSpells[specID] = db.profile.topBarSpells[specID] or {}
+                  table.insert(db.profile.topBarSpells[specID], { spellID = id, trackCooldown = true })
+                  addon._selectedTopSpellIndex = #db.profile.topBarSpells[specID]
+                  addon:BuildFramesForSpec()
+                  LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+                end,
+                get = function() return "" end,
+              },
+
+              addFromList = {
+                type = "select",
+                name = "Add From List",
+                order = 2,
+                values = function()
+                  local _, class = UnitClass("player")
+                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
+                  local out, specList, utilityList = {}, suggestedSpells[class][specID] or {},
+                      suggestedSpells[class].UTILITY or {}
+                  for _, spell in ipairs(specList) do
+                    local info = C_Spell.GetSpellInfo(spell.id)
+                    if info then out[spell.id] = ("|T%d:16|t %s (%d)"):format(info.iconID, info.name, spell.id) end
+                  end
+                  for _, spell in ipairs(utilityList) do
+                    local info = C_Spell.GetSpellInfo(spell.id)
+                    if info then out[spell.id] = ("|T%d:16|t %s (%d) [Utility]"):format(info.iconID, info.name, spell.id) end
+                  end
+                  return out
+                end,
+                set = function(_, val)
+                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
+                  db.profile.topBarSpells[specID] = db.profile.topBarSpells[specID] or {}
+                  table.insert(db.profile.topBarSpells[specID], { spellID = val, trackCooldown = true })
+                  addon:BuildFramesForSpec()
+                  LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+                end,
+                get = function() return nil end,
+              },
+
               list = {
                 type = "select",
                 name = "Tracked Spells",
-                order = 1,
+                order = 3,
+                width = "full",
                 values = function()
-                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
-                  local out = {}
+                  local specID, out = GetSpecializationInfo(GetSpecialization() or 0), {}
                   local spells = db.profile.topBarSpells[specID] or {}
                   for i, data in ipairs(spells) do
                     local info = C_Spell.GetSpellInfo(data.spellID)
@@ -436,40 +418,23 @@ function ClassHUD_BuildOptions(addon)
                   end
                   return out
                 end,
-                set = function(_, key) addon._selectedSpellIndex = key end,
-                get = function() return addon._selectedSpellIndex end,
-              },
-
-              remove = {
-                type = "execute",
-                name = "Remove Selected Spell",
-                order = 2,
-                func = function()
-                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
-                  local idx = addon._selectedSpellIndex
-                  if idx and db.profile.topBarSpells[specID] and db.profile.topBarSpells[specID][idx] then
-                    table.remove(db.profile.topBarSpells[specID], idx)
-                    addon._selectedSpellIndex = nil
-                    addon:BuildFramesForSpec()
-                    LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
-                  end
-                end,
+                set = function(_, key) addon._selectedTopSpellIndex = key end,
+                get = function() return addon._selectedTopSpellIndex end,
               },
 
               trackCooldown = {
                 type = "toggle",
                 name = "Track Cooldown",
-                order = 3,
+                order = 4,
+                disabled = function() return not addon._selectedTopSpellIndex end,
                 set = function(_, v)
-                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
-                  local idx = addon._selectedSpellIndex
+                  local specID, idx = GetSpecializationInfo(GetSpecialization() or 0), addon._selectedTopSpellIndex
                   if idx then
                     db.profile.topBarSpells[specID][idx].trackCooldown = v; addon:BuildFramesForSpec()
                   end
                 end,
                 get = function()
-                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
-                  local idx = addon._selectedSpellIndex
+                  local specID, idx = GetSpecializationInfo(GetSpecialization() or 0), addon._selectedTopSpellIndex
                   return idx and db.profile.topBarSpells[specID][idx].trackCooldown
                 end,
               },
@@ -477,18 +442,17 @@ function ClassHUD_BuildOptions(addon)
               countFromAura = {
                 type = "input",
                 name = "Aura SpellID for Stacks",
-                order = 4,
+                order = 5,
+                disabled = function() return not addon._selectedTopSpellIndex end,
                 set = function(_, val)
-                  local id = tonumber(val)
-                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
-                  local idx = addon._selectedSpellIndex
+                  local specID, idx, id = GetSpecializationInfo(GetSpecialization() or 0), addon._selectedTopSpellIndex,
+                      tonumber(val)
                   if idx then
                     db.profile.topBarSpells[specID][idx].countFromAura = id; addon:BuildFramesForSpec()
                   end
                 end,
                 get = function()
-                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
-                  local idx = addon._selectedSpellIndex
+                  local specID, idx = GetSpecializationInfo(GetSpecialization() or 0), addon._selectedTopSpellIndex
                   return idx and (db.profile.topBarSpells[specID][idx].countFromAura or "")
                 end,
               },
@@ -496,35 +460,48 @@ function ClassHUD_BuildOptions(addon)
               auraGlow = {
                 type = "input",
                 name = "Aura SpellID for Glow",
-                order = 5,
+                order = 6,
+                disabled = function() return not addon._selectedTopSpellIndex end,
                 set = function(_, val)
-                  local id = tonumber(val)
-                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
-                  local idx = addon._selectedSpellIndex
+                  local specID, idx, id = GetSpecializationInfo(GetSpecialization() or 0), addon._selectedTopSpellIndex,
+                      tonumber(val)
                   if idx then
                     db.profile.topBarSpells[specID][idx].auraGlow = id; addon:BuildFramesForSpec()
                   end
                 end,
                 get = function()
-                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
-                  local idx = addon._selectedSpellIndex
-                  local id = idx and db.profile.topBarSpells[specID][idx].auraGlow
-                  if id then
-                    local info = C_Spell.GetSpellInfo(id)
-                    return info and (info.name .. " (" .. id .. ")") or tostring(id)
-                  end
-                  return ""
+                  local specID, idx = GetSpecializationInfo(GetSpecialization() or 0), addon._selectedTopSpellIndex
+                  return idx and (db.profile.topBarSpells[specID][idx].auraGlow or "")
                 end,
               },
+
               clearAuraGlow = {
                 type = "execute",
                 name = "Clear Aura Glow",
-                order = 6,
+                order = 7,
+                disabled = function() return not addon._selectedTopSpellIndex end,
                 func = function()
-                  local specID = GetSpecializationInfo(GetSpecialization() or 0)
-                  local idx = addon._selectedSpellIndex
+                  local specID, idx = GetSpecializationInfo(GetSpecialization() or 0), addon._selectedTopSpellIndex
                   if idx then
                     db.profile.topBarSpells[specID][idx].auraGlow = nil
+                    addon:BuildFramesForSpec()
+                    LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+                  end
+                end,
+              },
+
+              remove = {
+                type = "execute",
+                name = "Remove This Spell",
+                order = 99,
+                confirm = true,
+                confirmText = "Remove this spell?",
+                disabled = function() return not addon._selectedTopSpellIndex end,
+                func = function()
+                  local specID, idx = GetSpecializationInfo(GetSpecialization() or 0), addon._selectedTopSpellIndex
+                  if idx and db.profile.topBarSpells[specID][idx] then
+                    table.remove(db.profile.topBarSpells[specID], idx)
+                    addon._selectedTopSpellIndex = nil
                     addon:BuildFramesForSpec()
                     LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
                   end
@@ -534,6 +511,7 @@ function ClassHUD_BuildOptions(addon)
           },
         },
       },
+
       bottomBar = {
         type = "group",
         name = "Bottom Bar",
@@ -1131,6 +1109,7 @@ function ClassHUD_BuildOptions(addon)
       },
     },
   }
+
 
   return opts
 end
