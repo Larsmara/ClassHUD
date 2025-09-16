@@ -2,6 +2,7 @@
 function ClassHUD_BuildOptions(addon)
   local db              = addon.db
   local LSM             = LibStub("LibSharedMedia-3.0", true)
+  local ACR             = LibStub("AceConfigRegistry-3.0")
 
   -- Ensure defaults exist
   db.profile.textures   = db.profile.textures or { bar = "Blizzard", font = "Friz Quadrata TT" }
@@ -18,7 +19,96 @@ function ClassHUD_BuildOptions(addon)
   -- Suggested spells per class/spec
   local suggestedSpells = _G.ClassHUD_SpellSuggestions or {}
 
-  local opts            = {
+  -- rebuild the spell groups under Top Bar → Tracked Spells
+  local function RebuildTopBarSpellTree(opts, db, addon)
+    local specID                    = GetSpecializationInfo(GetSpecialization() or 0)
+    db.profile.topBarSpells         = db.profile.topBarSpells or {}
+    db.profile.topBarSpells[specID] = db.profile.topBarSpells[specID] or {}
+
+    local container                 = opts.args.topBar.args.spells.args
+
+    -- wipe old dynamic spell_* nodes
+    for k in pairs(container) do
+      if type(k) == "string" and k:match("^spell_") then
+        container[k] = nil
+      end
+    end
+
+    local list = db.profile.topBarSpells[specID]
+
+    for i, data in ipairs(list) do
+      local idx = i -- freeze the index for closures
+      local info = C_Spell.GetSpellInfo(data.spellID)
+      local displayName = info and ("|T%d:16|t %s (%d)"):format(info.iconID, info.name, data.spellID)
+          or ("Unknown (" .. tostring(data.spellID) .. ")")
+
+      container["spell_" .. idx] = {
+        type  = "group",
+        name  = displayName,
+        order = 100 + idx,
+        args  = {
+          trackCooldown = {
+            type = "toggle",
+            name = "Track Cooldown",
+            order = 1,
+            get = function() return list[idx].trackCooldown end,
+            set = function(_, v)
+              list[idx].trackCooldown = v
+              addon:BuildFramesForSpec()
+            end,
+          },
+          countFromAura = {
+            type = "input",
+            name = "Aura SpellID for Stacks",
+            order = 2,
+            get = function() return list[idx].countFromAura or "" end,
+            set = function(_, v)
+              list[idx].countFromAura = tonumber(v)
+              addon:BuildFramesForSpec()
+            end,
+          },
+          auraGlow = {
+            type = "input",
+            name = "Aura SpellID for Glow",
+            order = 3,
+            get = function() return list[idx].auraGlow or "" end,
+            set = function(_, v)
+              list[idx].auraGlow = tonumber(v)
+              addon:BuildFramesForSpec()
+              -- name might change if you typed a valid id → refresh tree title
+              RebuildTopBarSpellTree(opts, db, addon)
+              ACR:NotifyChange("ClassHUD")
+            end,
+          },
+          clearAuraGlow = {
+            type = "execute",
+            name = "Clear Aura Glow",
+            order = 4,
+            func = function()
+              list[idx].auraGlow = nil
+              addon:BuildFramesForSpec()
+            end,
+          },
+          remove = {
+            type = "execute",
+            name = "Remove This Spell",
+            order = 99,
+            confirm = true,
+            confirmText = "Remove this spell?",
+            func = function()
+              table.remove(list, idx)
+              addon:BuildFramesForSpec()
+              RebuildTopBarSpellTree(opts, db, addon)
+              ACR:NotifyChange("ClassHUD")
+            end,
+          },
+        },
+      }
+    end
+  end
+
+
+  local opts = {
     type = "group",
     name = "ClassHUD",
     childGroups = "tab",
