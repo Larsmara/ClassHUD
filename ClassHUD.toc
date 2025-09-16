@@ -12,6 +12,6 @@ ClassHUD.lua
 ClassHUD_Bars.lua
 ClassHUD_Classbar.lua
 ClassHUD_Spells.lua
-ClassHUD_TrackerEngine.lua
+## ClassHUD_TrackerEngine.lua
 ClassHUD_Options.lua
 ClassHUD_SpellSuggestions.lua

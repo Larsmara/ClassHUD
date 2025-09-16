@@ -41,6 +41,12 @@ local function CreateSpellFrame(data, index)
   frame.count:SetDrawLayer("OVERLAY", 7)
   frame.count:Hide()
 
+  -- Secondary label: Aura ID (optional)
+  frame.auraIdText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  frame.auraIdText:SetDrawLayer("OVERLAY", 8)
+  frame.auraIdText:SetText("") -- fylles i UpdateSpellFrame
+  frame.auraIdText:Hide()
+
   -- Spiral
   frame.cooldown = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
   frame.cooldown:SetAllPoints(frame)
@@ -78,6 +84,33 @@ local function CreateSpellFrame(data, index)
 
   return frame
 end
+
+local function ApplyIconTextStyle(frame)
+  local cfg = ClassHUD.db.profile.iconText
+  -- Count
+  if frame.count and cfg and cfg.count then
+    local f = cfg.count
+    frame.count:ClearAllPoints()
+    frame.count:SetPoint(f.point or "BOTTOMRIGHT", frame, f.point or "BOTTOMRIGHT", f.ofsX or -2, f.ofsY or 2)
+    local font, _, flags = GameFontNormalLarge:GetFont()
+    frame.count:SetFont(font, f.size or 14, flags or "OUTLINE")
+    local c = f.color or { r = 1, g = 1, b = 1 }
+    frame.count:SetTextColor(c.r or 1, c.g or 1, c.b or 1)
+  end
+
+  -- Aura ID label
+  if frame.auraIdText and cfg and cfg.aura then
+    local f = cfg.aura
+    frame.auraIdText:ClearAllPoints()
+    frame.auraIdText:SetPoint(f.point or "TOPLEFT", frame, f.point or "TOPLEFT", f.ofsX or 2, f.ofsY or -2)
+    local font, _, flags = GameFontHighlightSmall:GetFont()
+    frame.auraIdText:SetFont(font, f.size or 10, flags or "OUTLINE")
+    local c = f.color or { r = 1, g = 0.8, b = 0.2 }
+    frame.auraIdText:SetTextColor(c.r or 1, c.g or 0.8, c.b or 0.2)
+    frame.auraIdText:SetShown(f.enabled and true or false)
+  end
+end
+
 
 -- Layout helpers
 local function LayoutTopBarSpells(frames)
@@ -203,12 +236,25 @@ end
 
 local function UpdateSpellFrame(frame)
   local data = frame.data
-  if not data or not data.spellID then return end
+  if not data or not data.spellID then
+    -- rydd opp og bail
+    if frame.isGlowing then
+      ActionButtonSpellAlertManager:HideAlert(frame)
+      frame.isGlowing = false
+    end
+    if frame.cooldown then frame.cooldown:Hide() end
+    if frame.cooldownText then frame.cooldownText:Hide() end
+    if frame.icon then frame.icon:SetTexture(134400) end -- fallback-ikon
+    return
+  end
 
   -- ICON
   local iconID = GetSpellIcon(data.spellID)
   frame.icon:SetTexture(iconID)
   frame.icon:SetDesaturated(false)
+
+  -- Safe guards
+  if not frame or (frame.IsForbidden and frame:IsForbidden()) then return end
 
   -- COOLDOWN
   if data.trackCooldown then
@@ -250,20 +296,81 @@ local function UpdateSpellFrame(frame)
     end
   end
 
+  -- Re-apply icon text styling (in case user changed size/pos in options)
+  ApplyIconTextStyle(frame)
 
-  -- AURA GLOW (+ optional icon swap to aura icon)
-  if data.auraGlow and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
-    local aura = C_UnitAuras.GetPlayerAuraBySpellID(data.auraGlow)
-    if aura then
-      ActionButtonSpellAlertManager:ShowAlert(frame)
-      frame.isGlowing = true
-      if aura.icon then frame.icon:SetTexture(aura.icon) end
+  -- Aura ID label content
+  do
+    local showAuraId = ClassHUD.db.profile.iconText and ClassHUD.db.profile.iconText.aura and
+        ClassHUD.db.profile.iconText.aura.enabled
+    if showAuraId then
+      -- Vis primært data.countFromAura; hvis ikke satt, vis første i glow-listen (hvis finnes)
+      local label = nil
+      if data.countFromAura then
+        label = tostring(data.countFromAura)
+      elseif data.auraGlowList and #data.auraGlowList > 0 then
+        label = tostring(data.auraGlowList[1])
+      elseif data.auraGlow then
+        label = tostring(data.auraGlow)
+      end
+      frame.auraIdText:SetText(label or "")
+      frame.auraIdText:SetShown(label ~= nil)
+    else
+      frame.auraIdText:Hide()
+    end
+  end
+
+
+
+  -- AURA GLOW & ICON OVERRIDE (robust, støtter liste + single)
+  do
+    local baseIcon = GetSpellIcon(data.spellID)
+
+    -- bygg prioritert liste
+    local glowIDs = {}
+    if type(data.auraGlowList) == "table" then
+      for _, id in ipairs(data.auraGlowList) do
+        local n = tonumber(id); if n then table.insert(glowIDs, n) end
+      end
+    end
+    if data.auraGlow then
+      local n = tonumber(data.auraGlow); if n then table.insert(glowIDs, n) end
+    end
+
+    -- finn første AKTIVE aura i lista
+    local activeAuraIcon = nil
+    if C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID and #glowIDs > 0 then
+      for _, sid in ipairs(glowIDs) do
+        local aura = C_UnitAuras.GetPlayerAuraBySpellID(sid)
+        if aura then
+          activeAuraIcon = aura.icon; break
+        end
+      end
+    end
+
+    -- glow
+    local wantGlow = (data.glowEnabled ~= false) and (activeAuraIcon ~= nil)
+    if wantGlow then
+      if not frame.isGlowing then
+        ActionButtonSpellAlertManager:ShowAlert(frame)
+        frame.isGlowing = true
+      end
     elseif frame.isGlowing then
       ActionButtonSpellAlertManager:HideAlert(frame)
       frame.isGlowing = false
-      frame.icon:SetTexture(GetSpellIcon(data.spellID))
+    end
+
+    -- ikon override
+    if data.iconFromAura and activeAuraIcon then
+      frame.icon:SetTexture(activeAuraIcon)
+    else
+      frame.icon:SetTexture(baseIcon)
     end
   end
+
+
+
+
 
   -- Wild imps tracking for testing på demo lock
   if data.spellID == 196277 and ClassHUD_TrackerEngine then
