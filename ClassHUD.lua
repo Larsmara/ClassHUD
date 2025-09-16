@@ -331,6 +331,17 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    -- 👇 legg til dette
+    if ClassHUD._opts then
+      local builder = _G.ClassHUD_BuildOptions
+      if builder then
+        local ok, opts = pcall(builder, ClassHUD)
+        if ok and opts then
+          ClassHUD._opts = opts
+          LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+        end
+      end
+    end
     return
   end
 

@@ -231,21 +231,25 @@ local function UpdateSpellFrame(frame)
     frame.icon:SetDesaturated(false)
   end
 
-  -- AURA STACK COUNT
+  -- STACK COUNT OR CHARGES
+  frame.count:SetText("")
+  frame.count:Hide()
+
   if data.countFromAura and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
     local aura = C_UnitAuras.GetPlayerAuraBySpellID(data.countFromAura)
     local stacks = (aura and aura.applications) or 0
     if stacks > 0 then
       frame.count:SetText(stacks)
       frame.count:Show()
-    else
-      frame.count:SetText("")
-      frame.count:Hide()
     end
-  else
-    frame.count:SetText("")
-    frame.count:Hide()
+  elseif data.trackCooldown then
+    local _, _, _, _, charges = ReadCooldown(data.spellID)
+    if charges and charges.currentCharges and charges.maxCharges and charges.maxCharges > 1 then
+      frame.count:SetText(charges.currentCharges)
+      frame.count:Show()
+    end
   end
+
 
   -- AURA GLOW (+ optional icon swap to aura icon)
   if data.auraGlow and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
@@ -260,6 +264,18 @@ local function UpdateSpellFrame(frame)
       frame.icon:SetTexture(GetSpellIcon(data.spellID))
     end
   end
+
+  -- Wild imps tracking for testing på demo lock
+  if data.spellID == 196277 and ClassHUD_TrackerEngine then
+    local count = 0
+    for _, unit in ipairs(ClassHUD_TrackerEngine.GetActiveUnits()) do
+      if unit.name == "Wild Imp" then
+        count = count + 1
+      end
+    end
+    frame.count:SetText(count > 0 and count or "")
+    frame.count:SetShown(count > 0)
+  end
 end
 
 function ClassHUD:UpdateAllFrames()
@@ -272,8 +288,18 @@ function ClassHUD:BuildFramesForSpec()
   for _, f in ipairs(activeFrames) do f:Hide() end
   wipe(activeFrames)
 
-  local specIndex = GetSpecialization()
-  local specID = specIndex and GetSpecializationInfo(specIndex) or 0
+  local specIndex                         = GetSpecialization()
+  local specID                            = specIndex and GetSpecializationInfo(specIndex) or 0
+  -- Sørg for at tabellene finnes for denne specen
+  self.db.profile.topBarSpells            = self.db.profile.topBarSpells or {}
+  self.db.profile.leftBarSpells           = self.db.profile.leftBarSpells or {}
+  self.db.profile.rightBarSpells          = self.db.profile.rightBarSpells or {}
+  self.db.profile.bottomBarSpells         = self.db.profile.bottomBarSpells or {}
+
+  self.db.profile.topBarSpells[specID]    = self.db.profile.topBarSpells[specID] or {}
+  self.db.profile.leftBarSpells[specID]   = self.db.profile.leftBarSpells[specID] or {}
+  self.db.profile.rightBarSpells[specID]  = self.db.profile.rightBarSpells[specID] or {}
+  self.db.profile.bottomBarSpells[specID] = self.db.profile.bottomBarSpells[specID] or {}
 
   local function build(list, layoutFn, sideArg)
     if not list then return end
