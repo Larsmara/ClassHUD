@@ -84,6 +84,7 @@ function ClassHUD:Layout()
 
   local y = 0
 
+
   -- Cast (top)
   if self.db.profile.show.cast then
     UI.cast:SetPoint("TOP", UI.anchor, "TOP", 0, -y)

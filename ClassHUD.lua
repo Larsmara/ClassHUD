@@ -89,66 +89,108 @@ end
 -- ---------------------------------------------------------------------------
 local defaults = {
   profile = {
-    locked          = false,
-    width           = 250,
-    spacing         = 2,
-    powerSpacing    = 2,
-    position        = { x = 0, y = -50 },
+    locked           = false,
+    width            = 250,
+    spacing          = 2,
+    powerSpacing     = 2,
+    position         = { x = 0, y = -50 },
 
-    textures        = {
-      bar = "Blizzard",
+    textures         = {
+      bar  = "Blizzard",
       font = "Friz Quadrata TT",
     },
 
-    show            = {
+    show             = {
       cast     = true,
       hp       = true,
-      resource = true, -- primary (mana/rage/energy/etc., form/spec aware)
-      power    = true, -- special (CP/Chi/HolyPower/Shards/ArcaneCharges/Runes)
+      resource = true, -- primary (mana/rage/energy/etc.)
+      power    = true, -- special (combo/chi/shards/etc.)
+      buffs    = true,
     },
 
-    height          = {
+    height           = {
       cast     = 18,
       hp       = 14,
       resource = 14,
-      power    = 14, -- per-segment height for runes/segments
+      power    = 14,
     },
 
-    icons           = {
-      perRow = 8,  -- how many icons per row
-      spacing = 4, -- spacing in pixels
-    },
-
-    sideBars        = {
-      size = 36,
+    icons            = {
+      perRow  = 8,
       spacing = 4,
-      offset = 6,
-    },
-    topBar          = {
-      perRow   = 8,
-      spacingX = 4, -- horizontal spacing between icons
-      spacingY = 4, -- vertical spacing between rows
-      yOffset  = 0,
-    },
-    topBarSpells    = {},
-    leftBarSpells   = {},
-    rightBarSpells  = {},
-    bottomBarSpells = {},
-    bottomBar       = {
-      perRow   = 8,
-      spacingX = 4, -- horizontal spacing
-      spacingY = 4, -- vertical spacing
-      yOffset  = 0,
     },
 
-    colors          = {
-      hp = { r = 0.10, g = 0.80, b = 0.10 },
-      resourceClass = true,                     -- use class color for primary resource
-      resource = { r = 0.00, g = 0.55, b = 1.00 },
-      power = { r = 1.00, g = 0.85, b = 0.10 }, -- fallback for special segments
+    sideBars         = {
+      size    = 36,
+      spacing = 4,
+      offset  = 6,
+    },
+
+    topBar           = {
+      perRow   = 8,
+      spacingX = 4,
+      spacingY = 4,
+      yOffset  = 0,
+    },
+    bottomBar        = {
+      perRow   = 8,
+      spacingX = 4,
+      spacingY = 4,
+      yOffset  = 0,
+    },
+    trackedBuffBar   = {
+      perRow   = 8,
+      spacingX = 4,
+      spacingY = 4,
+      yOffset  = 4, -- litt luft over TopBar
+    },
+
+    -- =========================
+    -- Spell & Buff persistence
+    -- =========================
+
+    -- Brukerdefinerte tracked spells per bar
+    topBarSpells     = {},
+    leftBarSpells    = {},
+    rightBarSpells   = {},
+    bottomBarSpells  = {},
+
+    -- Utility placement per spellID
+    utilityPlacement = {
+      -- [spellID] = "TOP" | "BOTTOM" | "LEFT" | "RIGHT"
+    },
+
+    -- Persistente buff-links (class -> spec -> buffID -> spellID)
+    buffLinks        = {},
+
+    -- Brukervalgte tracked buffs (class -> spec -> buffID -> true/false)
+    trackedBuffs     = {},
+
+    -- CDM snapshot (slik at vi ikke trenger å spørre CDM hver gang)
+    cdmSnapshot      = {
+      -- [class] = {
+      --   [specID] = {
+      --     [category] = {
+      --       [spellID] = {
+      --         spellID = ...,
+      --         iconID  = ...,
+      --         name    = ...,
+      --         desc    = ...,
+      --       }
+      --     }
+      --   }
+      -- }
+    },
+
+    colors           = {
+      hp            = { r = 0.10, g = 0.80, b = 0.10 },
+      resourceClass = true,
+      resource      = { r = 0.00, g = 0.55, b = 1.00 },
+      power         = { r = 1.00, g = 0.85, b = 0.10 },
     },
   }
 }
+
 
 function ClassHUD:FetchStatusbar()
   return self.LSM:Fetch("statusbar", self.db.profile.textures.bar)
@@ -202,6 +244,54 @@ function ClassHUD:FullUpdate()
   if self.UpdateHP then self:UpdateHP() end
   if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
   if self.UpdateSpecialPower then self:UpdateSpecialPower() end
+end
+
+-- ==================================================
+-- CDM Snapshot Updater
+-- ==================================================
+function ClassHUD:UpdateCDMSnapshot()
+  if not C_CooldownViewer or not C_CooldownViewer.IsCooldownViewerAvailable
+      or not C_CooldownViewer.IsCooldownViewerAvailable() then
+    return
+  end
+
+  local _, class                             = UnitClass("player")
+  local specID                               = GetSpecializationInfo(GetSpecialization() or 0)
+
+  self.db.profile.cdmSnapshot                = self.db.profile.cdmSnapshot or {}
+  self.db.profile.cdmSnapshot[class]         = self.db.profile.cdmSnapshot[class] or {}
+  self.db.profile.cdmSnapshot[class][specID] = self.db.profile.cdmSnapshot[class][specID] or {}
+
+  local categories                           = {
+    [Enum.CooldownViewerCategory.Essential]   = "essential",
+    [Enum.CooldownViewerCategory.Utility]     = "utility",
+    [Enum.CooldownViewerCategory.TrackedBuff] = "buff",
+    [Enum.CooldownViewerCategory.TrackedBar]  = "bar",
+  }
+
+  for cat, catName in pairs(categories) do
+    local ids = C_CooldownViewer.GetCooldownViewerCategorySet(cat)
+    if type(ids) == "table" then
+      for _, cooldownID in ipairs(ids) do
+        local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
+        local sid = raw and (raw.spellID or raw.overrideSpellID or (raw.linkedSpellIDs and raw.linkedSpellIDs[1]))
+        if sid then
+          local info = C_Spell.GetSpellInfo(sid)
+          if info then
+            self.db.profile.cdmSnapshot[class][specID][sid] = {
+              spellID  = sid,
+              name     = info.name,
+              iconID   = info.iconID,
+              desc     = C_Spell.GetSpellDescription(sid),
+              category = catName,
+            }
+          end
+        end
+      end
+    end
+  end
+
+  print("|cff00ff88ClassHUD|r CDM snapshot oppdatert for", class, specID)
 end
 
 -- ===== Options bootstrap (registers with AceConfigRegistry directly) =====
@@ -322,6 +412,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   if event == "PLAYER_ENTERING_WORLD" then
     ClassHUD:FullUpdate()
     ClassHUD:ApplyAnchorPosition()
+    ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     return
   end
@@ -331,7 +422,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
-    -- 👇 legg til dette
+    ClassHUD:UpdateCDMSnapshot()
     if ClassHUD._opts then
       local builder = _G.ClassHUD_BuildOptions
       if builder then
@@ -431,5 +522,83 @@ SlashCmdList.CLASSHUDRESET = function()
     local ACR = LibStub("AceConfigRegistry-3.0", true)
     if ACR and ClassHUD._opts then ACR:NotifyChange("ClassHUD") end
     print("|cff00ff00ClassHUD: profile reset.|r")
+  end
+end
+
+-- ==================================================
+-- Debug command: /chudlistbuffs
+-- ==================================================
+SLASH_CHUDLISTBUFFS1 = "/chudlistbuffs"
+SlashCmdList.CHUDLISTBUFFS = function()
+  local enum = Enum and Enum.CooldownViewerCategory
+  if not enum then
+    print("|cff00ff88ClassHUD|r Enum.CooldownViewerCategory ikke tilgjengelig.")
+    return
+  end
+
+  local buffIDs = C_CooldownViewer.GetCooldownViewerCategorySet(enum.TrackedBuff)
+  if type(buffIDs) ~= "table" or #buffIDs == 0 then
+    print("|cff00ff88ClassHUD|r Ingen tracked buffs rapportert fra CDM.")
+    return
+  end
+
+  print("|cff00ff88ClassHUD|r Liste over Tracked Buffs fra CDM:")
+  for _, cooldownID in ipairs(buffIDs) do
+    local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
+    if raw then
+      local sid = raw.spellID or raw.overrideSpellID
+      local name = sid and C_Spell.GetSpellName(sid) or "Unknown"
+      print(string.format("  SpellID=%d, Name=%s, hasAura=%s, override=%s, linked=%s",
+        sid or 0,
+        name,
+        tostring(raw.hasAura),
+        tostring(raw.overrideSpellID),
+        raw.linkedSpellIDs and table.concat(raw.linkedSpellIDs, ", ") or "nil"
+      ))
+    end
+  end
+end
+
+-- ==================================================
+-- Debug command: /chudbuffdesc
+-- ==================================================
+SLASH_CHUDBUFFDESC1 = "/chudbuffdesc"
+SlashCmdList.CHUDBUFFDESC = function()
+  local enum = Enum and Enum.CooldownViewerCategory
+  if not enum then
+    print("|cff00ff88ClassHUD|r Enum.CooldownViewerCategory ikke tilgjengelig.")
+    return
+  end
+
+  local buffIDs = C_CooldownViewer.GetCooldownViewerCategorySet(enum.TrackedBuff)
+  if type(buffIDs) ~= "table" or #buffIDs == 0 then
+    print("|cff00ff88ClassHUD|r Ingen tracked buffs rapportert fra CDM.")
+    return
+  end
+
+  print("|cff00ff88ClassHUD|r Tracked Buff descriptions:")
+  for _, cooldownID in ipairs(buffIDs) do
+    local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
+    if raw then
+      local sid = raw.spellID or raw.overrideSpellID
+      local name = sid and C_Spell.GetSpellName(sid) or "Unknown"
+      local desc = sid and C_Spell.GetSpellDescription(sid) or "No description"
+      print(string.format("  [%d] %s → %s", sid or 0, name, desc:gsub("\n", " ")))
+    end
+  end
+end
+
+-- /chudmap : vis buff -> spell mapping
+SLASH_CHUDMAP1 = "/chudmap"
+SlashCmdList.CHUDMAP = function()
+  if not ClassHUD.trackedBuffToSpell or next(ClassHUD.trackedBuffToSpell) == nil then
+    print("|cff00ff88ClassHUD|r Ingen auto-mapping (buff → spell) er registrert.")
+    return
+  end
+  print("|cff00ff88ClassHUD|r Auto-mapping (buff → spell):")
+  for buffID, spellID in pairs(ClassHUD.trackedBuffToSpell) do
+    local bName = C_Spell.GetSpellName(buffID) or ("buff " .. buffID)
+    local sName = C_Spell.GetSpellName(spellID) or ("spell " .. spellID)
+    print(string.format("  %s (%d)  →  %s (%d)", bName, buffID, sName, spellID))
   end
 end

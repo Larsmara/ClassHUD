@@ -288,6 +288,110 @@ function ClassHUD_BuildOptions(addon)
       }
     end
   end
+
+
+  local PLACEMENTS = {
+    HIDDEN = "Hidden",
+    TOP = "Top Bar",
+    BOTTOM = "Bottom Bar",
+    LEFT = "Left Bar",
+    RIGHT = "Right Bar",
+  }
+
+  local function BuildUtilityOptions()
+    local args = {}
+
+    if not Enum or not Enum.CooldownViewerCategory then return args end
+
+    local utilIDs = C_CooldownViewer.GetCooldownViewerCategorySet(Enum.CooldownViewerCategory.Utility)
+    if type(utilIDs) ~= "table" then return args end
+
+    for _, cooldownID in ipairs(utilIDs) do
+      local info = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
+      if info and info.spellID then
+        local spellID = info.spellID
+        local spellInfo = C_Spell.GetSpellInfo(spellID)
+        if spellInfo then
+          local icon = spellInfo.iconID and ("|T" .. spellInfo.iconID .. ":16|t ") or ""
+          local name = spellInfo.name or ("Spell " .. spellID)
+
+          args["spell_" .. spellID] = {
+            type = "select",
+            name = icon .. name .. " (" .. spellID .. ")",
+            values = PLACEMENTS,
+            get = function()
+              return ClassHUD.db.profile.utilityPlacement[spellID] or "HIDDEN"
+            end,
+            set = function(_, val)
+              ClassHUD.db.profile.utilityPlacement[spellID] = val
+              ClassHUD:BuildFramesForSpec() -- rebuild når brukeren endrer
+            end,
+            order = spellID,
+          }
+        end
+      end
+    end
+
+    return args
+  end
+
+  local function RebuildTrackedBuffs(opts, db, addon)
+    if not opts then return end
+    local container = opts.args.trackedBuffs.args.list.args
+    if not container then return end
+
+    -- wipe gamle noder
+    for k in pairs(container) do container[k] = nil end
+
+    local _, class                         = UnitClass("player")
+    local specID                           = GetSpecializationInfo(GetSpecialization() or 0)
+
+    db.profile.trackedBuffs                = db.profile.trackedBuffs or {}
+    db.profile.trackedBuffs[class]         = db.profile.trackedBuffs[class] or {}
+    db.profile.trackedBuffs[class][specID] = db.profile.trackedBuffs[class][specID] or {}
+
+    local snapshot                         = db.profile.cdmSnapshot
+        and db.profile.cdmSnapshot[class]
+        and db.profile.cdmSnapshot[class][specID]
+
+    if not snapshot then return end
+
+    local order = 10
+    for buffID, data in pairs(snapshot) do
+      if data.category == "buff" then
+        local icon = data.iconID and ("|T" .. data.iconID .. ":16|t ") or ""
+        local name = data.name or ("Buff " .. buffID)
+
+        container["buff" .. buffID] = {
+          type  = "toggle",
+          name  = icon .. name .. " (" .. buffID .. ")",
+          desc  = data.desc or "No description",
+          order = order,
+          get   = function()
+            return db.profile.trackedBuffs[class][specID][buffID] or false
+          end,
+          set   = function(_, val)
+            db.profile.trackedBuffs[class][specID][buffID] = val or nil
+            addon:BuildFramesForSpec()
+            RebuildTrackedBuffs(opts, db, addon)
+            LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+          end,
+        }
+
+        order = order + 1
+      end
+    end
+  end
+
+
+  function ClassHUD:GetUtilityOptions()
+    return {
+      type = "group",
+      name = "Utility Cooldowns",
+      args = BuildUtilityOptions(),
+    }
+  end
+
   --------------------------------------------------------------------
   -- Options table
   --------------------------------------------------------------------
@@ -902,6 +1006,9 @@ function ClassHUD_BuildOptions(addon)
           spells = { type = "group", name = "Tracked Spells", order = 4, args = {} },
         },
       },
+      ----------------------------------------------------------------
+      -- Side Bars
+      ----------------------------------------------------------------
       sidebars = {
         type = "group",
         name = "Sidebars",
@@ -1074,7 +1181,56 @@ function ClassHUD_BuildOptions(addon)
             },
           },
         },
-      }
+      },
+      utility = ClassHUD:GetUtilityOptions(),
+      buffLinks = {
+        type = "group",
+        name = "Buff -> Spell Links",
+        order = 6,
+        args = {
+          addBuffID = {
+            type = "input",
+            name = "BuffID",
+            order = 1,
+            set = function(_, val) addon._newBuffID = tonumber(val) end,
+          },
+          addSpellID = {
+            type = "input",
+            name = "SpellID",
+            order = 2,
+            set = function(_, val) addon._newSpellID = tonumber(val) end,
+          },
+          add = {
+            type = "execute",
+            name = "Legg til kobling",
+            order = 3,
+            func = function()
+              if addon._newBuffID and addon._newSpellID then
+                local _, class                                        = UnitClass("player")
+                local specID                                          = GetSpecializationInfo(GetSpecialization() or 0)
+
+                db.profile.buffLinks[class]                           = db.profile.buffLinks[class] or {}
+                db.profile.buffLinks[class][specID]                   = db.profile.buffLinks[class][specID] or {}
+                db.profile.buffLinks[class][specID][addon._newBuffID] = addon._newSpellID
+
+                print("|cff00ff88ClassHUD|r La til kobling:", addon._newBuffID, "→", addon._newSpellID)
+                addon._newBuffID, addon._newSpellID = nil, nil
+                addon:BuildFramesForSpec()
+                RebuildBuffLinks(opts, db, addon)
+                LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+              end
+            end,
+          },
+          list = {
+            type = "group",
+            name = "",
+            order = 4,
+            args = {}, -- blir fylt av RebuildBuffLinks
+          },
+        },
+      },
+
+
 
     },
   }
@@ -1084,6 +1240,7 @@ function ClassHUD_BuildOptions(addon)
   RebuildSpellTree(opts, db, addon, "bottom")
   RebuildSpellTree(opts, db, addon, "left")
   RebuildSpellTree(opts, db, addon, "right")
+  RebuildBuffLinks(opts, db, addon)
   addon._opts = opts -- keep a stable reference for later calls
   return opts
 end
