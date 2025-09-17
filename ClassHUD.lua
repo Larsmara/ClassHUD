@@ -422,3 +422,14 @@ SlashCmdList["CLASSHUD"] = function(msg)
   end
   ClassHUD:OpenOptions()
 end
+
+SLASH_CLASSHUDRESET1 = "/classhudreset"
+SlashCmdList.CLASSHUDRESET = function()
+  if ClassHUD and ClassHUD.db then
+    ClassHUD.db:ResetProfile()
+    ClassHUD:BuildFramesForSpec()
+    local ACR = LibStub("AceConfigRegistry-3.0", true)
+    if ACR and ClassHUD._opts then ACR:NotifyChange("ClassHUD") end
+    print("|cff00ff00ClassHUD: profile reset.|r")
+  end
+end

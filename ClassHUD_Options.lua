@@ -8,33 +8,26 @@ function ClassHUD_BuildOptions(addon)
 
   addon._opts = addon._opts -- behold om du allerede har satt den et annet sted
 
-  local function RefreshOptionsFor(barKey)
-    -- Oppdater registry
+  local function ForceRefresh(barKey)
     if ACR then ACR:NotifyChange("ClassHUD") end
+    if not ACD then return end
 
-    -- Velg riktig path for tabs
-    local byKey = {
+    local pathByKey = {
       top    = { "topBar", "spells" },
       bottom = { "bottomBar", "spells" },
-      left   = { "leftBar", "spells" },
-      right  = { "rightBar", "spells" },
+      left   = { "sidebars", "leftBar", "spells" },  -- 👈 updated
+      right  = { "sidebars", "rightBar", "spells" }, -- 👈 updated
     }
-    local path = byKey[barKey]
+    local path = pathByKey[barKey]
+    if not path then return end
 
-    if not ACD or not path then return end
-
-    -- Hvis vårt eget Ace-vindu er åpent: reselect → tving redraw
     if ACD.OpenFrames and ACD.OpenFrames["ClassHUD"] then
       ACD:SelectGroup("ClassHUD", unpack(path))
-      return
+    else
+      ACD:Open("ClassHUD")
+      ACD:SelectGroup("ClassHUD", unpack(path))
     end
-
-    -- Hvis brukeren står i Blizzard Settings-panelet:
-    -- det panelet hot-refresher ikke; åpne vårt Ace-vindu for “live” UI.
-    ACD:Open("ClassHUD")
-    ACD:SelectGroup("ClassHUD", unpack(path))
   end
-
 
   -- ===== Ensure defaults exist (same spirit as your original) =====
   db.profile.textures        = db.profile.textures or { bar = "Blizzard", font = "Friz Quadrata TT" }
@@ -112,6 +105,9 @@ function ClassHUD_BuildOptions(addon)
     db.profile[spellsKey] = db.profile[spellsKey] or {}
     db.profile[spellsKey][specID] = db.profile[spellsKey][specID] or {}
 
+    opts = opts or (addon and addon._opts)
+    if not opts then return end
+
     local container = GetSpellsContainer(opts, barKey) -- 👈 viktig endring
     -- wipe gamle noder
     for k in pairs(container) do
@@ -131,6 +127,36 @@ function ClassHUD_BuildOptions(addon)
         inline = true,
         order  = 100 + idx,
         args   = {
+          -- Rekkeflytting
+          rowHeader = { type = "header", name = "Row", order = 98 },
+          moveUp = {
+            type = "execute",
+            name = "Move Up",
+            order = 98.1,
+            disabled = function() return idx == 1 end,
+            func = function()
+              if idx > 1 then
+                list[idx], list[idx - 1] = list[idx - 1], list[idx]
+                addon:BuildFramesForSpec()
+                RebuildSpellTree(opts, db, addon, barKey)
+                ACR:NotifyChange("ClassHUD")
+              end
+            end,
+          },
+          moveDown = {
+            type = "execute",
+            name = "Move Down",
+            order = 98.2,
+            disabled = function() return idx == #list end,
+            func = function()
+              if idx < #list then
+                list[idx], list[idx + 1] = list[idx + 1], list[idx]
+                addon:BuildFramesForSpec()
+                RebuildSpellTree(opts, db, addon, barKey)
+                ACR:NotifyChange("ClassHUD")
+              end
+            end,
+          },
           trackCooldown = {
             type = "toggle",
             name = "Track Cooldown",
@@ -168,6 +194,16 @@ function ClassHUD_BuildOptions(addon)
             get = function() return data.countFromAura and tostring(data.countFromAura) or "" end,
             set = function(_, v)
               data.countFromAura = tonumber(v); addon:BuildFramesForSpec()
+            end,
+          },
+          countFromAuraUnit = {
+            type = "select",
+            name = "Count Aura Unit",
+            order = 2.1,
+            values = { player = "Player", pet = "Pet", target = "Target", focus = "Focus" },
+            get = function() return data.countFromAuraUnit or "player" end,
+            set = function(_, v)
+              data.countFromAuraUnit = v; addon:BuildFramesForSpec()
             end,
           },
           auraGlowSingle = {
@@ -220,6 +256,20 @@ function ClassHUD_BuildOptions(addon)
             func = function()
               data.auraGlow = nil; addon:BuildFramesForSpec()
             end,
+          },
+          soundOnGlow = {
+            type = "select",
+            name = "Sound on Glow",
+            order = 4.5,
+            width = "normal",
+            values = function()
+              local t = { none = "(none)" }
+              local LSM = LibStub("LibSharedMedia-3.0", true)
+              if LSM then for k, _ in pairs(LSM:HashTable("sound")) do t[k] = k end end
+              return t
+            end,
+            get = function() return data.soundOnGlow or "none" end,
+            set = function(_, v) data.soundOnGlow = v end,
           },
           remove = {
             type = "execute",
@@ -695,7 +745,7 @@ function ClassHUD_BuildOptions(addon)
               )
               addon:BuildFramesForSpec()
               RebuildSpellTree(opts, db, addon, "top")
-              RefreshOptionsFor(barKey)
+              ForceRefresh("top")
             end,
             get = function() return "" end,
           },
@@ -726,7 +776,7 @@ function ClassHUD_BuildOptions(addon)
               table.insert(db.profile.topBarSpells[specID], { spellID = val, trackCooldown = true })
               addon:BuildFramesForSpec()
               RebuildSpellTree(opts, db, addon, "top")
-              RefreshOptionsFor(barKey)
+              ForceRefresh("top")
             end,
             get = function() return nil end,
           },
@@ -814,7 +864,7 @@ function ClassHUD_BuildOptions(addon)
               )
               addon:BuildFramesForSpec()
               RebuildSpellTree(opts, db, addon, "bottom")
-              RefreshOptionsFor(barKey)
+              ForceRefresh("bottom")
             end,
             get = function() return "" end,
           },
@@ -845,7 +895,7 @@ function ClassHUD_BuildOptions(addon)
               table.insert(db.profile.bottomBarSpells[specID], { spellID = val, trackCooldown = true })
               addon:BuildFramesForSpec()
               RebuildSpellTree(opts, db, addon, "bottom")
-              RefreshOptionsFor(barKey)
+              ForceRefresh("bottom")
             end,
             get = function() return nil end,
           },
@@ -923,7 +973,7 @@ function ClassHUD_BuildOptions(addon)
                   )
                   addon:BuildFramesForSpec()
                   RebuildSpellTree(opts, db, addon, "left")
-                  LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+                  ForceRefresh("left")
                 end,
                 get = function() return "" end,
               },
@@ -954,7 +1004,7 @@ function ClassHUD_BuildOptions(addon)
                   table.insert(db.profile.leftBarSpells[specID], { spellID = val, trackCooldown = true })
                   addon:BuildFramesForSpec()
                   RebuildSpellTree(opts, db, addon, "left")
-                  LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+                  ForceRefresh("left")
                 end,
                 get = function() return nil end,
               },
@@ -985,7 +1035,7 @@ function ClassHUD_BuildOptions(addon)
                   )
                   addon:BuildFramesForSpec()
                   RebuildSpellTree(opts, db, addon, "right")
-                  LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+                  ForceRefresh("right")
                 end,
                 get = function() return "" end,
               },
@@ -1016,7 +1066,7 @@ function ClassHUD_BuildOptions(addon)
                   table.insert(db.profile.rightBarSpells[specID], { spellID = val, trackCooldown = true })
                   addon:BuildFramesForSpec()
                   RebuildSpellTree(opts, db, addon, "right")
-                  LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+                  ForceRefresh("right")
                 end,
                 get = function() return nil end,
               },
@@ -1034,6 +1084,6 @@ function ClassHUD_BuildOptions(addon)
   RebuildSpellTree(opts, db, addon, "bottom")
   RebuildSpellTree(opts, db, addon, "left")
   RebuildSpellTree(opts, db, addon, "right")
-
+  addon._opts = opts -- keep a stable reference for later calls
   return opts
 end

@@ -25,6 +25,18 @@ local function FormatSeconds(s)
   end
 end
 
+local function FindAuraOnUnitBySpellID(unit, sid)
+  if not sid or not unit then return nil end
+  if AuraUtil and AuraUtil.FindAuraBySpellID then
+    return AuraUtil.FindAuraBySpellID(sid, unit, "HELPFUL|HARMFUL")
+  elseif C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
+    return C_UnitAuras.GetAuraDataBySpellID(unit, sid)
+  elseif unit == "player" and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
+    return C_UnitAuras.GetPlayerAuraBySpellID(sid)
+  end
+end
+
+
 local function CreateSpellFrame(data, index)
   local frame = CreateFrame("Frame", "ClassHUDSpell" .. "Spell" .. index, UIParent)
   frame:SetSize(40, 40)
@@ -281,18 +293,36 @@ local function UpdateSpellFrame(frame)
   frame.count:SetText("")
   frame.count:Hide()
 
-  if data.countFromAura and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
-    local aura = C_UnitAuras.GetPlayerAuraBySpellID(data.countFromAura)
-    local stacks = (aura and aura.applications) or 0
+  local countShown = false
+
+  -- 1) Stacks from aura (on selected unit)
+  if data.countFromAura then
+    local unit = data.countFromAuraUnit or "player"
+    local aura = FindAuraOnUnitBySpellID(unit, data.countFromAura)
+
+    -- convenience: if unit=player and we have a pet, also try pet once (BM Frenzy)
+    if not aura and unit == "player" and UnitExists("pet") then
+      aura = FindAuraOnUnitBySpellID("pet", data.countFromAura)
+    end
+
+    local stacks = aura and (aura.applications or aura.charges or aura.stackCount) or 0
     if stacks > 0 then
       frame.count:SetText(stacks)
       frame.count:Show()
+      countShown = true
     end
-  elseif data.trackCooldown then
+  end
+
+  -- 2) Fallback to charges when no aura stacks shown
+  if not countShown and data.trackCooldown then
     local _, _, _, _, charges = ReadCooldown(data.spellID)
-    if charges and charges.currentCharges and charges.maxCharges and charges.maxCharges > 1 then
-      frame.count:SetText(charges.currentCharges)
-      frame.count:Show()
+    if charges and charges.currentCharges then
+      local showWhenSingle = data.countIncludeSingleCharge
+      if (charges.maxCharges and charges.maxCharges > 1) or showWhenSingle then
+        frame.count:SetText(charges.currentCharges)
+        frame.count:Show()
+        countShown = true
+      end
     end
   end
 
@@ -354,10 +384,18 @@ local function UpdateSpellFrame(frame)
       if not frame.isGlowing then
         ActionButtonSpellAlertManager:ShowAlert(frame)
         frame.isGlowing = true
+        -- spill lyd én gang
+        if data.soundOnGlow and data.soundOnGlow ~= "none" then
+          local LSM = LibStub("LibSharedMedia-3.0", true)
+          local file = LSM and LSM:Fetch("sound", data.soundOnGlow)
+          if file then PlaySoundFile(file, "SFX") end
+        end
       end
-    elseif frame.isGlowing then
-      ActionButtonSpellAlertManager:HideAlert(frame)
-      frame.isGlowing = false
+    else
+      if frame.isGlowing then
+        ActionButtonSpellAlertManager:HideAlert(frame)
+        frame.isGlowing = false
+      end
     end
 
     -- ikon override
