@@ -78,102 +78,145 @@ end
 
 function ClassHUD:Layout()
   local w   = self.db.profile.width
-  local gap = self.db.profile.spacing
+  local gap = self.db.profile.spacing or 0
 
   if UI.anchor then UI.anchor:SetWidth(w) end
 
-  -- helper for attachments
+  UI.attachments = UI.attachments or {}
+
   local function ensure(name)
     if not UI.attachments[name] then
       UI.attachments[name] = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
-      UI.attachments[name]:SetSize(1, 1)
+      UI.attachments[name]._height = 0
     end
-    return UI.attachments[name]
+    local frame = UI.attachments[name]
+    frame:SetParent(UI.anchor)
+    frame:SetWidth(w)
+    frame._height = frame._height or 0
+    frame:SetHeight(frame._height)
+    frame:Show()
+    return frame
   end
 
-  if not UI.trackedContainer then
-    UI.trackedContainer = CreateFrame("Frame", "ClassHUDTrackedContainer", UI.anchor, "BackdropTemplate")
-    UI.trackedContainer:SetSize(w, 0)
-  end
+  local containers = {
+    TRACKED_ICONS = ensure("TRACKED_ICONS"),
+    TOP           = ensure("TOP"),
+    TRACKED_BARS  = ensure("TRACKED_BARS"),
+    CAST          = ensure("CAST"),
+    HP            = ensure("HP"),
+    RESOURCE      = ensure("RESOURCE"),
+    CLASS         = ensure("CLASS"),
+    BOTTOM        = ensure("BOTTOM"),
+  }
 
-  local trackedContainer = UI.trackedContainer
-  UI.tracked = trackedContainer
-  trackedContainer:SetParent(UI.anchor)
-  trackedContainer:ClearAllPoints()
-  trackedContainer:SetPoint("TOPLEFT", UI.anchor, "TOPLEFT", 0, 0)
-  trackedContainer:SetPoint("TOPRIGHT", UI.anchor, "TOPRIGHT", 0, 0)
-  trackedContainer:SetWidth(w)
+  local function layoutStatusBar(frame, containerName, enabled, height)
+    local container = containers[containerName]
+    if not container then return end
 
-  if not self.db.profile.show.buffs then
-    trackedContainer:SetHeight(0)
-    trackedContainer:Hide()
-  else
-    local height = trackedContainer:GetHeight() or 0
-    if height > 0 then
-      trackedContainer:Show()
-    else
-      trackedContainer:Hide()
-    end
-  end
+    height = (enabled and height) or 0
+    container._height = math.max(height or 0, 0)
+    container:SetHeight(container._height)
 
-  local trackedHeight = trackedContainer:GetHeight() or 0
-  if trackedHeight < 0 then trackedHeight = 0 end
-
-  local topBarFrame = UI.topBarFrame
-  local topBarHeight = topBarFrame and topBarFrame:GetHeight() or 0
-
-  local previous = trackedContainer
-  local offset = (trackedHeight > 0 and gap) or 0
-
-  if topBarFrame and topBarHeight and topBarHeight > 0 then
-    previous = topBarFrame
-    offset = gap
-  end
-
-  local function anchorBar(frame, enabled, height)
     if not frame then return end
 
+    frame:SetParent(container)
     frame:ClearAllPoints()
-    if enabled then
-      frame:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -offset)
-      frame:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, -offset)
-      frame:SetWidth(w)
-      frame:SetHeight(height)
+    frame:SetWidth(w)
+    frame:SetHeight(height or 0)
+
+    if enabled and height and height > 0 then
+      frame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+      frame:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
       frame:Show()
-      previous = frame
-      offset = gap
     else
       frame:Hide()
     end
   end
 
-  anchorBar(UI.cast, self.db.profile.show.cast, self.db.profile.height.cast)
-  anchorBar(UI.hp, self.db.profile.show.hp, self.db.profile.height.hp)
-  anchorBar(UI.resource, self.db.profile.show.resource, self.db.profile.height.resource)
-  anchorBar(UI.power, self.db.profile.show.power, self.db.profile.height.power)
+  layoutStatusBar(UI.cast, "CAST", self.db.profile.show.cast, self.db.profile.height.cast)
+  layoutStatusBar(UI.hp, "HP", self.db.profile.show.hp, self.db.profile.height.hp)
+  layoutStatusBar(UI.resource, "RESOURCE", self.db.profile.show.resource, self.db.profile.height.resource)
 
-  -- Update attachment points for spell icon layout
-  local top = ensure("TOP")
-  top:ClearAllPoints()
-  top:SetPoint("TOPLEFT", trackedContainer, "BOTTOMLEFT", 0, 0)
-  top:SetPoint("TOPRIGHT", trackedContainer, "BOTTOMRIGHT", 0, 0)
-  top:SetHeight(1)
+  local classContainer = containers.CLASS
+  if classContainer then
+    local showPower = self.db.profile.show.power
+    local height = self.db.profile.height.power or 0
+    classContainer._height = showPower and height or 0
+    classContainer:SetHeight(classContainer._height)
+    if UI.power then
+      UI.power:SetParent(classContainer)
+      UI.power:ClearAllPoints()
+      UI.power:SetPoint("TOPLEFT", classContainer, "TOPLEFT", 0, 0)
+      UI.power:SetPoint("TOPRIGHT", classContainer, "TOPRIGHT", 0, 0)
+      UI.power:SetWidth(w)
+      UI.power:SetHeight(height)
+      if showPower and height > 0 then
+        UI.power:Show()
+      else
+        UI.power:Hide()
+      end
+    end
+  end
 
-  -- BOTTOM: 1px strip aligned to bottom of power
-  local bottom = ensure("BOTTOM")
-  bottom:ClearAllPoints()
-  bottom:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, 0)
-  bottom:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, 0)
-  bottom:SetHeight(1)
+  local order = {
+    "TRACKED_ICONS",
+    "TOP",
+    "TRACKED_BARS",
+    "CAST",
+    "HP",
+    "RESOURCE",
+    "CLASS",
+    "BOTTOM",
+  }
 
-  -- LEFT/RIGHT
-  local left = ensure("LEFT")
+  local previous = UI.anchor
+  local prevHeight = 0
+
+  for _, name in ipairs(order) do
+    local container = containers[name]
+    if container then
+      container:SetWidth(w)
+      container:ClearAllPoints()
+
+      if previous == UI.anchor then
+        container:SetPoint("TOPLEFT", previous, "TOPLEFT", 0, 0)
+        container:SetPoint("TOPRIGHT", previous, "TOPRIGHT", 0, 0)
+      else
+        local offset = 0
+        if prevHeight > 0 then
+          if previous._afterGap ~= nil then
+            offset = previous._afterGap
+          else
+            offset = gap
+          end
+        end
+        previous._afterGap = nil
+        container:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -offset)
+        container:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, -offset)
+      end
+
+      previous = container
+      prevHeight = container._height or 0
+    end
+  end
+
+  local left = UI.attachments.LEFT
+  if not left then
+    UI.attachments.LEFT = CreateFrame("Frame", "ClassHUDAttachLEFT", UI.anchor)
+    left = UI.attachments.LEFT
+  end
   left:ClearAllPoints()
   left:SetPoint("RIGHT", UI.anchor, "LEFT", -4, 0)
+  left:SetSize(1, 1)
 
-  local right = ensure("RIGHT")
+  local right = UI.attachments.RIGHT
+  if not right then
+    UI.attachments.RIGHT = CreateFrame("Frame", "ClassHUDAttachRIGHT", UI.anchor)
+    right = UI.attachments.RIGHT
+  end
   right:ClearAllPoints()
   right:SetPoint("LEFT", UI.anchor, "RIGHT", 4, 0)
+  right:SetSize(1, 1)
 
   self:ApplyBarSkins()
 end

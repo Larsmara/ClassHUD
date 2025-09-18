@@ -16,6 +16,16 @@ local trackedBarPool = ClassHUD._trackedBarFramePool
 local INACTIVE_BAR_COLOR = { r = 0.25, g = 0.25, b = 0.25, a = 0.6 }
 local TRACKED_UNITS = { "player", "pet" }
 
+local function EnsureAttachment(name)
+  if not UI.anchor then return nil end
+  UI.attachments = UI.attachments or {}
+  if not UI.attachments[name] then
+    UI.attachments[name] = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
+    UI.attachments[name]._height = 0
+  end
+  return UI.attachments[name]
+end
+
 local function CopyColor(tbl)
   if type(tbl) ~= "table" then return nil end
   return {
@@ -117,7 +127,7 @@ local function CreateBuffFrame(buffID)
     return trackedBuffPool[buffID]
   end
 
-  local parent = UI.tracked or UI.trackedContainer or UI.anchor
+  local parent = (UI.attachments and UI.attachments.TRACKED_ICONS) or UI.anchor
   local f = CreateFrame("Frame", nil, parent)
   f:SetSize(32, 32)
 
@@ -168,7 +178,7 @@ local function CreateTrackedBarFrame(buffID)
     return trackedBarPool[buffID]
   end
 
-  local parent = UI.tracked or UI.trackedContainer or UI.anchor
+  local parent = (UI.attachments and UI.attachments.TRACKED_BARS) or UI.anchor
   local height = ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.trackedBuffBar
       and ClassHUD.db.profile.trackedBuffBar.height or 16
 
@@ -212,29 +222,24 @@ local function CreateTrackedBarFrame(buffID)
   return bar
 end
 
-local function LayoutTrackedContainer(barFrames, iconFrames)
-  local container = UI.tracked or UI.trackedContainer
+local function LayoutTrackedBars(barFrames, opts)
+  local container = EnsureAttachment("TRACKED_BARS")
   if not container then return end
 
   local settings = ClassHUD.db.profile.trackedBuffBar or {}
   local width    = ClassHUD.db.profile.width or 250
-  local perRow   = settings.perRow or 8
-  local spacingX = settings.spacingX or 4
   local spacingY = settings.spacingY or 4
-  local yOffset  = settings.yOffset or 4
-  local align    = settings.align or "CENTER"
   local barHeight = settings.height or 16
+  local topPadding = 0
+
+  if #barFrames > 0 then
+    topPadding = (opts and opts.topPadding) or 0
+  end
 
   container:SetWidth(width)
 
-  local hasContent = (#barFrames > 0 or #iconFrames > 0)
-  local currentY = 0
-  local totalHeight = 0
-
-  if hasContent and yOffset > 0 then
-    currentY = yOffset
-    totalHeight = yOffset
-  end
+  local currentY = topPadding
+  local totalHeight = (#barFrames > 0) and topPadding or 0
 
   for index, frame in ipairs(barFrames) do
     frame:SetParent(container)
@@ -250,29 +255,58 @@ local function LayoutTrackedContainer(barFrames, iconFrames)
 
     if index < #barFrames then
       currentY = currentY + spacingY
-      totalHeight = totalHeight + spacingY
+      totalHeight = currentY
     end
   end
 
-  if #barFrames > 0 and #iconFrames > 0 then
-    currentY = currentY + spacingY
-    totalHeight = totalHeight + spacingY
+  if #barFrames == 0 then
+    container._height = 0
+    container:SetHeight(0)
+    container._afterGap = nil
+  else
+    totalHeight = math.max(totalHeight, 0)
+    container._height = totalHeight
+    container:SetHeight(totalHeight)
+    container._afterGap = nil
   end
 
-  local iconStartY = currentY
+  container:Show()
+end
+
+local function LayoutTrackedIcons(iconFrames, opts)
+  local container = EnsureAttachment("TRACKED_ICONS")
+  if not container then return end
+
+  local settings = ClassHUD.db.profile.trackedBuffBar or {}
+  local width    = ClassHUD.db.profile.width or 250
+  local perRow   = math.max(settings.perRow or 8, 1)
+  local spacingX = settings.spacingX or 4
+  local spacingY = settings.spacingY or 4
+  local align    = settings.align or "CENTER"
+  local topPadding = 0
 
   if #iconFrames > 0 then
-    local size = (width - (perRow - 1) * spacingX) / math.max(perRow, 1)
+    topPadding = (opts and opts.topPadding) or 0
+  end
+
+  container:SetWidth(width)
+
+  local totalHeight = 0
+
+  if #iconFrames > 0 then
+    local size = (width - (perRow - 1) * spacingX) / perRow
     if size < 1 then size = 1 end
 
-    local row, col = 0, 0
     local count = #iconFrames
     local rowsUsed = math.ceil(count / perRow)
 
-    for _, frame in ipairs(iconFrames) do
+    for index, frame in ipairs(iconFrames) do
       frame:SetParent(container)
       frame:SetSize(size, size)
       frame:ClearAllPoints()
+
+      local row = math.floor((index - 1) / perRow)
+      local col = (index - 1) % perRow
 
       local remaining = count - row * perRow
       local rowCount = math.min(perRow, remaining)
@@ -289,47 +323,51 @@ local function LayoutTrackedContainer(barFrames, iconFrames)
 
       frame:SetPoint("TOPLEFT", container, "TOPLEFT",
         startX + col * (size + spacingX),
-        -(iconStartY + row * (size + spacingY)))
+        -(topPadding + row * (size + spacingY)))
       frame:Show()
-
-      col = col + 1
-      if col >= perRow then
-        col = 0
-        row = row + 1
-      end
     end
 
     local iconsHeight = rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY
-    totalHeight = math.max(totalHeight, iconStartY + iconsHeight)
+    totalHeight = topPadding + iconsHeight
+  else
+    totalHeight = 0
   end
 
-  if totalHeight <= 0 then
-    container:SetHeight(0)
-    container:Hide()
-  else
-    container:SetHeight(totalHeight)
-    container:Show()
-  end
+  totalHeight = math.max(totalHeight, 0)
+  container._height = totalHeight
+  container:SetHeight(totalHeight)
+  container._afterGap = nil
+  container:Show()
 end
 
 
 local function LayoutTopBar(frames)
-  if not UI.attachments or not UI.attachments.TOP or #frames == 0 then return end
+  local container = EnsureAttachment("TOP")
+  if not container then return end
 
   local width    = ClassHUD.db.profile.width or 250
-  local perRow   = ClassHUD.db.profile.topBar.perRow or 8
+  local perRow   = math.max(ClassHUD.db.profile.topBar.perRow or 8, 1)
   local spacingX = ClassHUD.db.profile.topBar.spacingX or 4
   local spacingY = ClassHUD.db.profile.topBar.spacingY or 4
   local yOffset  = ClassHUD.db.profile.topBar.yOffset or 0
   local grow     = ClassHUD.db.profile.topBar.grow or "DOWN"
-  local size     = (width - (perRow - 1) * spacingX) / perRow
 
-  local anchor   = UI.attachments.TOP
+  container:SetWidth(width)
+
+  if #frames == 0 then
+    container._height = 0
+    container:SetHeight(0)
+    container._afterGap = nil
+    container:Show()
+    return
+  end
+
+  local size     = (width - (perRow - 1) * spacingX) / perRow
   local count    = #frames
   local rowsUsed = math.ceil(count / perRow)
 
   for index, frame in ipairs(frames) do
-    frame:SetParent(UI.anchor)
+    frame:SetParent(container)
     frame:SetSize(size, size)
     frame:ClearAllPoints()
 
@@ -345,38 +383,21 @@ local function LayoutTopBar(frames)
     local y = yOffset + row * (size + spacingY)
 
     if grow == "UP" then
-      frame:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", x, y)
+      frame:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", x, y)
     else
-      frame:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", x, -y)
+      frame:SetPoint("TOPLEFT", container, "TOPLEFT", x, -y)
     end
 
     frame:Show()
   end
 
-  if not UI.topBarFrame then
-    UI.topBarFrame = CreateFrame("Frame", "ClassHUDTopBarFrame", UI.anchor)
-  end
-
-  local totalHeight = rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY + yOffset
+  local totalHeight = yOffset + rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY
   totalHeight = math.max(totalHeight, 0)
 
-  UI.topBarFrame:ClearAllPoints()
-  if grow == "UP" then
-    UI.topBarFrame:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 0)
-    UI.topBarFrame:SetPoint("BOTTOMRIGHT", anchor, "TOPRIGHT", 0, 0)
-  else
-    UI.topBarFrame:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, 0)
-    UI.topBarFrame:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, 0)
-  end
-  UI.topBarFrame:SetHeight(totalHeight)
-
-  if not UI.attachments.TOPBAR then
-    UI.attachments.TOPBAR = CreateFrame("Frame", "ClassHUDAttachTOPBAR", UI.topBarFrame)
-  end
-  UI.attachments.TOPBAR:ClearAllPoints()
-  UI.attachments.TOPBAR:SetPoint("TOPLEFT", UI.topBarFrame, "TOPLEFT", 0, 0)
-  UI.attachments.TOPBAR:SetPoint("TOPRIGHT", UI.topBarFrame, "TOPRIGHT", 0, 0)
-  UI.attachments.TOPBAR:SetHeight(1)
+  container._height = totalHeight
+  container:SetHeight(totalHeight)
+  container._afterGap = nil
+  container:Show()
 end
 
 
@@ -399,31 +420,58 @@ local function LayoutSideBar(frames, side)
 end
 
 local function LayoutBottomBar(frames)
-  if not UI.attachments or not UI.attachments.BOTTOM then return end
+  local container = EnsureAttachment("BOTTOM")
+  if not container then return end
+
   local width    = ClassHUD.db.profile.width or 250
-  local perRow   = ClassHUD.db.profile.bottomBar.perRow or 8
+  local perRow   = math.max(ClassHUD.db.profile.bottomBar.perRow or 8, 1)
   local spacingX = ClassHUD.db.profile.bottomBar.spacingX or 4
   local spacingY = ClassHUD.db.profile.bottomBar.spacingY or 4
   local yOffset  = ClassHUD.db.profile.bottomBar.yOffset or 0
-  local size     = (width - (perRow - 1) * spacingX) / perRow
 
-  local row, col = 0, 0
-  for _, frame in ipairs(frames) do
-    frame:SetSize(size, size)
-    frame:ClearAllPoints()
-    local rowCount = math.min(perRow, #frames - row * perRow)
-    local rowWidth = rowCount * size + (rowCount - 1) * spacingX
-    local startX   = (width - rowWidth) / 2
-    frame:SetPoint("TOPLEFT", UI.attachments.BOTTOM, "BOTTOMLEFT",
-      startX + col * (size + spacingX),
-      -(row * (size + spacingY) + spacingY + yOffset))
-    col = col + 1
-    if col >= perRow then col, row = 0, row + 1 end
+  container:SetWidth(width)
+
+  if #frames == 0 then
+    container._height = 0
+    container:SetHeight(0)
+    container._afterGap = nil
+    container:Show()
+    return
   end
+
+  local size     = (width - (perRow - 1) * spacingX) / perRow
+  local count    = #frames
+  local rowsUsed = math.ceil(count / perRow)
+  local topPadding = spacingY + yOffset
+
+  for index, frame in ipairs(frames) do
+    frame:SetSize(size, size)
+    frame:SetParent(container)
+    frame:ClearAllPoints()
+
+    local row = math.floor((index - 1) / perRow)
+    local col = (index - 1) % perRow
+    local remaining = count - row * perRow
+    local rowCount = math.min(perRow, remaining)
+    local rowWidth = rowCount * size + math.max(0, rowCount - 1) * spacingX
+    local startX   = (width - rowWidth) / 2
+
+    frame:SetPoint("TOPLEFT", container, "TOPLEFT",
+      startX + col * (size + spacingX),
+      -(topPadding + row * (size + spacingY)))
+    frame:Show()
+  end
+
+  local totalHeight = topPadding + rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY
+  totalHeight = math.max(totalHeight, 0)
+  container._height = totalHeight
+  container:SetHeight(totalHeight)
+  container._afterGap = nil
+  container:Show()
 end
 
 local function PopulateBuffIconFrame(frame, buffID, aura, entry)
-  frame:SetParent(UI.tracked or UI.trackedContainer or UI.anchor)
+  frame:SetParent(EnsureAttachment("TRACKED_ICONS") or UI.anchor)
 
   local iconID = entry and entry.iconID
   if not iconID then
@@ -451,7 +499,7 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
 end
 
 local function ConfigureTrackedBarFrame(frame, entry, config)
-  frame:SetParent(UI.tracked or UI.trackedContainer or UI.anchor)
+  frame:SetParent(EnsureAttachment("TRACKED_BARS") or UI.anchor)
 
   frame.snapshotEntry = entry
   frame.config = config
@@ -607,31 +655,29 @@ function ClassHUD:BuildTrackedBuffFrames()
   wipe(self.trackedBuffFrames)
   wipe(self.trackedBarFrames)
 
-  if not self.db.profile.show.buffs then
-    local trackedContainer = UI.tracked or UI.trackedContainer
-    if trackedContainer then
-      trackedContainer:SetHeight(0)
-      trackedContainer:Hide()
-    end
-    return
-  end
+  EnsureAttachment("TRACKED_ICONS")
+  EnsureAttachment("TRACKED_BARS")
 
-  if not (UI.tracked or UI.trackedContainer) then
+  local function resetLayouts()
+    LayoutTrackedBars({}, nil)
+    LayoutTrackedIcons({}, nil)
     if self.Layout then self:Layout() end
   end
 
-  local container = UI.tracked or UI.trackedContainer
-  if not container then return end
-
-  container:Show()
+  if not self.db.profile.show.buffs then
+    resetLayouts()
+    return
+  end
 
   local class, specID = self:GetPlayerClassSpec()
-  if not specID or specID == 0 then return end
+  if not specID or specID == 0 then
+    resetLayouts()
+    return
+  end
 
   local tracked = self:GetProfileTable(false, "trackedBuffs", class, specID)
   if not tracked then
-    container:SetHeight(0)
-    container:Hide()
+    resetLayouts()
     return
   end
 
@@ -704,8 +750,17 @@ function ClassHUD:BuildTrackedBuffFrames()
 
   self.trackedBuffFrames = iconFrames
   self.trackedBarFrames = barFrames
+  local settings = self.db.profile.trackedBuffBar or {}
+  local yOffset = settings.yOffset or 0
 
-  LayoutTrackedContainer(barFrames, iconFrames)
+  local barTopPadding = (#barFrames > 0) and yOffset or 0
+  local iconTopPadding = (#barFrames == 0 and #iconFrames > 0) and yOffset or 0
+  LayoutTrackedBars(barFrames, { topPadding = barTopPadding })
+  LayoutTrackedIcons(iconFrames, { topPadding = iconTopPadding })
+
+  if self.Layout then
+    self:Layout()
+  end
 end
 
 -- ==================================================
@@ -982,8 +1037,8 @@ function ClassHUD:BuildFramesForSpec()
     placeSpell(item.spellID, "BOTTOM")
   end
 
-  if #topFrames > 0 then LayoutTopBar(topFrames) end
-  if #bottomFrames > 0 then LayoutBottomBar(bottomFrames) end
+  LayoutTopBar(topFrames)
+  LayoutBottomBar(bottomFrames)
   if #sideFrames.LEFT > 0 then LayoutSideBar(sideFrames.LEFT, "LEFT") end
   if #sideFrames.RIGHT > 0 then LayoutSideBar(sideFrames.RIGHT, "RIGHT") end
 
