@@ -30,15 +30,6 @@ function ClassHUD:CollectCDMSpells()
   collect(Enum.CooldownViewerCategory.Utility, "utility")
   collect(Enum.CooldownViewerCategory.TrackedBuff, "buff")
   collect(Enum.CooldownViewerCategory.TrackedBar, "bar")
-
-  -- Debug dump
-  -- for sid, data in pairs(self.cdmSpells) do
-  --   print("CDM Spell", sid,
-  --     data.essential and "Essential" or "",
-  --     data.utility and "Utility" or "",
-  --     data.buff and "Buff" or "",
-  --     data.bar and "Bar" or "")
-  -- end
 end
 
 local function FormatSeconds(s)
@@ -50,6 +41,34 @@ local function FormatSeconds(s)
     return string.format("%.1f", s)
   end
 end
+
+-- Finn en aura for gitt buffID
+local function FindAuraForBuff(buffID)
+  if not C_UnitAuras then return nil end
+
+  -- 1) raskeste: alltid sjekk player først
+  if C_UnitAuras.GetPlayerAuraBySpellID then
+    local a = C_UnitAuras.GetPlayerAuraBySpellID(buffID)
+    if a then return a, "player" end
+  end
+
+  -- 2) ellers: bruk generisk oppslag
+  if C_UnitAuras.GetAuraDataBySpellID then
+    local units = { "player", "pet", "target", "focus", "mouseover" }
+    for _, unit in ipairs(units) do
+      if UnitExists(unit) then
+        local a = C_UnitAuras.GetAuraDataBySpellID(unit, buffID)
+        if a and (a.isFromPlayer or a.sourceUnit == "player" or a.sourceUnit == "pet") then
+          return a, unit
+        end
+      end
+    end
+  end
+
+  return nil
+end
+
+
 
 -- ==================================================
 -- Frame factory
@@ -102,29 +121,129 @@ end
 -- ==================================================
 -- Layout helpers (bruker dine UI.attachments)
 -- ==================================================
+
+-- ==========================================================
+-- Tracked Buffs Bar (over TopBar, dynamisk)
+-- ==========================================================
+
+local function CreateBuffFrame(buffID)
+  local f = CreateFrame("Frame", nil, UIParent)
+  f:SetSize(32, 32)
+
+  f.icon = f:CreateTexture(nil, "ARTWORK")
+  f.icon:SetAllPoints(true)
+  f.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+  f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
+  f.cooldown:SetAllPoints(true)
+
+  f.count = f:CreateFontString(nil, "OVERLAY", "GameFontNormalOutline")
+  f.count:SetPoint("BOTTOMRIGHT", -2, 2)
+  f.count:SetText("")
+
+  return f
+end
+
+local function LayoutTrackedBuffBar(frames)
+  local topBarAnchor = ClassHUD.UI.attachments and ClassHUD.UI.attachments.TOPBAR
+  if not topBarAnchor then return end
+
+  local width    = ClassHUD.db.profile.width or 250
+  local perRow   = ClassHUD.db.profile.trackedBuffBar.perRow or 8
+  local spacingX = ClassHUD.db.profile.trackedBuffBar.spacingX or 4
+  local spacingY = ClassHUD.db.profile.trackedBuffBar.spacingY or 4
+  local yOffset  = ClassHUD.db.profile.trackedBuffBar.yOffset or 4
+  local size     = (width - (perRow - 1) * spacingX) / perRow
+  local align    = ClassHUD.db.profile.trackedBuffBar.align or "CENTER"
+
+  local row, col = 0, 0
+  for _, frame in ipairs(frames) do
+    frame:SetSize(size, size)
+    frame:ClearAllPoints()
+
+    local rowCount = math.min(perRow, #frames - row * perRow)
+    local rowWidth = rowCount * size + (rowCount - 1) * spacingX
+
+    local startX
+    if align == "LEFT" then
+      startX = 0
+    elseif align == "RIGHT" then
+      startX = width - rowWidth
+    else
+      startX = (width - rowWidth) / 2
+    end
+    startX = math.floor(startX + 0.5)
+
+    frame:SetPoint("BOTTOMLEFT", topBarAnchor, "TOPLEFT",
+      startX + col * (size + spacingX),
+      row * (size + spacingY) + yOffset)
+
+    col = col + 1
+    if col >= perRow then col, row = 0, row + 1 end
+    frame:Show()
+  end
+end
+
+
 local function LayoutTopBar(frames)
   if not UI.attachments or not UI.attachments.TOP then return end
+
   local width    = ClassHUD.db.profile.width or 250
   local perRow   = ClassHUD.db.profile.topBar.perRow or 8
   local spacingX = ClassHUD.db.profile.topBar.spacingX or 4
   local spacingY = ClassHUD.db.profile.topBar.spacingY or 4
   local yOffset  = ClassHUD.db.profile.topBar.yOffset or 0
   local size     = (width - (perRow - 1) * spacingX) / perRow
+  local grow     = ClassHUD.db.profile.topBar.grow or "DOWN"
 
   local row, col = 0, 0
+  local maxRow   = 0
   for _, frame in ipairs(frames) do
+    frame:SetParent(UI.anchor) -- 👈 sørg for at de er synlige
     frame:SetSize(size, size)
     frame:ClearAllPoints()
+
     local rowCount = math.min(perRow, #frames - row * perRow)
     local rowWidth = rowCount * size + (rowCount - 1) * spacingX
     local startX   = (width - rowWidth) / 2
+
+    local yLocal
+    if grow == "UP" then
+      yLocal = -(row * (size + spacingY) + yOffset)
+    else
+      yLocal = row * (size + spacingY) + yOffset
+    end
+
     frame:SetPoint("BOTTOMLEFT", UI.attachments.TOP, "TOPLEFT",
       startX + col * (size + spacingX),
-      row * (size + spacingY) + spacingY + yOffset)
+      yLocal)
+
     col = col + 1
     if col >= perRow then col, row = 0, row + 1 end
+    maxRow = math.max(maxRow, row)
+    frame:Show()
   end
+
+  -- lag container for høyde
+  if not UI.topBarFrame then
+    UI.topBarFrame = CreateFrame("Frame", "ClassHUDTopBarFrame", UI.anchor)
+  end
+  UI.topBarFrame:ClearAllPoints()
+  UI.topBarFrame:SetPoint("BOTTOMLEFT", UI.attachments.TOP, "TOPLEFT", 0, 0)
+  UI.topBarFrame:SetPoint("BOTTOMRIGHT", UI.attachments.TOP, "TOPRIGHT", 0, 0)
+  local totalHeight = (maxRow + 1) * (size + spacingY) + yOffset
+  UI.topBarFrame:SetHeight(totalHeight)
+
+  -- lag/oppdater TOPBAR-anker
+  if not UI.attachments.TOPBAR then
+    UI.attachments.TOPBAR = CreateFrame("Frame", "ClassHUDAttachTOPBAR", UI.topBarFrame)
+  end
+  UI.attachments.TOPBAR:ClearAllPoints()
+  UI.attachments.TOPBAR:SetPoint("TOPLEFT", UI.topBarFrame, "TOPLEFT", 0, 0)
+  UI.attachments.TOPBAR:SetPoint("TOPRIGHT", UI.topBarFrame, "TOPRIGHT", 0, 0)
+  UI.attachments.TOPBAR:SetHeight(1)
 end
+
 
 local function LayoutSideBar(frames, side)
   if not UI.attachments or not UI.attachments[side] then return end
@@ -166,6 +285,50 @@ local function LayoutBottomBar(frames)
   end
 end
 
+function ClassHUD:BuildTrackedBuffFrames()
+  -- skjul gamle
+  if self.trackedBuffFrames then
+    for _, f in ipairs(self.trackedBuffFrames) do f:Hide() end
+  end
+  self.trackedBuffFrames = {}
+
+  local _, class         = UnitClass("player")
+  local specID           = GetSpecializationInfo(GetSpecialization() or 0)
+
+  local tracked          = self.db.profile.trackedBuffs[class]
+      and self.db.profile.trackedBuffs[class][specID]
+  if not tracked then return end
+
+  for buffID, enabled in pairs(tracked) do
+    if enabled then
+      local aura = FindAuraForBuff(buffID)
+      if aura then
+        local frame = CreateBuffFrame(buffID)
+        frame.icon:SetTexture(C_Spell.GetSpellTexture(buffID) or 134400)
+
+        if aura.expirationTime and aura.duration and aura.duration > 0 then
+          CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
+        else
+          CooldownFrame_Clear(frame.cooldown)
+        end
+
+        local stacks = aura.applications or aura.stackCount or aura.charges
+        if stacks and stacks > 1 then
+          frame.count:SetText(stacks)
+          frame.count:Show()
+        else
+          frame.count:Hide()
+        end
+
+        table.insert(self.trackedBuffFrames, frame)
+      end
+    end
+  end
+
+  if #self.trackedBuffFrames > 0 then
+    LayoutTrackedBuffBar(self.trackedBuffFrames)
+  end
+end
 
 -- ==================================================
 -- UpdateSpellFrame
@@ -287,97 +450,16 @@ local function UpdateSpellFrame(frame)
   end
 end
 
--- local function UpdateSpellFrame(frame)
---   local sid = frame.spellID
---   if not sid then return end
---   local raw = frame.raw
-
---   -- Ikon
---   local s = C_Spell.GetSpellInfo(sid)
---   frame.icon:SetTexture((s and s.iconID) or 134400)
-
---   -- Cooldown
---   local cd = C_Spell.GetSpellCooldown(sid)
---   if cd and cd.startTime and cd.duration and cd.duration > 0 then
---     CooldownFrame_Set(frame.cooldown, cd.startTime, cd.duration, true)
---     frame._cooldownEnd = cd.startTime + cd.duration
---     frame.icon:SetDesaturated(true)
---   else
---     CooldownFrame_Clear(frame.cooldown)
---     frame._cooldownEnd = nil
---     frame.icon:SetDesaturated(false)
---   end
-
---   -- Charges
---   local ch = C_Spell.GetSpellCharges(sid)
---   if ch and ch.maxCharges and ch.maxCharges > 1 then
---     frame.count:SetText(ch.currentCharges or 0)
---     frame.count:Show()
---     if ch.cooldownStartTime and ch.cooldownDuration and ch.cooldownDuration > 0 then
---       CooldownFrame_Set(frame.cooldown, ch.cooldownStartTime, ch.cooldownDuration, true)
---       frame._cooldownEnd = ch.cooldownStartTime + ch.cooldownDuration
---     end
---   else
---     frame.count:Hide()
---   end
-
---   ----------------------------------------------------------------
---   -- Aura-driven glow + optional buff overlay countdown (gold)
---   ----------------------------------------------------------------
---   local aura, auraID, auraUnit = FindAuraForSpell(raw, sid)
---   local auraActive = aura ~= nil
---   local stacks = aura and (aura.applications or aura.stackCount or aura.charges or 0) or 0
-
---   -- Show Blizzard glow whenever the aura is active (no stack requirement)
---   if auraActive then
---     if not frame.isGlowing then
---       ActionButtonSpellAlertManager:ShowAlert(frame)
---       frame.isGlowing = true
---     end
---   else
---     if frame.isGlowing then
---       ActionButtonSpellAlertManager:HideAlert(frame)
---       frame.isGlowing = false
---     end
---   end
-
---   -- If the aura has a timer, show its countdown on the icon (like Essential does)
---   -- This takes visual priority over the spell's recharge/normal cooldown.
---   local auraHasTimer = auraActive and aura.duration and aura.duration > 0 and aura.expirationTime
---   if auraHasTimer then
---     frame.cooldown:SetSwipeColor(1, 0.85, 0.1, 0.9) -- golden swipe while buff is active
---     CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
---     frame._cooldownEnd = aura.expirationTime
---     frame.icon:SetVertexColor(1, 1, 0.3) -- subtle golden tint during buff
---   else
---     -- Reset color when no buff overlay is shown
---     frame.cooldown:SetSwipeColor(0, 0, 0, 0.8) -- default swipe (engine default is dark)
---     frame.icon:SetVertexColor(1, 1, 1)
---   end
-
---   -- If the aura has stacks, show them — but don't clobber a charge counter
---   if stacks and stacks > 1 then
---     local ch = C_Spell.GetSpellCharges(sid)
---     if not (ch and ch.maxCharges and ch.maxCharges > 1) then
---       frame.count:SetText(stacks)
---       frame.count:Show()
---     end
---   end
-
---   -- Optional one-off debug for Barbed Shot / Frenzy discovery
---   -- if sid == 217200 and auraActive then
---   --   print("|cff00ff88ClassHUD|r Barbed Shot aura:",
---   --     "auraID=", auraID, "unit=", auraUnit,
---   --     "stacks=", stacks, "duration=", aura.duration, "expires=", aura.expirationTime)
---   -- end
--- end
-
 -- ==================================================
 -- Public API (kalles fra ClassHUD.lua events)
 -- ==================================================
 function ClassHUD:UpdateAllFrames()
   for _, f in ipairs(activeFrames) do
     UpdateSpellFrame(f)
+  end
+
+  if self.BuildTrackedBuffFrames then
+    self:BuildTrackedBuffFrames()
   end
 
   -- Før auto-map, håndter manuelle buffLinks fra DB
@@ -396,7 +478,6 @@ function ClassHUD:UpdateAllFrames()
       if frame and not frame.isGlowing then
         ActionButtonSpellAlertManager:ShowAlert(frame)
         frame.isGlowing = true
-        print("|cff00ff88ClassHUD|r Manual buff", buffID, "→ glowing", spellID)
       end
     end
   end
@@ -509,7 +590,12 @@ function ClassHUD:BuildFramesForSpec()
             local spellName = C_Spell.GetSpellName(spellID)
             if spellName and string.find(desc, spellName, 1, true) then
               -- runtime mapping
-              self.trackedBuffToSpell[buffID] = spellID
+              -- bruk snapshot buffLinks om de finnes
+              local snapshot = self.db.profile.cdmSnapshot[class] and self.db.profile.cdmSnapshot[class][specID]
+              if snapshot and snapshot.buffLinks and snapshot.buffLinks[buffID] then
+                self.trackedBuffToSpell[buffID] = snapshot.buffLinks[buffID]
+              end
+
 
               -- persist mapping (class+spec-scopet)
               local links = self.db.profile.buffLinks[class][specID]

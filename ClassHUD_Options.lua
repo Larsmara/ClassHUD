@@ -383,6 +383,71 @@ function ClassHUD_BuildOptions(addon)
     end
   end
 
+  local function RebuildBuffLinks(opts, db, addon)
+    if not opts then return end
+    local container = opts.args.buffLinks.args.list.args
+    if not container then return end
+
+    -- wipe gamle noder
+    for k in pairs(container) do container[k] = nil end
+
+    local _, class = UnitClass("player")
+    local specID   = GetSpecializationInfo(GetSpecialization() or 0)
+
+    local links    = (db.profile.buffLinks[class] and db.profile.buffLinks[class][specID]) or {}
+
+    -- bygg nye noder
+    local order    = 10
+    for buffID, spellID in pairs(links) do
+      local buffInfo             = C_Spell.GetSpellInfo(buffID)
+      local spellInfo            = C_Spell.GetSpellInfo(spellID)
+
+      local buffName             = buffInfo and buffInfo.name or "Unknown Buff"
+      local buffIcon             = buffInfo and buffInfo.iconID or 134400
+      local spellName            = spellInfo and spellInfo.name or "Unknown Spell"
+      local spellIcon            = spellInfo and spellInfo.iconID or 134400
+
+      container["map" .. buffID] = {
+        type = "group",
+        name = ("|T%d:16|t %s (%d) -> |T%d:16|t %s (%d)"):format(
+          buffIcon, buffName, buffID, spellIcon, spellName, spellID
+        ),
+        inline = true,
+        order = order,
+        args = {
+          newSpellID = {
+            type = "input",
+            name = "Endre SpellID",
+            width = "half",
+            get = function() return tostring(spellID) end,
+            set = function(_, val)
+              local newID = tonumber(val)
+              if newID then
+                db.profile.buffLinks[class][specID][buffID] = newID
+                addon:BuildFramesForSpec()
+                RebuildBuffLinks(opts, db, addon)
+                LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+              end
+            end,
+          },
+          remove = {
+            type = "execute",
+            name = "Remove",
+            confirm = true,
+            func = function()
+              db.profile.buffLinks[class][specID][buffID] = nil
+              addon:BuildFramesForSpec()
+              RebuildBuffLinks(opts, db, addon)
+              LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+            end,
+          },
+        },
+      }
+      order                      = order + 1
+    end
+  end
+
+
 
   function ClassHUD:GetUtilityOptions()
     return {
@@ -827,6 +892,29 @@ function ClassHUD_BuildOptions(addon)
                 end,
                 get = function() return db.profile.topBar.yOffset or 0 end,
               },
+              grow = {
+                type = "select",
+                name = "Vekst-retning",
+                desc = "Om Top Bar utvider seg oppover eller nedover når det er flere rader.",
+                values = { UP = "Opp", DOWN = "Ned" },
+                get = function() return db.profile.topBar.grow or "DOWN" end,
+                set = function(_, val)
+                  db.profile.topBar.grow = val; addon:BuildFramesForSpec()
+                end,
+                order = 50,
+              },
+              align = {
+                type = "select",
+                name = "Buff Anchor X-pos",
+                desc = "Plassering av Tracked Buffs-bar i forhold til Top Bar.",
+                values = { LEFT = "Venstre", CENTER = "Midt", RIGHT = "Høyre" },
+                get = function() return db.profile.topBar.align or "CENTER" end,
+                set = function(_, val)
+                  db.profile.topBar.align = val; addon:BuildFramesForSpec()
+                end,
+                order = 51,
+              },
+
             },
           },
 
@@ -1229,8 +1317,45 @@ function ClassHUD_BuildOptions(addon)
           },
         },
       },
-
-
+      trackedBuffs = {
+        type = "group",
+        name = "Tracked Buffs",
+        order = 7,
+        args = {
+          desc = {
+            type = "description",
+            name = "Velg hvilke buffs du ønsker å spore. Disse vises i en egen bar over Top Bar.\n",
+            order = 1,
+          },
+          addCustom = {
+            type = "input",
+            name = "Legg til BuffID manuelt",
+            desc = "Skriv inn et buffID du ønsker å tracke manuelt.",
+            order = 3,
+            set = function(_, val)
+              local newID = tonumber(val)
+              if newID then
+                local _, class                                = UnitClass("player")
+                local specID                                  = GetSpecializationInfo(GetSpecialization() or 0)
+                db.profile.trackedBuffs[class]                = db.profile.trackedBuffs[class] or {}
+                db.profile.trackedBuffs[class][specID]        = db.profile.trackedBuffs[class][specID] or {}
+                db.profile.trackedBuffs[class][specID][newID] = true
+                print("|cff00ff88ClassHUD|r La til ny tracked buff:", newID)
+                addon:BuildFramesForSpec()
+                RebuildTrackedBuffs(opts, db, addon)
+                LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
+              end
+            end,
+          },
+          list = {
+            type = "group",
+            name = "Tilgjengelige Buffs",
+            inline = true,
+            order = 2,
+            args = {},
+          },
+        },
+      }
 
     },
   }
@@ -1241,6 +1366,7 @@ function ClassHUD_BuildOptions(addon)
   RebuildSpellTree(opts, db, addon, "left")
   RebuildSpellTree(opts, db, addon, "right")
   RebuildBuffLinks(opts, db, addon)
+  RebuildTrackedBuffs(opts, db, addon)
   addon._opts = opts -- keep a stable reference for later calls
   return opts
 end

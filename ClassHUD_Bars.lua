@@ -60,7 +60,7 @@ function ClassHUD:CreatePowerContainer()
   UI.power = f
 end
 
--- Layout (top→bottom): cast → hp → resource → power
+-- Layout (top→bottom): tracked buffs → cast → hp → resource → power
 function ClassHUD:ApplyBarSkins()
   local tex = self:FetchStatusbar()
   for _, sb in pairs({ UI.cast, UI.hp, UI.resource }) do
@@ -82,8 +82,16 @@ function ClassHUD:Layout()
 
   if UI.anchor then UI.anchor:SetWidth(w) end
 
-  local y = 0
+  -- helper for attachments
+  local function ensure(name)
+    if not UI.attachments[name] then
+      UI.attachments[name] = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
+      UI.attachments[name]:SetSize(1, 1)
+    end
+    return UI.attachments[name]
+  end
 
+  local y = 0
 
   -- Cast (top)
   if self.db.profile.show.cast then
@@ -125,15 +133,6 @@ function ClassHUD:Layout()
   end
 
   -- Update attachment points for spell icon layout
-  local function ensure(name)
-    if not UI.attachments[name] then
-      UI.attachments[name] = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
-      UI.attachments[name]:SetSize(1, 1)
-    end
-    return UI.attachments[name]
-  end
-
-  -- TOP: 1px strip aligned to cast bar top
   local top = ensure("TOP")
   top:ClearAllPoints()
   top:SetPoint("BOTTOMLEFT", UI.cast, "TOPLEFT", 0, 0)
@@ -161,7 +160,6 @@ end
 
 -- Updates
 function ClassHUD:StopCast()
-  -- Don’t stop if player is still casting or channeling something
   local casting = UnitCastingInfo("player")
   local channeling = UnitChannelInfo("player")
   if casting or channeling then return end
@@ -216,9 +214,8 @@ end
 function ClassHUD:UNIT_SPELLCAST_SUCCEEDED(unit, spellID)
   if unit ~= "player" then return end
   local name, _, icon = C_Spell.GetSpellInfo(spellID)
-  -- Only show if the spell is instant (no cast/channel active)
   if name and not UnitCastingInfo("player") and not UnitChannelInfo("player") then
-    self:StartCast(name, icon, GetTime() * 1000, (GetTime() + 1) * 1000, false) -- show 1s fake bar
+    self:StartCast(name, icon, GetTime() * 1000, (GetTime() + 1) * 1000, false)
   end
 end
 
@@ -248,7 +245,6 @@ function ClassHUD:UpdatePrimaryResource()
   UI.resource:SetMinMaxValues(0, max > 0 and max or 1)
   UI.resource:SetValue(cur)
 
-  -- color straight from Blizzard’s table
   local r, g, b = self:PowerColorBy(id, token)
   UI.resource:SetStatusBarColor(r, g, b)
 

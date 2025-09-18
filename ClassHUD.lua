@@ -131,6 +131,7 @@ local defaults = {
       spacingX = 4,
       spacingY = 4,
       yOffset  = 0,
+      grow     = "UP", -- "UP" eller "DOWN"
     },
     bottomBar        = {
       perRow   = 8,
@@ -142,7 +143,8 @@ local defaults = {
       perRow   = 8,
       spacingX = 4,
       spacingY = 4,
-      yOffset  = 4, -- litt luft over TopBar
+      yOffset  = 4,              -- litt luft over TopBar
+      align    = "CENTER",       -- "LEFT" | "CENTER" | "RIGHT"
     },
 
     -- =========================
@@ -600,5 +602,48 @@ SlashCmdList.CHUDMAP = function()
     local bName = C_Spell.GetSpellName(buffID) or ("buff " .. buffID)
     local sName = C_Spell.GetSpellName(spellID) or ("spell " .. spellID)
     print(string.format("  %s (%d)  →  %s (%d)", bName, buffID, sName, spellID))
+  end
+end
+
+-- ==================================================
+-- Debug command: /chudtracked
+-- Viser snapshot vs. aktive buffs
+-- ==================================================
+SLASH_CHUDTRACKED1 = "/chudtracked"
+SlashCmdList.CHUDTRACKED = function()
+  local _, class = UnitClass("player")
+  local specID   = GetSpecializationInfo(GetSpecialization() or 0)
+
+  print("|cff00ff88ClassHUD|r Debug: Tracked Buffs for", class, specID)
+
+  local snapshot = ClassHUD.db.profile.cdmSnapshot
+      and ClassHUD.db.profile.cdmSnapshot[class]
+      and ClassHUD.db.profile.cdmSnapshot[class][specID]
+
+  local tracked = ClassHUD.db.profile.trackedBuffs
+      and ClassHUD.db.profile.trackedBuffs[class]
+      and ClassHUD.db.profile.trackedBuffs[class][specID]
+
+  if not snapshot then
+    print("  Ingen snapshot lagret for denne spec.")
+    return
+  end
+
+  for buffID, data in pairs(snapshot) do
+    if data.category == "buff" then
+      local name = data.name or ("Buff " .. buffID)
+      local active = false
+      local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
+      if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
+        aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
+      end
+      if aura then active = true end
+
+      local enabled = tracked and tracked[buffID] and "|cff00ff00ON|r" or "|cffff0000OFF|r"
+      local status  = active and "|cff00ff00ACTIVE|r" or "inactive"
+
+      print(string.format("  [%d] %s → tracked=%s, %s",
+        buffID, name, enabled, status))
+    end
   end
 end
