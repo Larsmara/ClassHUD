@@ -280,6 +280,10 @@ local function LayoutTrackedIcons(iconFrames, opts)
   local container = EnsureAttachment("TRACKED_ICONS")
   if not container then return end
 
+  container:ClearAllPoints()
+  container:SetPoint("BOTTOM", UI.attachments.TOP, "TOP", 0, 4) -- 4 px over Top bar
+  container:SetWidth(ClassHUD.db.profile.width or 250)
+
   local settings   = ClassHUD.db.profile.trackedBuffBar or {}
   local width      = ClassHUD.db.profile.width or 250
   local perRow     = math.max(settings.perRow or 8, 1)
@@ -333,15 +337,17 @@ local function LayoutTrackedIcons(iconFrames, opts)
     local iconsHeight = rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY
     totalHeight = topPadding + iconsHeight
   else
-    totalHeight = 0
+    -- ingen aktive buffs → hold containeren i live med 1 px høyde
+    totalHeight = 1
   end
 
-  totalHeight = math.max(totalHeight, 0)
   container._height = totalHeight
   container:SetHeight(totalHeight)
   container._afterGap = nil
   container:Show()
 end
+
+
 
 
 local function LayoutTopBar(frames)
@@ -728,20 +734,13 @@ function ClassHUD:BuildTrackedBuffFrames()
     local entry = info.entry
     local auraCandidates = CollectAuraSpellIDs(entry, buffID)
 
-    local hasBar = entry and entry.categories and entry.categories.bar
-
-    -- if config.showBar then
-    --   local bar = CreateTrackedBarFrame(buffID)
-    --   ConfigureTrackedBarFrame(bar, entry, config)
-    --   UpdateTrackedBarFrame(bar) -- setter aktiv/inaktiv state
-    --   table.insert(barFrames, bar)
-    -- end
-
     if config.showIcon then
       local aura = FindAuraFromCandidates(auraCandidates)
-      local iconFrame = CreateBuffFrame(buffID)
-      PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
-      table.insert(iconFrames, iconFrame)
+      if aura then
+        local iconFrame = CreateBuffFrame(buffID)
+        PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
+        table.insert(iconFrames, iconFrame)
+      end
     end
   end
 

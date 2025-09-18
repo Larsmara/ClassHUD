@@ -32,7 +32,6 @@ function ClassHUD:CreateCastBar()
   b.time:SetJustifyH("RIGHT")
 
   b:SetStatusBarColor(1, .7, 0)
-  b:Hide()
   UI.cast = b
 end
 
@@ -99,14 +98,13 @@ function ClassHUD:Layout()
   end
 
   local containers = {
-    TRACKED_ICONS = ensure("TRACKED_ICONS"),
-    TOP           = ensure("TOP"),
+    TOP      = ensure("TOP"),
     -- TRACKED_BARS  = ensure("TRACKED_BARS"),
-    CAST          = ensure("CAST"),
-    HP            = ensure("HP"),
-    RESOURCE      = ensure("RESOURCE"),
-    CLASS         = ensure("CLASS"),
-    BOTTOM        = ensure("BOTTOM"),
+    CAST     = ensure("CAST"),
+    HP       = ensure("HP"),
+    RESOURCE = ensure("RESOURCE"),
+    CLASS    = ensure("CLASS"),
+    BOTTOM   = ensure("BOTTOM"),
   }
 
   local function layoutStatusBar(frame, containerName, enabled, height)
@@ -161,7 +159,6 @@ function ClassHUD:Layout()
   end
 
   local order = {
-    "TRACKED_ICONS",
     "TOP",
     -- "TRACKED_BARS",
     "CAST",
@@ -300,6 +297,7 @@ function ClassHUD:UpdateHP()
   UI.hp:SetValue(cur)
   local pct = (max > 0) and (cur / max * 100) or 0
   UI.hp.text:SetFormattedText("%d%%", pct + 0.5)
+  UI.hp:Show()
 end
 
 function ClassHUD:UpdatePrimaryResource()
@@ -319,4 +317,5 @@ function ClassHUD:UpdatePrimaryResource()
   else
     UI.resource.text:SetText(cur)
   end
+  UI.resource:Show()
 end
