@@ -60,7 +60,7 @@ function ClassHUD:CreatePowerContainer()
   UI.power = f
 end
 
--- Layout (top→bottom): cast → hp → resource → power
+-- Layout (top→bottom): tracked buffs → cast → hp → resource → power
 function ClassHUD:ApplyBarSkins()
   local tex = self:FetchStatusbar()
   for _, sb in pairs({ UI.cast, UI.hp, UI.resource }) do
@@ -78,89 +78,153 @@ end
 
 function ClassHUD:Layout()
   local w   = self.db.profile.width
-  local gap = self.db.profile.spacing
+  local gap = self.db.profile.spacing or 0
 
   if UI.anchor then UI.anchor:SetWidth(w) end
 
-  local y = 0
+  UI.attachments = UI.attachments or {}
 
-  -- Cast (top)
-  if self.db.profile.show.cast then
-    UI.cast:SetPoint("TOP", UI.anchor, "TOP", 0, -y)
-    UI.cast:SetWidth(w)
-    UI.cast:SetHeight(self.db.profile.height.cast)
-    y = y + UI.cast:GetHeight() + gap
-  else
-    UI.cast:ClearAllPoints(); UI.cast:Hide()
-  end
-
-  -- HP
-  if self.db.profile.show.hp then
-    UI.hp:SetPoint("TOP", UI.anchor, "TOP", 0, -y)
-    UI.hp:SetWidth(w)
-    UI.hp:SetHeight(self.db.profile.height.hp)
-    y = y + UI.hp:GetHeight() + gap
-  else
-    UI.hp:ClearAllPoints(); UI.hp:Hide()
-  end
-
-  -- Primary resource
-  if self.db.profile.show.resource then
-    UI.resource:SetPoint("TOP", UI.anchor, "TOP", 0, -y)
-    UI.resource:SetWidth(w)
-    UI.resource:SetHeight(self.db.profile.height.resource)
-    y = y + UI.resource:GetHeight() + gap
-  else
-    UI.resource:ClearAllPoints(); UI.resource:Hide()
-  end
-
-  -- Special power container
-  if self.db.profile.show.power then
-    UI.power:SetPoint("TOP", UI.anchor, "TOP", 0, -y)
-    UI.power:SetWidth(w)
-    UI.power:SetHeight(self.db.profile.height.power)
-  else
-    UI.power:ClearAllPoints(); UI.power:Hide()
-  end
-
-  -- Update attachment points for spell icon layout
   local function ensure(name)
     if not UI.attachments[name] then
       UI.attachments[name] = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
-      UI.attachments[name]:SetSize(1, 1)
+      UI.attachments[name]._height = 0
     end
-    return UI.attachments[name]
+    local frame = UI.attachments[name]
+    frame:SetParent(UI.anchor)
+    frame:SetWidth(w)
+    frame._height = frame._height or 0
+    frame:SetHeight(frame._height)
+    frame:Show()
+    return frame
   end
 
-  -- TOP: 1px strip aligned to cast bar top
-  local top = ensure("TOP")
-  top:ClearAllPoints()
-  top:SetPoint("BOTTOMLEFT", UI.cast, "TOPLEFT", 0, 0)
-  top:SetPoint("BOTTOMRIGHT", UI.cast, "TOPRIGHT", 0, 0)
-  top:SetHeight(1)
+  local containers = {
+    TRACKED_ICONS = ensure("TRACKED_ICONS"),
+    TOP           = ensure("TOP"),
+    -- TRACKED_BARS  = ensure("TRACKED_BARS"),
+    CAST          = ensure("CAST"),
+    HP            = ensure("HP"),
+    RESOURCE      = ensure("RESOURCE"),
+    CLASS         = ensure("CLASS"),
+    BOTTOM        = ensure("BOTTOM"),
+  }
 
-  -- BOTTOM: 1px strip aligned to bottom of power
-  local bottom = ensure("BOTTOM")
-  bottom:ClearAllPoints()
-  bottom:SetPoint("TOPLEFT", UI.power, "BOTTOMLEFT", 0, 0)
-  bottom:SetPoint("TOPRIGHT", UI.power, "BOTTOMRIGHT", 0, 0)
-  bottom:SetHeight(1)
+  local function layoutStatusBar(frame, containerName, enabled, height)
+    local container = containers[containerName]
+    if not container then return end
 
-  -- LEFT/RIGHT
-  local left = ensure("LEFT")
+    height = (enabled and height) or 0
+    container._height = math.max(height or 0, 0)
+    container:SetHeight(container._height)
+
+    if not frame then return end
+
+    frame:SetParent(container)
+    frame:ClearAllPoints()
+    frame:SetWidth(w)
+    frame:SetHeight(height or 0)
+
+    if enabled and height and height > 0 then
+      frame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+      frame:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+      frame:Show()
+    else
+      frame:Hide()
+    end
+  end
+
+  if UI.cast and UI.cast:IsShown() then
+    layoutStatusBar(UI.cast, "CAST", true, self.db.profile.height.cast)
+  end
+  layoutStatusBar(UI.hp, "HP", self.db.profile.show.hp, self.db.profile.height.hp)
+  layoutStatusBar(UI.resource, "RESOURCE", self.db.profile.show.resource, self.db.profile.height.resource)
+
+  local classContainer = containers.CLASS
+  if classContainer then
+    local showPower = self.db.profile.show.power
+    local height = self.db.profile.height.power or 0
+    classContainer._height = showPower and height or 0
+    classContainer:SetHeight(classContainer._height)
+    if UI.power then
+      UI.power:SetParent(classContainer)
+      UI.power:ClearAllPoints()
+      UI.power:SetPoint("TOPLEFT", classContainer, "TOPLEFT", 0, 0)
+      UI.power:SetPoint("TOPRIGHT", classContainer, "TOPRIGHT", 0, 0)
+      UI.power:SetWidth(w)
+      UI.power:SetHeight(height)
+      if showPower and height > 0 then
+        UI.power:Show()
+      else
+        UI.power:Hide()
+      end
+    end
+  end
+
+  local order = {
+    "TRACKED_ICONS",
+    "TOP",
+    -- "TRACKED_BARS",
+    "CAST",
+    "HP",
+    "RESOURCE",
+    "CLASS",
+    "BOTTOM",
+  }
+
+  local previous = UI.anchor
+  local prevHeight = 0
+
+  for _, name in ipairs(order) do
+    local container = containers[name]
+    if container then
+      container:SetWidth(w)
+      container:ClearAllPoints()
+
+      if previous == UI.anchor then
+        container:SetPoint("TOPLEFT", previous, "TOPLEFT", 0, 0)
+        container:SetPoint("TOPRIGHT", previous, "TOPRIGHT", 0, 0)
+      else
+        local offset = 0
+        if prevHeight > 0 then
+          if previous._afterGap ~= nil then
+            offset = previous._afterGap
+          else
+            offset = gap
+          end
+        end
+        previous._afterGap = nil
+        container:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -offset)
+        container:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, -offset)
+      end
+
+      previous = container
+      prevHeight = container._height or 0
+    end
+  end
+
+  local left = UI.attachments.LEFT
+  if not left then
+    UI.attachments.LEFT = CreateFrame("Frame", "ClassHUDAttachLEFT", UI.anchor)
+    left = UI.attachments.LEFT
+  end
   left:ClearAllPoints()
   left:SetPoint("RIGHT", UI.anchor, "LEFT", -4, 0)
+  left:SetSize(1, 1)
 
-  local right = ensure("RIGHT")
+  local right = UI.attachments.RIGHT
+  if not right then
+    UI.attachments.RIGHT = CreateFrame("Frame", "ClassHUDAttachRIGHT", UI.anchor)
+    right = UI.attachments.RIGHT
+  end
   right:ClearAllPoints()
   right:SetPoint("LEFT", UI.anchor, "RIGHT", 4, 0)
+  right:SetSize(1, 1)
 
   self:ApplyBarSkins()
 end
 
 -- Updates
 function ClassHUD:StopCast()
-  -- Don’t stop if player is still casting or channeling something
   local casting = UnitCastingInfo("player")
   local channeling = UnitChannelInfo("player")
   if casting or channeling then return end
@@ -215,9 +279,8 @@ end
 function ClassHUD:UNIT_SPELLCAST_SUCCEEDED(unit, spellID)
   if unit ~= "player" then return end
   local name, _, icon = C_Spell.GetSpellInfo(spellID)
-  -- Only show if the spell is instant (no cast/channel active)
   if name and not UnitCastingInfo("player") and not UnitChannelInfo("player") then
-    self:StartCast(name, icon, GetTime() * 1000, (GetTime() + 1) * 1000, false) -- show 1s fake bar
+    self:StartCast(name, icon, GetTime() * 1000, (GetTime() + 1) * 1000, false)
   end
 end
 
@@ -247,7 +310,6 @@ function ClassHUD:UpdatePrimaryResource()
   UI.resource:SetMinMaxValues(0, max > 0 and max or 1)
   UI.resource:SetValue(cur)
 
-  -- color straight from Blizzard’s table
   local r, g, b = self:PowerColorBy(id, token)
   UI.resource:SetStatusBarColor(r, g, b)
 
