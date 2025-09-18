@@ -91,59 +91,65 @@ function ClassHUD:Layout()
     return UI.attachments[name]
   end
 
-  local y = 0
-
-  -- Cast (top)
-  if self.db.profile.show.cast then
-    UI.cast:SetPoint("TOP", UI.anchor, "TOP", 0, -y)
-    UI.cast:SetWidth(w)
-    UI.cast:SetHeight(self.db.profile.height.cast)
-    y = y + UI.cast:GetHeight() + gap
-  else
-    UI.cast:ClearAllPoints(); UI.cast:Hide()
+  if not UI.trackedContainer then
+    UI.trackedContainer = CreateFrame("Frame", "ClassHUDTrackedContainer", UI.anchor, "BackdropTemplate")
+    UI.trackedContainer:SetSize(w, 0)
   end
 
-  -- HP
-  if self.db.profile.show.hp then
-    UI.hp:SetPoint("TOP", UI.anchor, "TOP", 0, -y)
-    UI.hp:SetWidth(w)
-    UI.hp:SetHeight(self.db.profile.height.hp)
-    y = y + UI.hp:GetHeight() + gap
+  local trackedContainer = UI.trackedContainer
+  trackedContainer:SetParent(UI.anchor)
+  trackedContainer:ClearAllPoints()
+  trackedContainer:SetPoint("TOPLEFT", UI.anchor, "TOPLEFT", 0, 0)
+  trackedContainer:SetPoint("TOPRIGHT", UI.anchor, "TOPRIGHT", 0, 0)
+  trackedContainer:SetWidth(w)
+
+  if not self.db.profile.show.buffs then
+    trackedContainer:SetHeight(0)
+    trackedContainer:Hide()
   else
-    UI.hp:ClearAllPoints(); UI.hp:Hide()
+    trackedContainer:Show()
   end
 
-  -- Primary resource
-  if self.db.profile.show.resource then
-    UI.resource:SetPoint("TOP", UI.anchor, "TOP", 0, -y)
-    UI.resource:SetWidth(w)
-    UI.resource:SetHeight(self.db.profile.height.resource)
-    y = y + UI.resource:GetHeight() + gap
-  else
-    UI.resource:ClearAllPoints(); UI.resource:Hide()
+  local trackedHeight = trackedContainer:GetHeight() or 0
+  if trackedHeight < 0 then trackedHeight = 0 end
+
+  local previous = trackedContainer
+  local offset = (trackedHeight > 0 and gap) or 0
+
+  local function anchorBar(frame, enabled, height)
+    if not frame then return end
+
+    frame:ClearAllPoints()
+    if enabled then
+      frame:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -offset)
+      frame:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, -offset)
+      frame:SetWidth(w)
+      frame:SetHeight(height)
+      frame:Show()
+      previous = frame
+      offset = gap
+    else
+      frame:Hide()
+    end
   end
 
-  -- Special power container
-  if self.db.profile.show.power then
-    UI.power:SetPoint("TOP", UI.anchor, "TOP", 0, -y)
-    UI.power:SetWidth(w)
-    UI.power:SetHeight(self.db.profile.height.power)
-  else
-    UI.power:ClearAllPoints(); UI.power:Hide()
-  end
+  anchorBar(UI.cast, self.db.profile.show.cast, self.db.profile.height.cast)
+  anchorBar(UI.hp, self.db.profile.show.hp, self.db.profile.height.hp)
+  anchorBar(UI.resource, self.db.profile.show.resource, self.db.profile.height.resource)
+  anchorBar(UI.power, self.db.profile.show.power, self.db.profile.height.power)
 
   -- Update attachment points for spell icon layout
   local top = ensure("TOP")
   top:ClearAllPoints()
-  top:SetPoint("BOTTOMLEFT", UI.cast, "TOPLEFT", 0, 0)
-  top:SetPoint("BOTTOMRIGHT", UI.cast, "TOPRIGHT", 0, 0)
+  top:SetPoint("BOTTOMLEFT", trackedContainer, "TOPLEFT", 0, 0)
+  top:SetPoint("BOTTOMRIGHT", trackedContainer, "TOPRIGHT", 0, 0)
   top:SetHeight(1)
 
   -- BOTTOM: 1px strip aligned to bottom of power
   local bottom = ensure("BOTTOM")
   bottom:ClearAllPoints()
-  bottom:SetPoint("TOPLEFT", UI.power, "BOTTOMLEFT", 0, 0)
-  bottom:SetPoint("TOPRIGHT", UI.power, "BOTTOMRIGHT", 0, 0)
+  bottom:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, 0)
+  bottom:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, 0)
   bottom:SetHeight(1)
 
   -- LEFT/RIGHT

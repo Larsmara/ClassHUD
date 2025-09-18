@@ -4,85 +4,50 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local UI = ClassHUD.UI
 
 ClassHUD.spellFrames = ClassHUD.spellFrames or {}
+ClassHUD.trackedBuffFrames = ClassHUD.trackedBuffFrames or {}
+ClassHUD.trackedBarFrames = ClassHUD.trackedBarFrames or {}
+ClassHUD._trackedBuffFramePool = ClassHUD._trackedBuffFramePool or {}
+ClassHUD._trackedBarFramePool = ClassHUD._trackedBarFramePool or {}
+
 local activeFrames = {}
+local trackedBuffPool = ClassHUD._trackedBuffFramePool
+local trackedBarPool = ClassHUD._trackedBarFramePool
 
 -- ==================================================
 -- Helpers
 -- ==================================================
-function ClassHUD:CollectCDMSpells()
+
+---Refreshes the in-memory snapshot cache used by spell frames.
+function ClassHUD:RefreshSnapshotCache()
   self.cdmSpells = {}
 
-  local function collect(category, key)
-    local ids = C_CooldownViewer.GetCooldownViewerCategorySet(category)
-    if type(ids) ~= "table" then return end
+  local snapshot = self:GetSnapshotForSpec(nil, nil, false)
+  if not snapshot then return end
 
-    for _, cooldownID in ipairs(ids) do
-      local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
-      if raw and raw.spellID then
-        local sid = raw.spellID or raw.overrideSpellID
-        self.cdmSpells[sid] = self.cdmSpells[sid] or {}
-        self.cdmSpells[sid][key] = raw
-      end
+  for spellID, entry in pairs(snapshot) do
+    if entry.categories then
+      self.cdmSpells[spellID] = entry.categories
     end
   end
-
-  collect(Enum.CooldownViewerCategory.Essential, "essential")
-  collect(Enum.CooldownViewerCategory.Utility, "utility")
-  collect(Enum.CooldownViewerCategory.TrackedBuff, "buff")
-  collect(Enum.CooldownViewerCategory.TrackedBar, "bar")
 end
-
-local function FormatSeconds(s)
-  if s >= 60 then
-    return string.format("%dm", math.ceil(s / 60))
-  elseif s >= 10 then
-    return tostring(math.floor(s + 0.5))
-  else
-    return string.format("%.1f", s)
-  end
-end
-
--- Finn en aura for gitt buffID
-local function FindAuraForBuff(buffID)
-  if not C_UnitAuras then return nil end
-
-  -- 1) raskeste: alltid sjekk player først
-  if C_UnitAuras.GetPlayerAuraBySpellID then
-    local a = C_UnitAuras.GetPlayerAuraBySpellID(buffID)
-    if a then return a, "player" end
-  end
-
-  -- 2) ellers: bruk generisk oppslag
-  if C_UnitAuras.GetAuraDataBySpellID then
-    local units = { "player", "pet", "target", "focus", "mouseover" }
-    for _, unit in ipairs(units) do
-      if UnitExists(unit) then
-        local a = C_UnitAuras.GetAuraDataBySpellID(unit, buffID)
-        if a and (a.isFromPlayer or a.sourceUnit == "player" or a.sourceUnit == "pet") then
-          return a, unit
-        end
-      end
-    end
-  end
-
-  return nil
-end
-
-
 
 -- ==================================================
 -- Frame factory
 -- ==================================================
-local function CreateSpellFrame(spellID, index)
-  local frame = CreateFrame("Frame", "ClassHUDSpell" .. index, UIParent)
+local function CreateSpellFrame(spellID)
+  if ClassHUD.spellFrames[spellID] then
+    return ClassHUD.spellFrames[spellID]
+  end
+
+  local frame = CreateFrame("Frame", "ClassHUDSpell" .. spellID, UI.anchor)
   frame:SetSize(40, 40)
 
   frame.icon = frame:CreateTexture(nil, "ARTWORK")
   frame.icon:SetAllPoints(frame)
 
-  frame.count = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  frame.count = frame:CreateFontString(nil, "OVERLAY")
   frame.count:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 2)
-  frame.count:SetFont(GameFontNormalLarge:GetFont(), 14, "OUTLINE")
+  frame.count:SetFont(ClassHUD:FetchFont(14))
   frame.count:Hide()
 
   frame.cooldown = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
@@ -90,9 +55,9 @@ local function CreateSpellFrame(spellID, index)
   frame.cooldown:SetHideCountdownNumbers(true)
   frame.cooldown.noCooldownCount = true
 
-  frame.cooldownText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+  frame.cooldownText = frame:CreateFontString(nil, "OVERLAY")
   frame.cooldownText:SetPoint("CENTER", frame, "CENTER", 0, 0)
-  frame.cooldownText:SetFont(GameFontHighlightLarge:GetFont(), 16, "OUTLINE")
+  frame.cooldownText:SetFont(ClassHUD:FetchFont(16))
   frame.cooldownText:Hide()
 
   frame._cooldownEnd = nil
@@ -101,16 +66,16 @@ local function CreateSpellFrame(spellID, index)
 
   ClassHUD.spellFrames[spellID] = frame
 
-  frame:SetScript("OnUpdate", function(self)
-    if self._cooldownEnd then
-      local remain = self._cooldownEnd - GetTime()
+  frame:SetScript("OnUpdate", function(selfFrame)
+    if selfFrame._cooldownEnd then
+      local remain = selfFrame._cooldownEnd - GetTime()
       if remain <= 0 then
-        self._cooldownEnd = nil
-        self.cooldownText:Hide()
-        self.icon:SetDesaturated(false)
+        selfFrame._cooldownEnd = nil
+        selfFrame.cooldownText:Hide()
+        selfFrame.icon:SetDesaturated(false)
       else
-        self.cooldownText:SetText(FormatSeconds(remain))
-        self.cooldownText:Show()
+        selfFrame.cooldownText:SetText(ClassHUD.FormatSeconds(remain))
+        selfFrame.cooldownText:Show()
       end
     end
   end)
@@ -127,7 +92,12 @@ end
 -- ==========================================================
 
 local function CreateBuffFrame(buffID)
-  local f = CreateFrame("Frame", nil, UIParent)
+  if trackedBuffPool[buffID] then
+    return trackedBuffPool[buffID]
+  end
+
+  local parent = UI.trackedContainer or UI.anchor
+  local f = CreateFrame("Frame", nil, parent)
   f:SetSize(32, 32)
 
   f.icon = f:CreateTexture(nil, "ARTWORK")
@@ -137,50 +107,186 @@ local function CreateBuffFrame(buffID)
   f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
   f.cooldown:SetAllPoints(true)
 
-  f.count = f:CreateFontString(nil, "OVERLAY", "GameFontNormalOutline")
+  f.count = f:CreateFontString(nil, "OVERLAY")
   f.count:SetPoint("BOTTOMRIGHT", -2, 2)
+  f.count:SetFont(ClassHUD:FetchFont(12))
   f.count:SetText("")
+
+  f.buffID = buffID
+  trackedBuffPool[buffID] = f
 
   return f
 end
 
-local function LayoutTrackedBuffBar(frames)
-  local topBarAnchor = ClassHUD.UI.attachments and ClassHUD.UI.attachments.TOPBAR
-  if not topBarAnchor then return end
+local function OnTrackedBarUpdate(self)
+  if not self._duration or not self._expiration then
+    self:SetScript("OnUpdate", nil)
+    if self.timer then self.timer:Hide() end
+    return
+  end
 
-  local width    = ClassHUD.db.profile.width or 250
-  local perRow   = ClassHUD.db.profile.trackedBuffBar.perRow or 8
-  local spacingX = ClassHUD.db.profile.trackedBuffBar.spacingX or 4
-  local spacingY = ClassHUD.db.profile.trackedBuffBar.spacingY or 4
-  local yOffset  = ClassHUD.db.profile.trackedBuffBar.yOffset or 4
-  local size     = (width - (perRow - 1) * spacingX) / perRow
-  local align    = ClassHUD.db.profile.trackedBuffBar.align or "CENTER"
-
-  local row, col = 0, 0
-  for _, frame in ipairs(frames) do
-    frame:SetSize(size, size)
-    frame:ClearAllPoints()
-
-    local rowCount = math.min(perRow, #frames - row * perRow)
-    local rowWidth = rowCount * size + (rowCount - 1) * spacingX
-
-    local startX
-    if align == "LEFT" then
-      startX = 0
-    elseif align == "RIGHT" then
-      startX = width - rowWidth
-    else
-      startX = (width - rowWidth) / 2
+  local remaining = self._expiration - GetTime()
+  if remaining <= 0 then
+    self:SetValue(self._duration)
+    if self._showTimer and self.timer then
+      self.timer:SetText(ClassHUD.FormatSeconds(0))
+      self.timer:Show()
+    elseif self.timer then
+      self.timer:Hide()
     end
-    startX = math.floor(startX + 0.5)
+    self:SetScript("OnUpdate", nil)
+    return
+  end
 
-    frame:SetPoint("BOTTOMLEFT", topBarAnchor, "TOPLEFT",
-      startX + col * (size + spacingX),
-      row * (size + spacingY) + yOffset)
+  local progress = self._duration - remaining
+  if progress < 0 then progress = 0 end
 
-    col = col + 1
-    if col >= perRow then col, row = 0, row + 1 end
+  self:SetValue(progress)
+
+  if self._showTimer and self.timer then
+    self.timer:SetText(ClassHUD.FormatSeconds(remaining))
+    self.timer:Show()
+  elseif self.timer then
+    self.timer:Hide()
+  end
+end
+
+local function CreateTrackedBarFrame(buffID)
+  if trackedBarPool[buffID] then
+    return trackedBarPool[buffID]
+  end
+
+  local parent = UI.trackedContainer or UI.anchor
+  local height = ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.trackedBuffBar
+      and ClassHUD.db.profile.trackedBuffBar.height or 16
+
+  local bar = ClassHUD:CreateStatusBar(parent, height)
+  bar.buffID = buffID
+  bar.text:Hide()
+  bar.icon = bar:CreateTexture(nil, "ARTWORK")
+  bar.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  bar.icon:Hide()
+
+  bar.label = bar:CreateFontString(nil, "OVERLAY")
+  bar.label:SetFont(ClassHUD:FetchFont(12))
+  bar.label:SetJustifyH("LEFT")
+  bar.label:SetPoint("LEFT", bar, "LEFT", 4, 0)
+
+  bar.timer = bar:CreateFontString(nil, "OVERLAY")
+  bar.timer:SetFont(ClassHUD:FetchFont(12))
+  bar.timer:SetJustifyH("RIGHT")
+  bar.timer:SetPoint("RIGHT", bar, "RIGHT", -4, 0)
+  bar.timer:Hide()
+
+  bar._duration = nil
+  bar._expiration = nil
+  bar._showTimer = true
+
+  bar:SetMinMaxValues(0, 1)
+  bar:SetValue(0)
+  bar:SetScript("OnUpdate", nil)
+
+  trackedBarPool[buffID] = bar
+  return bar
+end
+
+local function LayoutTrackedContainer(barFrames, iconFrames)
+  local container = UI.trackedContainer
+  if not container then return end
+
+  local settings = ClassHUD.db.profile.trackedBuffBar or {}
+  local width    = ClassHUD.db.profile.width or 250
+  local perRow   = settings.perRow or 8
+  local spacingX = settings.spacingX or 4
+  local spacingY = settings.spacingY or 4
+  local yOffset  = settings.yOffset or 4
+  local align    = settings.align or "CENTER"
+  local barHeight = settings.height or 16
+
+  container:SetWidth(width)
+
+  local hasContent = (#barFrames > 0 or #iconFrames > 0)
+  local currentY = 0
+  local totalHeight = 0
+
+  if hasContent and yOffset > 0 then
+    currentY = yOffset
+    totalHeight = yOffset
+  end
+
+  for index, frame in ipairs(barFrames) do
+    frame:SetParent(container)
+    frame:ClearAllPoints()
+    frame:SetHeight(barHeight)
+    frame:SetWidth(width)
+    frame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -currentY)
+    frame:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, -currentY)
     frame:Show()
+
+    currentY = currentY + barHeight
+    totalHeight = currentY
+
+    if index < #barFrames then
+      currentY = currentY + spacingY
+      totalHeight = totalHeight + spacingY
+    end
+  end
+
+  if #barFrames > 0 and #iconFrames > 0 then
+    currentY = currentY + spacingY
+    totalHeight = totalHeight + spacingY
+  end
+
+  local iconStartY = currentY
+
+  if #iconFrames > 0 then
+    local size = (width - (perRow - 1) * spacingX) / math.max(perRow, 1)
+    if size < 1 then size = 1 end
+
+    local row, col = 0, 0
+    local count = #iconFrames
+    local rowsUsed = math.ceil(count / perRow)
+
+    for _, frame in ipairs(iconFrames) do
+      frame:SetParent(container)
+      frame:SetSize(size, size)
+      frame:ClearAllPoints()
+
+      local remaining = count - row * perRow
+      local rowCount = math.min(perRow, remaining)
+      local rowWidth = rowCount * size + math.max(0, rowCount - 1) * spacingX
+
+      local startX
+      if align == "LEFT" then
+        startX = 0
+      elseif align == "RIGHT" then
+        startX = width - rowWidth
+      else
+        startX = (width - rowWidth) / 2
+      end
+
+      frame:SetPoint("TOPLEFT", container, "TOPLEFT",
+        startX + col * (size + spacingX),
+        -(iconStartY + row * (size + spacingY)))
+      frame:Show()
+
+      col = col + 1
+      if col >= perRow then
+        col = 0
+        row = row + 1
+      end
+    end
+
+    local iconsHeight = rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY
+    totalHeight = math.max(totalHeight, iconStartY + iconsHeight)
+  end
+
+  if totalHeight <= 0 then
+    container:SetHeight(0)
+    container:Hide()
+  else
+    container:SetHeight(totalHeight)
+    container:Show()
   end
 end
 
@@ -285,49 +391,224 @@ local function LayoutBottomBar(frames)
   end
 end
 
-function ClassHUD:BuildTrackedBuffFrames()
-  -- skjul gamle
-  if self.trackedBuffFrames then
-    for _, f in ipairs(self.trackedBuffFrames) do f:Hide() end
+local function PopulateBuffIconFrame(frame, buffID, aura, entry)
+  frame:SetParent(UI.trackedContainer or UI.anchor)
+
+  local iconID = entry and entry.iconID
+  if not iconID then
+    local info = C_Spell.GetSpellInfo(buffID)
+    iconID = info and info.iconID
   end
-  self.trackedBuffFrames = {}
 
-  local _, class         = UnitClass("player")
-  local specID           = GetSpecializationInfo(GetSpecialization() or 0)
+  frame.icon:SetTexture(iconID or C_Spell.GetSpellTexture(buffID) or 134400)
 
-  local tracked          = self.db.profile.trackedBuffs[class]
-      and self.db.profile.trackedBuffs[class][specID]
-  if not tracked then return end
+  if aura.expirationTime and aura.duration and aura.duration > 0 then
+    CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
+  else
+    CooldownFrame_Clear(frame.cooldown)
+  end
 
-  for buffID, enabled in pairs(tracked) do
-    if enabled then
-      local aura = FindAuraForBuff(buffID)
+  local stacks = aura.applications or aura.stackCount or aura.charges
+  if stacks and stacks > 1 then
+    frame.count:SetText(stacks)
+    frame.count:Show()
+  else
+    frame.count:Hide()
+  end
+
+  frame:Show()
+end
+
+local function ConfigureTrackedBarFrame(frame, entry, config)
+  frame:SetParent(UI.trackedContainer or UI.anchor)
+
+  local color = config.barColor or ClassHUD:GetDefaultTrackedBarColor()
+  frame:SetStatusBarColor(color.r or 1, color.g or 1, color.b or 1, color.a or 1)
+
+  frame.label:SetFont(ClassHUD:FetchFont(12))
+  frame.timer:SetFont(ClassHUD:FetchFont(12))
+
+  local name = entry and entry.name
+  if not name then
+    name = C_Spell.GetSpellName(frame.buffID) or ("Spell " .. frame.buffID)
+  end
+  frame.label:SetText(name)
+
+  local iconID = entry and entry.iconID
+  if not iconID then
+    local info = C_Spell.GetSpellInfo(frame.buffID)
+    iconID = info and info.iconID
+  end
+
+  local height = ClassHUD.db.profile.trackedBuffBar.height or 16
+
+  if config.barShowIcon ~= false then
+    frame.icon:SetTexture(iconID or 134400)
+    frame.icon:SetSize(height, height)
+    frame.icon:Show()
+    frame.icon:ClearAllPoints()
+    frame.icon:SetPoint("LEFT", frame, "LEFT", 0, 0)
+    frame.label:ClearAllPoints()
+    frame.label:SetPoint("LEFT", frame.icon, "RIGHT", 4, 0)
+  else
+    frame.icon:Hide()
+    frame.label:ClearAllPoints()
+    frame.label:SetPoint("LEFT", frame, "LEFT", 4, 0)
+  end
+
+  frame._showTimer = config.barShowTimer ~= false
+end
+
+local function UpdateTrackedBarFrame(frame)
+  local buffID = frame.buffID
+  if not buffID then return end
+
+  local aura = ClassHUD:GetAuraForSpell(buffID)
+  local duration, expiration
+
+  if aura and aura.duration and aura.duration > 0 and aura.expirationTime then
+    duration = aura.duration
+    expiration = aura.expirationTime
+  else
+    local cd = C_Spell.GetSpellCooldown(buffID)
+    if cd and cd.startTime and cd.duration and cd.duration > 0 then
+      duration = cd.duration
+      expiration = cd.startTime + cd.duration
+    end
+  end
+
+  if duration and duration > 0 and expiration and expiration > 0 then
+    frame._duration = duration
+    frame._expiration = expiration
+    frame:SetMinMaxValues(0, duration)
+    local remaining = expiration - GetTime()
+    if remaining < 0 then remaining = 0 end
+    frame:SetValue(duration - remaining)
+    frame:SetScript("OnUpdate", OnTrackedBarUpdate)
+    OnTrackedBarUpdate(frame)
+  else
+    frame._duration = nil
+    frame._expiration = nil
+    frame:SetMinMaxValues(0, 1)
+    frame:SetValue(0)
+    frame:SetScript("OnUpdate", nil)
+    if frame.timer then
+      frame.timer:SetText("")
+      frame.timer:Hide()
+    end
+  end
+end
+
+function ClassHUD:BuildTrackedBuffFrames()
+  if self.trackedBuffFrames then
+    for _, frame in ipairs(self.trackedBuffFrames) do
+      frame:Hide()
+    end
+  end
+  if self.trackedBarFrames then
+    for _, frame in ipairs(self.trackedBarFrames) do
+      frame:Hide()
+      frame:SetScript("OnUpdate", nil)
+    end
+  end
+
+  wipe(self.trackedBuffFrames)
+  wipe(self.trackedBarFrames)
+
+  if not self.db.profile.show.buffs then
+    if UI.trackedContainer then
+      UI.trackedContainer:SetHeight(0)
+      UI.trackedContainer:Hide()
+    end
+    return
+  end
+
+  if not UI.trackedContainer then
+    if self.Layout then self:Layout() end
+  end
+
+  local container = UI.trackedContainer
+  if not container then return end
+
+  container:Show()
+
+  local class, specID = self:GetPlayerClassSpec()
+  if not specID or specID == 0 then return end
+
+  local tracked = self:GetProfileTable(false, "trackedBuffs", class, specID)
+  if not tracked then
+    container:SetHeight(0)
+    container:Hide()
+    return
+  end
+
+  local snapshot = self:GetSnapshotForSpec(class, specID, false)
+  local ordered = {}
+
+  for buffID, _ in pairs(tracked) do
+    local config = self:GetTrackedEntryConfig(class, specID, buffID, false)
+    if config then
+      local entry = snapshot and snapshot[buffID]
+      local order = math.huge
+      if entry and entry.categories then
+        if entry.categories.bar and entry.categories.bar.order then
+          order = math.min(order, entry.categories.bar.order)
+        end
+        if entry.categories.buff and entry.categories.buff.order then
+          order = math.min(order, entry.categories.buff.order)
+        end
+      end
+      local name = entry and entry.name or C_Spell.GetSpellName(buffID) or ("Spell " .. buffID)
+      table.insert(ordered, {
+        buffID = buffID,
+        config = config,
+        entry = entry,
+        order = order,
+        name = name,
+      })
+    end
+  end
+
+  table.sort(ordered, function(a, b)
+    if a.order == b.order then
+      return a.name < b.name
+    end
+    return a.order < b.order
+  end)
+
+  local iconFrames = {}
+  local barFrames = {}
+
+  for _, info in ipairs(ordered) do
+    local buffID = info.buffID
+    local config = info.config
+    local entry = info.entry
+
+    local hasBar = entry and entry.categories and entry.categories.bar
+    if config.showBar and not hasBar then
+      config.showBar = false
+    end
+    if config.showBar and hasBar then
+      local bar = CreateTrackedBarFrame(buffID)
+      ConfigureTrackedBarFrame(bar, entry, config)
+      UpdateTrackedBarFrame(bar)
+      table.insert(barFrames, bar)
+    end
+
+    if config.showIcon then
+      local aura = self:GetAuraForSpell(buffID)
       if aura then
-        local frame = CreateBuffFrame(buffID)
-        frame.icon:SetTexture(C_Spell.GetSpellTexture(buffID) or 134400)
-
-        if aura.expirationTime and aura.duration and aura.duration > 0 then
-          CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
-        else
-          CooldownFrame_Clear(frame.cooldown)
-        end
-
-        local stacks = aura.applications or aura.stackCount or aura.charges
-        if stacks and stacks > 1 then
-          frame.count:SetText(stacks)
-          frame.count:Show()
-        else
-          frame.count:Hide()
-        end
-
-        table.insert(self.trackedBuffFrames, frame)
+        local iconFrame = CreateBuffFrame(buffID)
+        PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
+        table.insert(iconFrames, iconFrame)
       end
     end
   end
 
-  if #self.trackedBuffFrames > 0 then
-    LayoutTrackedBuffBar(self.trackedBuffFrames)
-  end
+  self.trackedBuffFrames = iconFrames
+  self.trackedBarFrames = barFrames
+
+  LayoutTrackedContainer(barFrames, iconFrames)
 end
 
 -- ==================================================
@@ -343,8 +624,13 @@ local function UpdateSpellFrame(frame)
   -- =====================
   -- Ikon
   -- =====================
-  local s = C_Spell.GetSpellInfo(sid)
-  frame.icon:SetTexture((s and s.iconID) or 134400)
+  local entry = ClassHUD:GetSnapshotEntry(sid)
+  local iconID = entry and entry.iconID
+  if not iconID then
+    local s = C_Spell.GetSpellInfo(sid)
+    iconID = s and s.iconID
+  end
+  frame.icon:SetTexture(iconID or 134400)
 
   -- =====================
   -- Cooldown
@@ -392,10 +678,7 @@ local function UpdateSpellFrame(frame)
   end
   auraID = auraID or sid
 
-  local aura = (C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID) and C_UnitAuras.GetPlayerAuraBySpellID(auraID)
-  if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
-    aura = C_UnitAuras.GetAuraDataBySpellID("pet", auraID)
-  end
+  local aura = ClassHUD:GetAuraForSpell(auraID)
 
   if aura then
     local remain = (aura.expirationTime or 0) - GetTime()
@@ -429,10 +712,7 @@ local function UpdateSpellFrame(frame)
       if map then
         for buffID, mappedSpellID in pairs(map) do
           if mappedSpellID == frame.spellID then
-            local auraCheck = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
-            if not auraCheck and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
-              auraCheck = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
-            end
+            local auraCheck = ClassHUD:GetAuraForSpell(buffID)
             if auraCheck then
               keepGlow = true
               break
@@ -454,6 +734,7 @@ end
 -- Public API (kalles fra ClassHUD.lua events)
 -- ==================================================
 function ClassHUD:UpdateAllFrames()
+  self:RefreshSnapshotCache()
   for _, f in ipairs(activeFrames) do
     UpdateSpellFrame(f)
   end
@@ -463,8 +744,10 @@ function ClassHUD:UpdateAllFrames()
   end
 
   -- Før auto-map, håndter manuelle buffLinks fra DB
-  local _, class = UnitClass("player")
-  local specID   = GetSpecializationInfo(GetSpecialization() or 0)
+  local class, specID = self:GetPlayerClassSpec()
+  if not specID or specID == 0 then
+    return
+  end
 
   local links    = (ClassHUD.db.profile.buffLinks[class] and ClassHUD.db.profile.buffLinks[class][specID]) or {}
 
@@ -485,10 +768,7 @@ function ClassHUD:UpdateAllFrames()
   -- Glow spells basert på tracked buff matches
   if self.trackedBuffToSpell then
     for buffID, spellID in pairs(self.trackedBuffToSpell) do
-      local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
-      if not aura and UnitExists("pet") and C_UnitAuras.GetAuraDataBySpellID then
-        aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
-      end
+      local aura = self:GetAuraForSpell(buffID)
       if aura then
         local frame = self.spellFrames[spellID]
         if frame and not frame.isGlowing then
@@ -506,116 +786,127 @@ function ClassHUD:BuildFramesForSpec()
   for _, f in ipairs(activeFrames) do f:Hide() end
   wipe(activeFrames)
 
-  local enum = Enum and Enum.CooldownViewerCategory
-  if not enum then return end
+  if self.spellFrames then
+    for _, frame in pairs(self.spellFrames) do
+      frame.snapshotEntry = nil
+    end
+  end
+
+  self.trackedBuffToSpell = {}
+
+  local class, specID = self:GetPlayerClassSpec()
+  if not specID or specID == 0 then
+    return
+  end
+
+  local snapshot = self:GetSnapshotForSpec(class, specID, false)
+  if not snapshot or next(snapshot) == nil then
+    self.cdmSpells = {}
+    return
+  end
+
+  self:RefreshSnapshotCache()
 
   local built = {}
-  self.trackedBuffToSpell = {} -- reset buff → spell map
 
-  -- ============= Essential -> TOP =============
-  local topFrames = {}
-  local essentialIDs = C_CooldownViewer.GetCooldownViewerCategorySet(enum.Essential)
-  if type(essentialIDs) == "table" then
-    for _, cooldownID in ipairs(essentialIDs) do
-      local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
-      local sid = raw and (raw.spellID or raw.overrideSpellID or (raw.linkedSpellIDs and raw.linkedSpellIDs[1]))
-      if sid and not built[sid] then
-        local frame = CreateSpellFrame(sid, #activeFrames + 1)
-        frame.spellID = sid
-        frame.raw = raw
-        table.insert(activeFrames, frame)
-        table.insert(topFrames, frame)
-        built[sid] = true
-      end
+  local function acquire(spellID)
+    local frame = CreateSpellFrame(spellID)
+    frame:Show()
+    frame.snapshotEntry = snapshot[spellID]
+    if not built[spellID] then
+      table.insert(activeFrames, frame)
+      built[spellID] = true
     end
-    if #topFrames > 0 then LayoutTopBar(topFrames) end
+    return frame
   end
 
-  -- ============= Utility -> per-spell plassering =============
-  local utilLeft, utilRight, utilBottom, utilTop = {}, {}, {}, {}
-  local utilityIDs = C_CooldownViewer.GetCooldownViewerCategorySet(enum.Utility)
-  if type(utilityIDs) == "table" then
-    for _, cooldownID in ipairs(utilityIDs) do
-      local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
-      local sid = raw and (raw.spellID or raw.overrideSpellID or (raw.linkedSpellIDs and raw.linkedSpellIDs[1]))
-      if sid and not built[sid] then
-        local placement = (ClassHUD.db.profile.utilityPlacement and ClassHUD.db.profile.utilityPlacement[sid]) or
-            "HIDDEN"
-        if placement ~= "HIDDEN" then
-          local frame = CreateSpellFrame(sid, #activeFrames + 1)
-          frame.spellID = sid
-          frame.raw = raw
-          table.insert(activeFrames, frame)
-          built[sid] = true
-
-          if placement == "LEFT" then
-            table.insert(utilLeft, frame)
-          elseif placement == "RIGHT" then
-            table.insert(utilRight, frame)
-          elseif placement == "TOP" then
-            table.insert(utilTop, frame)
-          else
-            table.insert(utilBottom, frame)
-          end
-        end
+  local function collect(category)
+    local list = {}
+    self:ForEachSnapshotEntry(category, function(spellID, entry, categoryData)
+      table.insert(list, { spellID = spellID, entry = entry, data = categoryData })
+    end)
+    table.sort(list, function(a, b)
+      local ao = (a.data and a.data.order) or math.huge
+      local bo = (b.data and b.data.order) or math.huge
+      if ao == bo then
+        return (a.entry.name or "") < (b.entry.name or "")
       end
-    end
-
-    if #utilLeft > 0 then LayoutSideBar(utilLeft, "LEFT") end
-    if #utilRight > 0 then LayoutSideBar(utilRight, "RIGHT") end
-    if #utilBottom > 0 then LayoutBottomBar(utilBottom) end
-    if #utilTop > 0 then LayoutTopBar(utilTop) end
+      return ao < bo
+    end)
+    return list
   end
 
-  -- ============= Auto-map tracked buffs til spells via description =============
-  local _, class                           = UnitClass("player")
-  local specID                             = GetSpecializationInfo(GetSpecialization() or 0)
+  local placements = self.db.profile.utilityPlacement or {}
 
-  -- sørg for at trestrukturen finnes
-  self.db.profile.buffLinks                = self.db.profile.buffLinks or {}
-  self.db.profile.buffLinks[class]         = self.db.profile.buffLinks[class] or {}
+  local topFrames, bottomFrames = {}, {}
+  local sideFrames = { LEFT = {}, RIGHT = {} }
+
+  local function placeSpell(spellID, defaultPlacement)
+    if built[spellID] then return end
+
+    local placement = placements[spellID] or defaultPlacement or "TOP"
+    if placement == "HIDDEN" then
+      built[spellID] = true
+      return
+    end
+
+    local frame = acquire(spellID)
+    if placement == "TOP" then
+      table.insert(topFrames, frame)
+    elseif placement == "BOTTOM" then
+      table.insert(bottomFrames, frame)
+    elseif placement == "LEFT" or placement == "RIGHT" then
+      table.insert(sideFrames[placement], frame)
+    else
+      table.insert(topFrames, frame)
+    end
+  end
+
+  for _, item in ipairs(collect("essential")) do
+    placeSpell(item.spellID, "TOP")
+  end
+
+  for _, item in ipairs(collect("utility")) do
+    placeSpell(item.spellID, "HIDDEN")
+  end
+
+  for _, item in ipairs(collect("bar")) do
+    placeSpell(item.spellID, "BOTTOM")
+  end
+
+  if #topFrames > 0 then LayoutTopBar(topFrames) end
+  if #bottomFrames > 0 then LayoutBottomBar(bottomFrames) end
+  if #sideFrames.LEFT > 0 then LayoutSideBar(sideFrames.LEFT, "LEFT") end
+  if #sideFrames.RIGHT > 0 then LayoutSideBar(sideFrames.RIGHT, "RIGHT") end
+
+  -- Auto-map tracked buffs to spells using snapshot descriptions
+  self.db.profile.buffLinks = self.db.profile.buffLinks or {}
+  self.db.profile.buffLinks[class] = self.db.profile.buffLinks[class] or {}
   self.db.profile.buffLinks[class][specID] = self.db.profile.buffLinks[class][specID] or {}
 
-  -- hent snapshot (lagres i UpdateCDMSnapshot)
-  local snapshot                           = self.db.profile.cdmSnapshot
-      and self.db.profile.cdmSnapshot[class]
-      and self.db.profile.cdmSnapshot[class][specID]
-
-  if snapshot then
-    for buffID, data in pairs(snapshot) do
-      if data.category == "buff" and data.spellID then
-        local desc = data.desc or C_Spell.GetSpellDescription(buffID)
-        if desc and self.spellFrames then
-          for spellID, frame in pairs(self.spellFrames) do
+  for buffID, entry in pairs(snapshot) do
+    if entry.categories and entry.categories.buff then
+      local desc = entry.desc or C_Spell.GetSpellDescription(buffID)
+      if desc then
+        for spellID, frame in pairs(self.spellFrames) do
+          if frame and frame.snapshotEntry then
             local spellName = C_Spell.GetSpellName(spellID)
             if spellName and string.find(desc, spellName, 1, true) then
-              -- runtime mapping
-              -- bruk snapshot buffLinks om de finnes
-              local snapshot = self.db.profile.cdmSnapshot[class] and self.db.profile.cdmSnapshot[class][specID]
-              if snapshot and snapshot.buffLinks and snapshot.buffLinks[buffID] then
-                self.trackedBuffToSpell[buffID] = snapshot.buffLinks[buffID]
-              end
+              self.trackedBuffToSpell[buffID] = spellID
 
-
-              -- persist mapping (class+spec-scopet)
               local links = self.db.profile.buffLinks[class][specID]
               if not links[buffID] then
                 links[buffID] = spellID
-                print(
-                  "|cff00ff88ClassHUD|r Lagret auto-link:",
-                  buffID, "(", C_Spell.GetSpellName(buffID) or "?", ") →",
-                  spellID, "(", spellName, ")"
-                )
+                print(string.format("|cff00ff88ClassHUD|r Lagret auto-link: %d → %d (%s)",
+                  buffID, spellID, spellName))
               end
-
-              break -- stopper ved første match
+              break
             end
           end
         end
       end
     end
   end
-
 
   self:UpdateAllFrames()
 end

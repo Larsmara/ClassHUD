@@ -115,11 +115,6 @@ local defaults = {
       power    = 14,
     },
 
-    icons            = {
-      perRow  = 8,
-      spacing = 4,
-    },
-
     sideBars         = {
       size    = 36,
       spacing = 4,
@@ -145,17 +140,12 @@ local defaults = {
       spacingY = 4,
       yOffset  = 4,              -- litt luft over TopBar
       align    = "CENTER",       -- "LEFT" | "CENTER" | "RIGHT"
+      height  = 16,
     },
 
     -- =========================
     -- Spell & Buff persistence
     -- =========================
-
-    -- Brukerdefinerte tracked spells per bar
-    topBarSpells     = {},
-    leftBarSpells    = {},
-    rightBarSpells   = {},
-    bottomBarSpells  = {},
 
     -- Utility placement per spellID
     utilityPlacement = {
@@ -248,28 +238,33 @@ function ClassHUD:FullUpdate()
   if self.UpdateSpecialPower then self:UpdateSpecialPower() end
 end
 
--- ==================================================
--- CDM Snapshot Updater
--- ==================================================
+---Rebuilds the Cooldown Viewer snapshot for the current class/spec.
+---The snapshot is the authoritative data source for layout, options and UI.
 function ClassHUD:UpdateCDMSnapshot()
-  if not C_CooldownViewer or not C_CooldownViewer.IsCooldownViewerAvailable
-      or not C_CooldownViewer.IsCooldownViewerAvailable() then
-    return
+  if not self:IsCooldownViewerAvailable() then return false end
+
+  local class, specID = self:GetPlayerClassSpec()
+  if not specID or specID == 0 then
+    -- The specialization API can return 0 while logging in. Delay until it is ready.
+    return false
   end
 
-  local _, class                             = UnitClass("player")
-  local specID                               = GetSpecializationInfo(GetSpecialization() or 0)
+  self._lastSpecID = specID
 
-  self.db.profile.cdmSnapshot                = self.db.profile.cdmSnapshot or {}
-  self.db.profile.cdmSnapshot[class]         = self.db.profile.cdmSnapshot[class] or {}
-  self.db.profile.cdmSnapshot[class][specID] = self.db.profile.cdmSnapshot[class][specID] or {}
+  local snapshot = self:GetSnapshotForSpec(class, specID, true)
+  if not snapshot then return false end
 
-  local categories                           = {
+  for key in pairs(snapshot) do snapshot[key] = nil end
+
+  local categories = {
     [Enum.CooldownViewerCategory.Essential]   = "essential",
     [Enum.CooldownViewerCategory.Utility]     = "utility",
     [Enum.CooldownViewerCategory.TrackedBuff] = "buff",
     [Enum.CooldownViewerCategory.TrackedBar]  = "bar",
   }
+
+  local orderByCategory = {}
+  local updatedCount = 0
 
   for cat, catName in pairs(categories) do
     local ids = C_CooldownViewer.GetCooldownViewerCategorySet(cat)
@@ -279,21 +274,47 @@ function ClassHUD:UpdateCDMSnapshot()
         local sid = raw and (raw.spellID or raw.overrideSpellID or (raw.linkedSpellIDs and raw.linkedSpellIDs[1]))
         if sid then
           local info = C_Spell.GetSpellInfo(sid)
-          if info then
-            self.db.profile.cdmSnapshot[class][specID][sid] = {
-              spellID  = sid,
-              name     = info.name,
-              iconID   = info.iconID,
-              desc     = C_Spell.GetSpellDescription(sid),
-              category = catName,
+          local desc = C_Spell.GetSpellDescription(sid)
+
+          local entry = snapshot[sid]
+          if not entry then
+            entry = {
+              spellID     = sid,
+              name        = info and info.name or ("Spell " .. sid),
+              iconID      = info and info.iconID,
+              desc        = desc,
+              categories  = {},
+              category    = catName,
+              lastUpdated = GetServerTime and GetServerTime() or time(),
             }
+            snapshot[sid] = entry
+            updatedCount = updatedCount + 1
+          else
+            entry.name        = info and info.name or entry.name
+            entry.iconID      = info and info.iconID or entry.iconID
+            entry.desc        = desc or entry.desc
+            entry.category    = entry.category or catName
+            entry.lastUpdated = GetServerTime and GetServerTime() or time()
           end
+
+          orderByCategory[catName] = (orderByCategory[catName] or 0) + 1
+          entry.categories[catName] = {
+            cooldownID      = cooldownID,
+            overrideSpellID = raw.overrideSpellID,
+            linkedSpellIDs  = raw.linkedSpellIDs and { table.unpack(raw.linkedSpellIDs) } or nil,
+            hasAura         = raw.hasAura,
+            order           = orderByCategory[catName],
+          }
         end
       end
     end
   end
 
-  print("|cff00ff88ClassHUD|r CDM snapshot oppdatert for", class, specID)
+  if updatedCount > 0 then
+    print(string.format("|cff00ff88ClassHUD|r Cooldown snapshot updated for %s spec %d", class, specID))
+  end
+
+  return true
 end
 
 -- ===== Options bootstrap (registers with AceConfigRegistry directly) =====
@@ -301,7 +322,6 @@ function ClassHUD:RegisterOptions()
   local ACR = LibStub("AceConfigRegistry-3.0", true)
   local ACD = LibStub("AceConfigDialog-3.0", true)
   if not (ACR and ACD) then
-    print("|cff00ff88ClassHUD|r: AceConfig libs missing.")
     return false
   end
 
@@ -311,21 +331,13 @@ function ClassHUD:RegisterOptions()
 
   if type(builder) == "function" then
     local ok, res = pcall(builder, self)
-    if not ok then
-      print("|cff00ff88ClassHUD|r: BuildOptions error:", res)
-    else
+    if ok then
       opts = res
     end
   end
 
   -- If still missing, warn ONCE and install a tiny fallback so /chud works
   if not opts then
-    if not self._opts_missing_warned then
-      self._opts_missing_warned = true
-      print("|cff00ff88ClassHUD|r: ClassHUD_BuildOptions is missing. Using fallback options panel.")
-      print(
-        "|cff00ff88ClassHUD|r: Make sure ClassHUD_Options.lua is in the TOC, loads, and defines *global* function ClassHUD_BuildOptions(addon).")
-    end
     opts = {
       type = "group",
       name = "ClassHUD (fallback)",
@@ -348,11 +360,28 @@ function ClassHUD:RegisterOptions()
   return true
 end
 
+function ClassHUD:RefreshRegisteredOptions()
+  local builder = _G.ClassHUD_BuildOptions
+  if type(builder) ~= "function" then return end
+
+  local ok, opts = pcall(builder, self)
+  if not ok or not opts then return end
+
+  self._opts = opts
+
+  if self._opts_registered then
+    local ACR = LibStub("AceConfigRegistry-3.0", true)
+    if ACR then
+      ACR:RegisterOptionsTable("ClassHUD", opts)
+      ACR:NotifyChange("ClassHUD")
+    end
+  end
+end
+
 function ClassHUD:OpenOptions()
   local ACR = LibStub("AceConfigRegistry-3.0", true)
   local ACD = LibStub("AceConfigDialog-3.0", true)
   if not (ACR and ACD) then
-    print("|cff00ff88ClassHUD|r: AceConfig libs missing.")
     return
   end
   if not ACR:GetOptionsTable("ClassHUD") then
@@ -414,27 +443,19 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   if event == "PLAYER_ENTERING_WORLD" then
     ClassHUD:FullUpdate()
     ClassHUD:ApplyAnchorPosition()
-    ClassHUD:UpdateCDMSnapshot()
+    local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
     return
   end
 
   -- Spec change
   if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
+    ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
-    ClassHUD:UpdateCDMSnapshot()
-    if ClassHUD._opts then
-      local builder = _G.ClassHUD_BuildOptions
-      if builder then
-        local ok, opts = pcall(builder, ClassHUD)
-        if ok and opts then
-          ClassHUD._opts = opts
-          LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
-        end
-      end
-    end
+    ClassHUD:RefreshRegisteredOptions()
     return
   end
 
@@ -538,25 +559,17 @@ SlashCmdList.CHUDLISTBUFFS = function()
     return
   end
 
-  local buffIDs = C_CooldownViewer.GetCooldownViewerCategorySet(enum.TrackedBuff)
-  if type(buffIDs) ~= "table" or #buffIDs == 0 then
-    print("|cff00ff88ClassHUD|r Ingen tracked buffs rapportert fra CDM.")
+  local class, specID = ClassHUD:GetPlayerClassSpec()
+  local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
+  if not snapshot then
+    print("|cff00ff88ClassHUD|r Ingen snapshot tilgjengelig. Bruk /classhudreset eller relogg.")
     return
   end
 
-  print("|cff00ff88ClassHUD|r Liste over Tracked Buffs fra CDM:")
-  for _, cooldownID in ipairs(buffIDs) do
-    local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
-    if raw then
-      local sid = raw.spellID or raw.overrideSpellID
-      local name = sid and C_Spell.GetSpellName(sid) or "Unknown"
-      print(string.format("  SpellID=%d, Name=%s, hasAura=%s, override=%s, linked=%s",
-        sid or 0,
-        name,
-        tostring(raw.hasAura),
-        tostring(raw.overrideSpellID),
-        raw.linkedSpellIDs and table.concat(raw.linkedSpellIDs, ", ") or "nil"
-      ))
+  print("|cff00ff88ClassHUD|r Liste over Tracked Buffs fra snapshot:")
+  for spellID, data in pairs(snapshot) do
+    if data.categories and data.categories.buff then
+      print(string.format("  SpellID=%d, Name=%s", spellID, data.name or "Unknown"))
     end
   end
 end
@@ -572,20 +585,18 @@ SlashCmdList.CHUDBUFFDESC = function()
     return
   end
 
-  local buffIDs = C_CooldownViewer.GetCooldownViewerCategorySet(enum.TrackedBuff)
-  if type(buffIDs) ~= "table" or #buffIDs == 0 then
-    print("|cff00ff88ClassHUD|r Ingen tracked buffs rapportert fra CDM.")
+  local class, specID = ClassHUD:GetPlayerClassSpec()
+  local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
+  if not snapshot then
+    print("|cff00ff88ClassHUD|r Ingen snapshot tilgjengelig.")
     return
   end
 
   print("|cff00ff88ClassHUD|r Tracked Buff descriptions:")
-  for _, cooldownID in ipairs(buffIDs) do
-    local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
-    if raw then
-      local sid = raw.spellID or raw.overrideSpellID
-      local name = sid and C_Spell.GetSpellName(sid) or "Unknown"
-      local desc = sid and C_Spell.GetSpellDescription(sid) or "No description"
-      print(string.format("  [%d] %s → %s", sid or 0, name, desc:gsub("\n", " ")))
+  for spellID, entry in pairs(snapshot) do
+    if entry.categories and entry.categories.buff then
+      local desc = entry.desc or C_Spell.GetSpellDescription(spellID) or "No description"
+      print(string.format("  [%d] %s → %s", spellID, entry.name or "Unknown", desc:gsub("\n", " ")))
     end
   end
 end
@@ -611,14 +622,11 @@ end
 -- ==================================================
 SLASH_CHUDTRACKED1 = "/chudtracked"
 SlashCmdList.CHUDTRACKED = function()
-  local _, class = UnitClass("player")
-  local specID   = GetSpecializationInfo(GetSpecialization() or 0)
+  local class, specID = ClassHUD:GetPlayerClassSpec()
 
   print("|cff00ff88ClassHUD|r Debug: Tracked Buffs for", class, specID)
 
-  local snapshot = ClassHUD.db.profile.cdmSnapshot
-      and ClassHUD.db.profile.cdmSnapshot[class]
-      and ClassHUD.db.profile.cdmSnapshot[class][specID]
+  local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
 
   local tracked = ClassHUD.db.profile.trackedBuffs
       and ClassHUD.db.profile.trackedBuffs[class]
@@ -630,16 +638,25 @@ SlashCmdList.CHUDTRACKED = function()
   end
 
   for buffID, data in pairs(snapshot) do
-    if data.category == "buff" then
+    if data.categories and data.categories.buff then
       local name = data.name or ("Buff " .. buffID)
       local active = false
-      local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
-      if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
-        aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
-      end
+      local aura = ClassHUD:GetAuraForSpell(buffID)
       if aura then active = true end
 
-      local enabled = tracked and tracked[buffID] and "|cff00ff00ON|r" or "|cffff0000OFF|r"
+      local config = tracked and ClassHUD.GetTrackedEntryConfig
+          and ClassHUD:GetTrackedEntryConfig(class, specID, buffID, false)
+
+      local enabled
+      if config and (config.showIcon or config.showBar) then
+        local modes = {}
+        if config.showIcon then table.insert(modes, "icon") end
+        if config.showBar then table.insert(modes, "bar") end
+        enabled = string.format("|cff00ff00ON (%s)|r", table.concat(modes, ", "))
+      else
+        enabled = "|cffff0000OFF|r"
+      end
+
       local status  = active and "|cff00ff00ACTIVE|r" or "inactive"
 
       print(string.format("  [%d] %s → tracked=%s, %s",
