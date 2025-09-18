@@ -15,6 +15,11 @@ local PLACEMENTS = {
   RIGHT = "Right Side",
 }
 
+local optionsState = {
+  newLinkBuffID = "",
+  newLinkSpellID = "",
+}
+
 local function NotifyOptionsChanged()
   if ACR then ACR:NotifyChange("ClassHUD") end
 end
@@ -37,45 +42,73 @@ local function SortEntries(snapshot, category)
   return list
 end
 
-local function BuildUtilityArgs(addon)
-  local args = {}
+local function BuildPlacementArgs(addon, container, category, defaultPlacement, emptyText)
+  for k in pairs(container) do container[k] = nil end
+
+  addon.db.profile.utilityPlacement = addon.db.profile.utilityPlacement or {}
+  local placements = addon.db.profile.utilityPlacement
   local snapshot = addon:GetSnapshotForSpec(nil, nil, false)
-  local list = SortEntries(snapshot, "utility")
-
-  if #list == 0 then
-    args.empty = {
-      type = "description",
-      name = "No utility cooldowns reported by the snapshot for this spec.",
-      order = 1,
-    }
-    return args
-  end
-
+  local list = SortEntries(snapshot, category)
   local order = 1
-  for _, item in ipairs(list) do
-    local spellID = item.spellID
-    local info = item.entry
-    local icon = info.iconID and ("|T" .. info.iconID .. ":16|t ") or ""
-    local name = icon .. (info.name or ("Spell " .. spellID)) .. " (" .. spellID .. ")"
+  local added = {}
 
-    args["spell" .. spellID] = {
+  local function addOption(spellID, entry)
+    added[spellID] = true
+
+    local iconID = entry and entry.iconID
+    local name = entry and entry.name
+
+    if not name then
+      local info = C_Spell.GetSpellInfo(spellID)
+      iconID = iconID or (info and info.iconID)
+      name = info and info.name or ("Spell " .. spellID)
+    end
+
+    local icon = iconID and ("|T" .. iconID .. ":16|t ") or ""
+
+    container["spell" .. spellID] = {
       type = "select",
-      name = name,
+      name = icon .. name .. " (" .. spellID .. ")",
       order = order,
       values = PLACEMENTS,
       get = function()
-        return addon.db.profile.utilityPlacement[spellID] or "HIDDEN"
+        return placements[spellID] or defaultPlacement
       end,
       set = function(_, value)
-        addon.db.profile.utilityPlacement[spellID] = value
+        if value == defaultPlacement then
+          placements[spellID] = nil
+        else
+          placements[spellID] = value
+        end
         addon:BuildFramesForSpec()
+        BuildPlacementArgs(addon, container, category, defaultPlacement, emptyText)
+        NotifyOptionsChanged()
       end,
     }
 
     order = order + 1
   end
 
-  return args
+  for _, item in ipairs(list) do
+    addOption(item.spellID, item.entry)
+  end
+
+  if category == "essential" then
+    for spellID, placement in pairs(placements) do
+      if placement == "TOP" and not added[spellID] then
+        local entry = snapshot and snapshot[spellID]
+        addOption(spellID, entry)
+      end
+    end
+  end
+
+  if order == 1 then
+    container.empty = {
+      type = "description",
+      name = emptyText or "No entries available for this category.",
+      order = order,
+    }
+  end
 end
 
 local function BuildTrackedBuffArgs(addon, container)
@@ -174,16 +207,36 @@ local function BuildBuffLinkArgs(addon, container)
       inline = true,
       order = order,
       args = {
+        buff = {
+          type = "input",
+          name = "Buff ID",
+          width = "half",
+          order = 1,
+          get = function() return tostring(map.buffID) end,
+          set = function(_, value)
+            local newID = tonumber(value)
+            if newID and newID ~= map.buffID then
+              local current = addon.db.profile.buffLinks[class][specID][map.buffID]
+              addon.db.profile.buffLinks[class][specID][map.buffID] = nil
+              addon.db.profile.buffLinks[class][specID][newID] = current
+              addon:BuildFramesForSpec()
+              BuildBuffLinkArgs(addon, container)
+              NotifyOptionsChanged()
+            end
+          end,
+        },
         spell = {
           type = "input",
           name = "Spell ID",
           width = "half",
+          order = 2,
           get = function() return tostring(map.spellID) end,
           set = function(_, value)
             local newID = tonumber(value)
             if newID then
               addon.db.profile.buffLinks[class][specID][map.buffID] = newID
               addon:BuildFramesForSpec()
+              BuildBuffLinkArgs(addon, container)
               NotifyOptionsChanged()
             end
           end,
@@ -192,6 +245,7 @@ local function BuildBuffLinkArgs(addon, container)
           type = "execute",
           name = "Remove",
           confirm = true,
+          order = 3,
           func = function()
             addon.db.profile.buffLinks[class][specID][map.buffID] = nil
             addon:BuildFramesForSpec()
@@ -218,10 +272,30 @@ function ClassHUD_BuildOptions(addon)
     resource = { r = 0.00, g = 0.55, b = 1.00 },
     power = { r = 1.00, g = 0.85, b = 0.10 },
   }
+  db.profile.position = db.profile.position or { x = 0, y = -50 }
+  db.profile.position.x = db.profile.position.x or 0
+  db.profile.position.y = db.profile.position.y or -50
+  db.profile.topBar = db.profile.topBar or {}
+  db.profile.topBar.perRow = db.profile.topBar.perRow or 8
+  db.profile.topBar.spacingX = db.profile.topBar.spacingX or 4
+  db.profile.topBar.spacingY = db.profile.topBar.spacingY or 4
+  db.profile.topBar.yOffset = db.profile.topBar.yOffset or 0
+  db.profile.topBar.grow = db.profile.topBar.grow or "UP"
+  db.profile.bottomBar = db.profile.bottomBar or {}
+  db.profile.bottomBar.perRow = db.profile.bottomBar.perRow or 8
+  db.profile.bottomBar.spacingX = db.profile.bottomBar.spacingX or 4
+  db.profile.bottomBar.spacingY = db.profile.bottomBar.spacingY or 4
+  db.profile.bottomBar.yOffset = db.profile.bottomBar.yOffset or 0
+  db.profile.sideBars = db.profile.sideBars or {}
+  db.profile.sideBars.size = db.profile.sideBars.size or 36
+  db.profile.sideBars.spacing = db.profile.sideBars.spacing or 4
+  db.profile.sideBars.offset = db.profile.sideBars.offset or 6
   db.profile.utilityPlacement = db.profile.utilityPlacement or {}
   db.profile.trackedBuffs = db.profile.trackedBuffs or {}
   db.profile.buffLinks = db.profile.buffLinks or {}
 
+  local topBarContainer = {}
+  local utilityContainer = {}
   local trackedContainer = {}
   local linkContainer = {}
 
@@ -258,13 +332,39 @@ function ClassHUD_BuildOptions(addon)
               addon:BuildFramesForSpec()
             end,
           },
+          positionX = {
+            type = "range",
+            name = "Position X",
+            order = 3,
+            min = -1000,
+            max = 1000,
+            step = 1,
+            get = function() return db.profile.position.x or 0 end,
+            set = function(_, value)
+              db.profile.position.x = value
+              addon:ApplyAnchorPosition()
+            end,
+          },
+          positionY = {
+            type = "range",
+            name = "Position Y",
+            order = 4,
+            min = -1000,
+            max = 1000,
+            step = 1,
+            get = function() return db.profile.position.y or 0 end,
+            set = function(_, value)
+              db.profile.position.y = value
+              addon:ApplyAnchorPosition()
+            end,
+          },
           spacing = {
             type = "range",
             name = "Bar Spacing",
             min = 0,
             max = 12,
             step = 1,
-            order = 3,
+            order = 5,
             get = function() return db.profile.spacing or 2 end,
             set = function(_, value)
               db.profile.spacing = value
@@ -276,7 +376,7 @@ function ClassHUD_BuildOptions(addon)
             type = "select",
             name = "Bar Texture",
             dialogControl = "LSM30_Statusbar",
-            order = 4,
+            order = 6,
             values = LSM and LSM:HashTable("statusbar") or {},
             get = function() return db.profile.textures.bar end,
             set = function(_, value)
@@ -288,7 +388,7 @@ function ClassHUD_BuildOptions(addon)
             type = "select",
             name = "Font",
             dialogControl = "LSM30_Font",
-            order = 5,
+            order = 7,
             values = LSM and LSM:HashTable("font") or {},
             get = function() return db.profile.textures.font end,
             set = function(_, value)
@@ -420,6 +520,173 @@ function ClassHUD_BuildOptions(addon)
               addon:FullUpdate()
             end,
           },
+          topLayout = {
+            type = "group",
+            name = "Top Bar Layout",
+            order = 20,
+            inline = true,
+            args = {
+              perRow = {
+                type = "range",
+                name = "Spells per Row",
+                order = 1,
+                min = 1,
+                max = 12,
+                step = 1,
+                get = function() return db.profile.topBar.perRow end,
+                set = function(_, value)
+                  db.profile.topBar.perRow = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+              spacingX = {
+                type = "range",
+                name = "Horizontal Spacing",
+                order = 2,
+                min = 0,
+                max = 20,
+                step = 1,
+                get = function() return db.profile.topBar.spacingX end,
+                set = function(_, value)
+                  db.profile.topBar.spacingX = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+              spacingY = {
+                type = "range",
+                name = "Vertical Spacing",
+                order = 3,
+                min = 0,
+                max = 20,
+                step = 1,
+                get = function() return db.profile.topBar.spacingY end,
+                set = function(_, value)
+                  db.profile.topBar.spacingY = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+              yOffset = {
+                type = "range",
+                name = "Vertical Offset",
+                order = 4,
+                min = -100,
+                max = 100,
+                step = 1,
+                get = function() return db.profile.topBar.yOffset end,
+                set = function(_, value)
+                  db.profile.topBar.yOffset = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+            },
+          },
+          bottomLayout = {
+            type = "group",
+            name = "Bottom Bar Layout",
+            order = 21,
+            inline = true,
+            args = {
+              perRow = {
+                type = "range",
+                name = "Spells per Row",
+                order = 1,
+                min = 1,
+                max = 12,
+                step = 1,
+                get = function() return db.profile.bottomBar.perRow end,
+                set = function(_, value)
+                  db.profile.bottomBar.perRow = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+              spacingX = {
+                type = "range",
+                name = "Horizontal Spacing",
+                order = 2,
+                min = 0,
+                max = 20,
+                step = 1,
+                get = function() return db.profile.bottomBar.spacingX end,
+                set = function(_, value)
+                  db.profile.bottomBar.spacingX = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+              spacingY = {
+                type = "range",
+                name = "Vertical Spacing",
+                order = 3,
+                min = 0,
+                max = 20,
+                step = 1,
+                get = function() return db.profile.bottomBar.spacingY end,
+                set = function(_, value)
+                  db.profile.bottomBar.spacingY = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+              yOffset = {
+                type = "range",
+                name = "Vertical Offset",
+                order = 4,
+                min = -100,
+                max = 100,
+                step = 1,
+                get = function() return db.profile.bottomBar.yOffset end,
+                set = function(_, value)
+                  db.profile.bottomBar.yOffset = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+            },
+          },
+          sideLayout = {
+            type = "group",
+            name = "Side Bars",
+            order = 22,
+            inline = true,
+            args = {
+              size = {
+                type = "range",
+                name = "Icon Size",
+                order = 1,
+                min = 24,
+                max = 80,
+                step = 1,
+                get = function() return db.profile.sideBars.size end,
+                set = function(_, value)
+                  db.profile.sideBars.size = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+              spacing = {
+                type = "range",
+                name = "Spacing",
+                order = 2,
+                min = 0,
+                max = 20,
+                step = 1,
+                get = function() return db.profile.sideBars.spacing end,
+                set = function(_, value)
+                  db.profile.sideBars.spacing = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+              offset = {
+                type = "range",
+                name = "Offset",
+                order = 3,
+                min = -200,
+                max = 200,
+                step = 1,
+                get = function() return db.profile.sideBars.offset end,
+                set = function(_, value)
+                  db.profile.sideBars.offset = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+            },
+          },
         },
       },
       colors = {
@@ -484,27 +751,87 @@ function ClassHUD_BuildOptions(addon)
         name = "Spells & Buffs",
         order = 4,
         args = {
+          topBar = {
+            type = "group",
+            name = "Top Bar Spells",
+            order = 1,
+            args = {
+              description = {
+                type = "description",
+                name = "Assign essential abilities to HUD positions.",
+                order = 1,
+              },
+              addSpell = {
+                type = "input",
+                name = "Add Spell ID",
+                order = 2,
+                width = "half",
+                get = function() return "" end,
+                set = function(_, value)
+                  local spellID = tonumber(value)
+                  if not spellID then return end
+                  addon.db.profile.utilityPlacement[spellID] = "TOP"
+                  addon:BuildFramesForSpec()
+                  BuildPlacementArgs(addon, topBarContainer, "essential", "TOP", "No essential spells reported for this spec.")
+                  NotifyOptionsChanged()
+                end,
+              },
+              list = {
+                type = "group",
+                name = "Assignments",
+                inline = true,
+                order = 3,
+                args = topBarContainer,
+              },
+            },
+          },
           utility = {
             type = "group",
             name = "Utility Placement",
-            order = 1,
-            args = BuildUtilityArgs(addon),
+            order = 2,
+            args = {
+              list = {
+                type = "group",
+                name = "Spells",
+                inline = true,
+                order = 1,
+                args = utilityContainer,
+              },
+            },
           },
           trackedBuffs = {
             type = "group",
             name = "Tracked Buffs",
-            order = 2,
+            order = 3,
             args = {
               description = {
                 type = "description",
                 name = "Toggle the buffs that should appear in the tracked buff bar above your spells.",
                 order = 1,
               },
+              addBuff = {
+                type = "input",
+                name = "Add Buff ID",
+                order = 2,
+                width = "half",
+                get = function() return "" end,
+                set = function(_, value)
+                  local buffID = tonumber(value)
+                  if not buffID then return end
+                  local class, specID = addon:GetPlayerClassSpec()
+                  addon.db.profile.trackedBuffs[class] = addon.db.profile.trackedBuffs[class] or {}
+                  addon.db.profile.trackedBuffs[class][specID] = addon.db.profile.trackedBuffs[class][specID] or {}
+                  addon.db.profile.trackedBuffs[class][specID][buffID] = true
+                  addon:BuildTrackedBuffFrames()
+                  BuildTrackedBuffArgs(addon, trackedContainer)
+                  NotifyOptionsChanged()
+                end,
+              },
               list = {
                 type = "group",
                 name = "Buffs",
                 inline = true,
-                order = 2,
+                order = 3,
                 args = trackedContainer,
               },
             },
@@ -512,7 +839,7 @@ function ClassHUD_BuildOptions(addon)
           buffLinks = {
             type = "group",
             name = "Buff Links",
-            order = 3,
+            order = 4,
             args = {
               description = {
                 type = "description",
@@ -525,6 +852,53 @@ function ClassHUD_BuildOptions(addon)
                 inline = true,
                 order = 2,
                 args = linkContainer,
+              },
+              add = {
+                type = "group",
+                name = "Add New Link",
+                inline = true,
+                order = 3,
+                args = {
+                  buffID = {
+                    type = "input",
+                    name = "Buff ID",
+                    order = 1,
+                    width = "half",
+                    get = function() return optionsState.newLinkBuffID end,
+                    set = function(_, value)
+                      optionsState.newLinkBuffID = value or ""
+                    end,
+                  },
+                  spellID = {
+                    type = "input",
+                    name = "Spell ID",
+                    order = 2,
+                    width = "half",
+                    get = function() return optionsState.newLinkSpellID end,
+                    set = function(_, value)
+                      optionsState.newLinkSpellID = value or ""
+                    end,
+                  },
+                  addButton = {
+                    type = "execute",
+                    name = "Add Link",
+                    order = 3,
+                    func = function()
+                      local buffID = tonumber(optionsState.newLinkBuffID)
+                      local spellID = tonumber(optionsState.newLinkSpellID)
+                      if not (buffID and spellID) then return end
+                      local class, specID = addon:GetPlayerClassSpec()
+                      addon.db.profile.buffLinks[class] = addon.db.profile.buffLinks[class] or {}
+                      addon.db.profile.buffLinks[class][specID] = addon.db.profile.buffLinks[class][specID] or {}
+                      addon.db.profile.buffLinks[class][specID][buffID] = spellID
+                      addon:BuildFramesForSpec()
+                      BuildBuffLinkArgs(addon, linkContainer)
+                      optionsState.newLinkBuffID = ""
+                      optionsState.newLinkSpellID = ""
+                      NotifyOptionsChanged()
+                    end,
+                  },
+                },
               },
             },
           },
@@ -542,6 +916,8 @@ function ClassHUD_BuildOptions(addon)
             func = function()
               addon:UpdateCDMSnapshot()
               addon:BuildFramesForSpec()
+              BuildPlacementArgs(addon, topBarContainer, "essential", "TOP", "No essential spells reported for this spec.")
+              BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN", "No utility cooldowns reported by the snapshot for this spec.")
               BuildTrackedBuffArgs(addon, trackedContainer)
               BuildBuffLinkArgs(addon, linkContainer)
               NotifyOptionsChanged()
@@ -557,6 +933,8 @@ function ClassHUD_BuildOptions(addon)
     },
   }
 
+  BuildPlacementArgs(addon, topBarContainer, "essential", "TOP", "No essential spells reported for this spec.")
+  BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN", "No utility cooldowns reported by the snapshot for this spec.")
   BuildTrackedBuffArgs(addon, trackedContainer)
   BuildBuffLinkArgs(addon, linkContainer)
 
@@ -564,9 +942,11 @@ function ClassHUD_BuildOptions(addon)
 end
 
 function ClassHUD:GetUtilityOptions()
+  local container = {}
+  BuildPlacementArgs(self, container, "utility", "HIDDEN", "No utility cooldowns reported by the snapshot for this spec.")
   return {
     type = "group",
     name = "Utility Cooldowns",
-    args = BuildUtilityArgs(self),
+    args = container,
   }
 end

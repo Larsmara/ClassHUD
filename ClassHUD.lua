@@ -321,7 +321,6 @@ function ClassHUD:RegisterOptions()
   local ACR = LibStub("AceConfigRegistry-3.0", true)
   local ACD = LibStub("AceConfigDialog-3.0", true)
   if not (ACR and ACD) then
-    print("|cff00ff88ClassHUD|r: AceConfig libs missing.")
     return false
   end
 
@@ -331,21 +330,13 @@ function ClassHUD:RegisterOptions()
 
   if type(builder) == "function" then
     local ok, res = pcall(builder, self)
-    if not ok then
-      print("|cff00ff88ClassHUD|r: BuildOptions error:", res)
-    else
+    if ok then
       opts = res
     end
   end
 
   -- If still missing, warn ONCE and install a tiny fallback so /chud works
   if not opts then
-    if not self._opts_missing_warned then
-      self._opts_missing_warned = true
-      print("|cff00ff88ClassHUD|r: ClassHUD_BuildOptions is missing. Using fallback options panel.")
-      print(
-        "|cff00ff88ClassHUD|r: Make sure ClassHUD_Options.lua is in the TOC, loads, and defines *global* function ClassHUD_BuildOptions(addon).")
-    end
     opts = {
       type = "group",
       name = "ClassHUD (fallback)",
@@ -390,7 +381,6 @@ function ClassHUD:OpenOptions()
   local ACR = LibStub("AceConfigRegistry-3.0", true)
   local ACD = LibStub("AceConfigDialog-3.0", true)
   if not (ACR and ACD) then
-    print("|cff00ff88ClassHUD|r: AceConfig libs missing.")
     return
   end
   if not ACR:GetOptionsTable("ClassHUD") then

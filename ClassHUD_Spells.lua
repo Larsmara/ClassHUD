@@ -518,41 +518,48 @@ function ClassHUD:BuildFramesForSpec()
     return list
   end
 
-  -- Essential spells → Top bar
-  local topFrames = {}
+  local placements = self.db.profile.utilityPlacement or {}
+
+  local topFrames, bottomFrames = {}, {}
+  local sideFrames = { LEFT = {}, RIGHT = {} }
+
+  local function placeSpell(spellID, defaultPlacement)
+    if built[spellID] then return end
+
+    local placement = placements[spellID] or defaultPlacement or "TOP"
+    if placement == "HIDDEN" then
+      built[spellID] = true
+      return
+    end
+
+    local frame = acquire(spellID)
+    if placement == "TOP" then
+      table.insert(topFrames, frame)
+    elseif placement == "BOTTOM" then
+      table.insert(bottomFrames, frame)
+    elseif placement == "LEFT" or placement == "RIGHT" then
+      table.insert(sideFrames[placement], frame)
+    else
+      table.insert(topFrames, frame)
+    end
+  end
+
   for _, item in ipairs(collect("essential")) do
-    if not built[item.spellID] then
-      table.insert(topFrames, acquire(item.spellID))
-    end
+    placeSpell(item.spellID, "TOP")
   end
 
-  -- Utility placements
-  local utilFrames = { LEFT = {}, RIGHT = {}, TOP = {}, BOTTOM = {} }
   for _, item in ipairs(collect("utility")) do
-    if not built[item.spellID] then
-      local placement = (self.db.profile.utilityPlacement and self.db.profile.utilityPlacement[item.spellID])
-          or "HIDDEN"
-      if placement ~= "HIDDEN" and utilFrames[placement] then
-        table.insert(utilFrames[placement], acquire(item.spellID))
-      end
-    end
+    placeSpell(item.spellID, "HIDDEN")
   end
 
-  -- Optional extra top/bottom frames
-  for _, frame in ipairs(utilFrames.TOP) do table.insert(topFrames, frame) end
-  local bottomFrames = utilFrames.BOTTOM
-
-  -- Tracked bar entries (Blizzard "bar" category) → bottom by default
   for _, item in ipairs(collect("bar")) do
-    if not built[item.spellID] then
-      table.insert(bottomFrames, acquire(item.spellID))
-    end
+    placeSpell(item.spellID, "BOTTOM")
   end
 
   if #topFrames > 0 then LayoutTopBar(topFrames) end
   if #bottomFrames > 0 then LayoutBottomBar(bottomFrames) end
-  if #utilFrames.LEFT > 0 then LayoutSideBar(utilFrames.LEFT, "LEFT") end
-  if #utilFrames.RIGHT > 0 then LayoutSideBar(utilFrames.RIGHT, "RIGHT") end
+  if #sideFrames.LEFT > 0 then LayoutSideBar(sideFrames.LEFT, "LEFT") end
+  if #sideFrames.RIGHT > 0 then LayoutSideBar(sideFrames.RIGHT, "RIGHT") end
 
   -- Auto-map tracked buffs to spells using snapshot descriptions
   self.db.profile.buffLinks = self.db.profile.buffLinks or {}
