@@ -640,9 +640,9 @@ SlashCmdList.CHUDTRACKED = function()
   for buffID, data in pairs(snapshot) do
     if data.categories and data.categories.buff then
       local name = data.name or ("Buff " .. buffID)
-      local active = false
-      local aura = ClassHUD:GetAuraForSpell(buffID)
-      if aura then active = true end
+      local candidates = ClassHUD:GetAuraCandidatesForEntry(data, buffID)
+      local aura = select(1, ClassHUD:FindAuraFromCandidates(candidates, { "player", "pet" }))
+      local active = aura and true or false
 
       local config = tracked and ClassHUD.GetTrackedEntryConfig
           and ClassHUD:GetTrackedEntryConfig(class, specID, buffID, false)

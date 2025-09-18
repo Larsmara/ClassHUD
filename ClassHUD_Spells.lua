@@ -13,6 +13,27 @@ local activeFrames = {}
 local trackedBuffPool = ClassHUD._trackedBuffFramePool
 local trackedBarPool = ClassHUD._trackedBarFramePool
 
+local INACTIVE_BAR_COLOR = { r = 0.25, g = 0.25, b = 0.25, a = 0.6 }
+local TRACKED_UNITS = { "player", "pet" }
+
+local function CopyColor(tbl)
+  if type(tbl) ~= "table" then return nil end
+  return {
+    r = tbl.r or 1,
+    g = tbl.g or 1,
+    b = tbl.b or 1,
+    a = tbl.a or 1,
+  }
+end
+
+local function CollectAuraSpellIDs(entry, primaryID)
+  return ClassHUD:GetAuraCandidatesForEntry(entry, primaryID)
+end
+
+local function FindAuraFromCandidates(candidates)
+  return ClassHUD:FindAuraFromCandidates(candidates, TRACKED_UNITS)
+end
+
 -- ==================================================
 -- Helpers
 -- ==================================================
@@ -96,7 +117,7 @@ local function CreateBuffFrame(buffID)
     return trackedBuffPool[buffID]
   end
 
-  local parent = UI.trackedContainer or UI.anchor
+  local parent = UI.tracked or UI.trackedContainer or UI.anchor
   local f = CreateFrame("Frame", nil, parent)
   f:SetSize(32, 32)
 
@@ -121,33 +142,24 @@ end
 local function OnTrackedBarUpdate(self)
   if not self._duration or not self._expiration then
     self:SetScript("OnUpdate", nil)
-    if self.timer then self.timer:Hide() end
     return
   end
 
   local remaining = self._expiration - GetTime()
-  if remaining <= 0 then
-    self:SetValue(self._duration)
-    if self._showTimer and self.timer then
-      self.timer:SetText(ClassHUD.FormatSeconds(0))
-      self.timer:Show()
-    elseif self.timer then
-      self.timer:Hide()
-    end
-    self:SetScript("OnUpdate", nil)
-    return
-  end
+  if remaining < 0 then remaining = 0 end
 
-  local progress = self._duration - remaining
-  if progress < 0 then progress = 0 end
-
-  self:SetValue(progress)
+  self:SetValue(remaining)
 
   if self._showTimer and self.timer then
     self.timer:SetText(ClassHUD.FormatSeconds(remaining))
     self.timer:Show()
   elseif self.timer then
     self.timer:Hide()
+  end
+
+  if remaining <= 0 then
+    self:SetScript("OnUpdate", nil)
+    ClassHUD:UpdateTrackedBarFrame(self)
   end
 end
 
@@ -156,12 +168,13 @@ local function CreateTrackedBarFrame(buffID)
     return trackedBarPool[buffID]
   end
 
-  local parent = UI.trackedContainer or UI.anchor
+  local parent = UI.tracked or UI.trackedContainer or UI.anchor
   local height = ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.trackedBuffBar
       and ClassHUD.db.profile.trackedBuffBar.height or 16
 
   local bar = ClassHUD:CreateStatusBar(parent, height)
   bar.buffID = buffID
+  bar.auraSpellIDs = { buffID }
   bar.text:Hide()
   bar.icon = bar:CreateTexture(nil, "ARTWORK")
   bar.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
@@ -181,6 +194,9 @@ local function CreateTrackedBarFrame(buffID)
   bar._duration = nil
   bar._expiration = nil
   bar._showTimer = true
+  bar._activeColor = CopyColor(ClassHUD:GetDefaultTrackedBarColor())
+  bar._inactiveColor = CopyColor(INACTIVE_BAR_COLOR)
+  bar.cooldownSpellID = buffID
 
   bar:SetMinMaxValues(0, 1)
   bar:SetValue(0)
@@ -191,7 +207,7 @@ local function CreateTrackedBarFrame(buffID)
 end
 
 local function LayoutTrackedContainer(barFrames, iconFrames)
-  local container = UI.trackedContainer
+  local container = UI.tracked or UI.trackedContainer
   if not container then return end
 
   local settings = ClassHUD.db.profile.trackedBuffBar or {}
@@ -392,7 +408,7 @@ local function LayoutBottomBar(frames)
 end
 
 local function PopulateBuffIconFrame(frame, buffID, aura, entry)
-  frame:SetParent(UI.trackedContainer or UI.anchor)
+  frame:SetParent(UI.tracked or UI.trackedContainer or UI.anchor)
 
   local iconID = entry and entry.iconID
   if not iconID then
@@ -420,10 +436,18 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
 end
 
 local function ConfigureTrackedBarFrame(frame, entry, config)
-  frame:SetParent(UI.trackedContainer or UI.anchor)
+  frame:SetParent(UI.tracked or UI.trackedContainer or UI.anchor)
 
-  local color = config.barColor or ClassHUD:GetDefaultTrackedBarColor()
-  frame:SetStatusBarColor(color.r or 1, color.g or 1, color.b or 1, color.a or 1)
+  frame.snapshotEntry = entry
+  frame.config = config
+  frame.auraSpellIDs = CollectAuraSpellIDs(entry, frame.buffID)
+  frame.cooldownSpellID = (entry and entry.spellID) or frame.buffID
+
+  local color = CopyColor(config.barColor) or CopyColor(ClassHUD:GetDefaultTrackedBarColor())
+  frame._activeColor = color
+  frame._inactiveColor = frame._inactiveColor or CopyColor(INACTIVE_BAR_COLOR)
+
+  frame:SetStatusBarColor(color.r, color.g, color.b, color.a)
 
   frame.label:SetFont(ClassHUD:FetchFont(12))
   frame.timer:SetFont(ClassHUD:FetchFont(12))
@@ -457,45 +481,74 @@ local function ConfigureTrackedBarFrame(frame, entry, config)
   end
 
   frame._showTimer = config.barShowTimer ~= false
+  if not frame._showTimer and frame.timer then
+    frame.timer:Hide()
+  end
 end
 
 local function UpdateTrackedBarFrame(frame)
   local buffID = frame.buffID
   if not buffID then return end
 
-  local aura = ClassHUD:GetAuraForSpell(buffID)
-  local duration, expiration
+  frame:Show()
+
+  local aura = FindAuraFromCandidates(frame.auraSpellIDs)
 
   if aura and aura.duration and aura.duration > 0 and aura.expirationTime then
-    duration = aura.duration
-    expiration = aura.expirationTime
-  else
-    local cd = C_Spell.GetSpellCooldown(buffID)
-    if cd and cd.startTime and cd.duration and cd.duration > 0 then
-      duration = cd.duration
-      expiration = cd.startTime + cd.duration
-    end
-  end
+    local duration = aura.duration
+    local expiration = aura.expirationTime
 
-  if duration and duration > 0 and expiration and expiration > 0 then
     frame._duration = duration
     frame._expiration = expiration
     frame:SetMinMaxValues(0, duration)
-    local remaining = expiration - GetTime()
-    if remaining < 0 then remaining = 0 end
-    frame:SetValue(duration - remaining)
+    frame:SetValue(math.max(0, expiration - GetTime()))
+    frame:SetStatusBarColor(frame._activeColor.r, frame._activeColor.g, frame._activeColor.b, frame._activeColor.a)
     frame:SetScript("OnUpdate", OnTrackedBarUpdate)
     OnTrackedBarUpdate(frame)
-  else
+    return
+  elseif aura then
+    -- Permanent aura without a timer
     frame._duration = nil
     frame._expiration = nil
     frame:SetMinMaxValues(0, 1)
-    frame:SetValue(0)
+    frame:SetValue(1)
+    frame:SetStatusBarColor(frame._activeColor.r, frame._activeColor.g, frame._activeColor.b, frame._activeColor.a)
     frame:SetScript("OnUpdate", nil)
-    if frame.timer then
+    if frame._showTimer and frame.timer then
       frame.timer:SetText("")
       frame.timer:Hide()
+    elseif frame.timer then
+      frame.timer:Hide()
     end
+    return
+  end
+
+  local cooldownSpellID = frame.cooldownSpellID or buffID
+  local cd = cooldownSpellID and C_Spell.GetSpellCooldown(cooldownSpellID)
+  if cd and cd.startTime and cd.duration and cd.duration > 0 then
+    local duration = cd.duration
+    local expiration = cd.startTime + cd.duration
+
+    frame._duration = duration
+    frame._expiration = expiration
+    frame:SetMinMaxValues(0, duration)
+    frame:SetValue(math.max(0, expiration - GetTime()))
+    frame:SetStatusBarColor(frame._activeColor.r, frame._activeColor.g, frame._activeColor.b, frame._activeColor.a)
+    frame:SetScript("OnUpdate", OnTrackedBarUpdate)
+    OnTrackedBarUpdate(frame)
+    return
+  end
+
+  frame._duration = nil
+  frame._expiration = nil
+  frame:SetMinMaxValues(0, 1)
+  frame:SetValue(0)
+  frame:SetStatusBarColor(frame._inactiveColor.r, frame._inactiveColor.g, frame._inactiveColor.b, frame._inactiveColor.a)
+  frame:SetScript("OnUpdate", nil)
+
+  if frame.timer then
+    frame.timer:SetText("")
+    frame.timer:Hide()
   end
 end
 
@@ -516,18 +569,19 @@ function ClassHUD:BuildTrackedBuffFrames()
   wipe(self.trackedBarFrames)
 
   if not self.db.profile.show.buffs then
-    if UI.trackedContainer then
-      UI.trackedContainer:SetHeight(0)
-      UI.trackedContainer:Hide()
+    local trackedContainer = UI.tracked or UI.trackedContainer
+    if trackedContainer then
+      trackedContainer:SetHeight(0)
+      trackedContainer:Hide()
     end
     return
   end
 
-  if not UI.trackedContainer then
+  if not (UI.tracked or UI.trackedContainer) then
     if self.Layout then self:Layout() end
   end
 
-  local container = UI.trackedContainer
+  local container = UI.tracked or UI.trackedContainer
   if not container then return end
 
   container:Show()
@@ -583,6 +637,7 @@ function ClassHUD:BuildTrackedBuffFrames()
     local buffID = info.buffID
     local config = info.config
     local entry = info.entry
+    local auraCandidates = CollectAuraSpellIDs(entry, buffID)
 
     local hasBar = entry and entry.categories and entry.categories.bar
     if config.showBar and not hasBar then
@@ -596,7 +651,7 @@ function ClassHUD:BuildTrackedBuffFrames()
     end
 
     if config.showIcon then
-      local aura = self:GetAuraForSpell(buffID)
+      local aura = FindAuraFromCandidates(auraCandidates)
       if aura then
         local iconFrame = CreateBuffFrame(buffID)
         PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
@@ -733,6 +788,8 @@ end
 -- ==================================================
 -- Public API (kalles fra ClassHUD.lua events)
 -- ==================================================
+ClassHUD.UpdateTrackedBarFrame = UpdateTrackedBarFrame
+
 function ClassHUD:UpdateAllFrames()
   self:RefreshSnapshotCache()
   for _, f in ipairs(activeFrames) do
@@ -774,8 +831,6 @@ function ClassHUD:UpdateAllFrames()
         if frame and not frame.isGlowing then
           ActionButtonSpellAlertManager:ShowAlert(frame)
           frame.isGlowing = true
-          print("|cff00ff88ClassHUD|r Buff", buffID, "active → glowing", spellID, "(",
-            C_Spell.GetSpellName(spellID) or "?", ")")
         end
       end
     end
@@ -897,8 +952,6 @@ function ClassHUD:BuildFramesForSpec()
               local links = self.db.profile.buffLinks[class][specID]
               if not links[buffID] then
                 links[buffID] = spellID
-                print(string.format("|cff00ff88ClassHUD|r Lagret auto-link: %d → %d (%s)",
-                  buffID, spellID, spellName))
               end
               break
             end

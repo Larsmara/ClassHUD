@@ -247,6 +247,7 @@ function ClassHUD.FormatSeconds(seconds)
 end
 
 local DEFAULT_AURA_UNITS = { "player", "pet", "target", "focus", "mouseover" }
+local CATEGORY_PRIORITY = { "bar", "buff", "essential", "utility" }
 
 ---Finds the first relevant aura for the given spell ID across a list of units.
 ---@param spellID number
@@ -270,6 +271,62 @@ function ClassHUD:GetAuraForSpell(spellID, units)
           return aura, unit
         end
       end
+    end
+  end
+
+  return nil
+end
+
+---Collects aura spellIDs associated with a snapshot entry.
+---@param entry table|nil Snapshot entry from the Cooldown Viewer.
+---@param primaryID number|nil Optional fallback spellID.
+---@return number[]
+function ClassHUD:GetAuraCandidatesForEntry(entry, primaryID)
+  local results, seen = {}, {}
+
+  local function add(id)
+    if type(id) == "number" and id > 0 and not seen[id] then
+      seen[id] = true
+      table.insert(results, id)
+    end
+  end
+
+  add(primaryID)
+
+  if entry then
+    add(entry.spellID)
+
+    local categories = entry.categories
+    if categories then
+      for _, key in ipairs(CATEGORY_PRIORITY) do
+        local category = categories[key]
+        if category then
+          add(category.spellID)
+          add(category.overrideSpellID)
+          if category.linkedSpellIDs then
+            for _, linked in ipairs(category.linkedSpellIDs) do
+              add(linked)
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return results
+end
+
+---Finds an active aura from a list of candidate spellIDs.
+---@param candidates number[]|nil
+---@param units string[]|nil Optional unit list override.
+---@return table|nil auraData, number|nil auraSpellID, string|nil unit
+function ClassHUD:FindAuraFromCandidates(candidates, units)
+  if not candidates then return nil end
+
+  for _, auraID in ipairs(candidates) do
+    local aura, unit = self:GetAuraForSpell(auraID, units)
+    if aura then
+      return aura, auraID, unit
     end
   end
 

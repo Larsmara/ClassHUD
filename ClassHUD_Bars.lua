@@ -97,6 +97,7 @@ function ClassHUD:Layout()
   end
 
   local trackedContainer = UI.trackedContainer
+  UI.tracked = trackedContainer
   trackedContainer:SetParent(UI.anchor)
   trackedContainer:ClearAllPoints()
   trackedContainer:SetPoint("TOPLEFT", UI.anchor, "TOPLEFT", 0, 0)
