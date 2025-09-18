@@ -102,16 +102,27 @@ local function CreateSpellFrame(spellID)
       local remain = selfFrame._cooldownEnd - GetTime()
       if remain <= 0 then
         selfFrame._cooldownEnd = nil
+        selfFrame.cooldownText:SetText("")
         selfFrame.cooldownText:Hide()
         selfFrame.icon:SetDesaturated(false)
       else
-        -- Kun ett tall (avrundet ned)
-        local secs = math.floor(remain + 0.5)
-        selfFrame.cooldownText:SetText(secs)
-        selfFrame.cooldownText:Show()
+        if not selfFrame._gcdActive then -- 👈 aldri vis tekst på GCD
+          local secs = math.floor(remain + 0.5)
+          if secs > 0 then
+            selfFrame.cooldownText:SetText(secs)
+            selfFrame.cooldownText:Show()
+          else
+            selfFrame.cooldownText:SetText("")
+            selfFrame.cooldownText:Hide()
+          end
+        else
+          selfFrame.cooldownText:SetText("")
+          selfFrame.cooldownText:Hide()
+        end
       end
     end
   end)
+
 
   return frame
 end
@@ -785,6 +796,7 @@ local function UpdateSpellFrame(frame)
   -- =====================
   local cdStart, cdDuration
   local shouldDesaturate = false
+  local gcdActive = false
 
   -- =====================
   -- Charges
@@ -812,6 +824,19 @@ local function UpdateSpellFrame(frame)
     end
   end
 
+  -- GCD overlay (spellID 61304)
+  do
+    local gcd = C_Spell.GetSpellCooldown(61304)
+    if gcd and gcd.startTime and gcd.duration and gcd.duration > 0 then
+      if not cdStart or (gcd.startTime + gcd.duration) > (cdStart + cdDuration) then
+        cdStart = gcd.startTime
+        cdDuration = gcd.duration
+        gcdActive = true
+      end
+    end
+    frame._gcdActive = gcdActive
+  end
+
   if cdStart and cdDuration then
     CooldownFrame_Set(frame.cooldown, cdStart, cdDuration, true)
     frame._cooldownEnd = cdStart + cdDuration
@@ -827,7 +852,6 @@ local function UpdateSpellFrame(frame)
   -- =====================
   local auraID = nil
   if data then
-    -- Bruk override/linked fra buff/bar hvis de finnes
     if data.buff then
       auraID = data.buff.overrideSpellID or (data.buff.linkedSpellIDs and data.buff.linkedSpellIDs[1]) or
           data.buff.spellID
@@ -840,16 +864,13 @@ local function UpdateSpellFrame(frame)
   local aura = ClassHUD:GetAuraForSpell(auraID)
 
   if aura then
-    local remain = (aura.expirationTime or 0) - GetTime()
     local stacks = aura.applications or aura.stackCount or aura.charges or 0
 
-    -- Glow alltid når aura er aktiv
     if not frame.isGlowing then
       ActionButtonSpellAlertManager:ShowAlert(frame)
       frame.isGlowing = true
     end
 
-    -- Overlay gul cooldown hvis aura har timer
     if aura.duration and aura.duration > 0 and aura.expirationTime then
       frame.cooldown:SetSwipeColor(1, 0.85, 0.1, 0.9)
       CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
@@ -857,15 +878,12 @@ local function UpdateSpellFrame(frame)
       frame.icon:SetVertexColor(1, 1, 0.3)
     end
 
-    -- Hvis aura har stacks og vi ikke viser charges, vis stacks
     if stacks > 1 and not chargesShown then
       frame.count:SetText(stacks)
       frame.count:Show()
     end
   else
-    -- Ingen aura aktiv
     if frame.isGlowing then
-      -- Bare slå av glow hvis ikke en tracked buff holder den på
       local keepGlow = false
       local map = ClassHUD.trackedBuffToSpell
       if map then
@@ -887,7 +905,38 @@ local function UpdateSpellFrame(frame)
     frame.cooldown:SetSwipeColor(0, 0, 0, 0.8)
     frame.icon:SetVertexColor(1, 1, 1)
   end
+
+  -- =====================
+  -- Fix: cooldown tekst
+  -- =====================
+  if frame._cooldownEnd then
+    local remain = frame._cooldownEnd - GetTime()
+    if remain <= 0 then
+      frame.cooldownText:SetText("")
+      frame.cooldownText:Hide()
+    else
+      if not gcdActive then -- ikke vis tekst for GCD
+        local secs = math.floor(remain + 0.5)
+        if secs > 0 then
+          frame.cooldownText:SetText(secs)
+          frame.cooldownText:Show()
+        else
+          frame.cooldownText:SetText("")
+          frame.cooldownText:Hide()
+        end
+      else
+        frame.cooldownText:SetText("")
+        frame.cooldownText:Hide()
+      end
+    end
+  else
+    frame.cooldownText:SetText("")
+    frame.cooldownText:Hide()
+  end
 end
+
+
+
 
 -- ==================================================
 -- Public API (kalles fra ClassHUD.lua events)
