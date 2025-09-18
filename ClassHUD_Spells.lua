@@ -188,8 +188,14 @@ local function CreateTrackedBarFrame(buffID)
   bar.timer = bar:CreateFontString(nil, "OVERLAY")
   bar.timer:SetFont(ClassHUD:FetchFont(12))
   bar.timer:SetJustifyH("RIGHT")
-  bar.timer:SetPoint("RIGHT", bar, "RIGHT", -4, 0)
+  bar.timer:SetPoint("TOPRIGHT", bar, "TOPRIGHT", -4, -2)
   bar.timer:Hide()
+
+  bar.stacks = bar:CreateFontString(nil, "OVERLAY")
+  bar.stacks:SetFont(ClassHUD:FetchFont(12))
+  bar.stacks:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", -4, 2)
+  bar.stacks:SetJustifyH("RIGHT")
+  bar.stacks:Hide()
 
   bar._duration = nil
   bar._expiration = nil
@@ -308,55 +314,62 @@ end
 
 
 local function LayoutTopBar(frames)
-  if not UI.attachments or not UI.attachments.TOP then return end
+  if not UI.attachments or not UI.attachments.TOP or #frames == 0 then return end
 
   local width    = ClassHUD.db.profile.width or 250
   local perRow   = ClassHUD.db.profile.topBar.perRow or 8
   local spacingX = ClassHUD.db.profile.topBar.spacingX or 4
   local spacingY = ClassHUD.db.profile.topBar.spacingY or 4
   local yOffset  = ClassHUD.db.profile.topBar.yOffset or 0
-  local size     = (width - (perRow - 1) * spacingX) / perRow
   local grow     = ClassHUD.db.profile.topBar.grow or "DOWN"
+  local size     = (width - (perRow - 1) * spacingX) / perRow
 
-  local row, col = 0, 0
-  local maxRow   = 0
-  for _, frame in ipairs(frames) do
-    frame:SetParent(UI.anchor) -- 👈 sørg for at de er synlige
+  local anchor   = UI.attachments.TOP
+  local count    = #frames
+  local rowsUsed = math.ceil(count / perRow)
+
+  for index, frame in ipairs(frames) do
+    frame:SetParent(UI.anchor)
     frame:SetSize(size, size)
     frame:ClearAllPoints()
 
-    local rowCount = math.min(perRow, #frames - row * perRow)
-    local rowWidth = rowCount * size + (rowCount - 1) * spacingX
-    local startX   = (width - rowWidth) / 2
+    local row = math.floor((index - 1) / perRow)
+    local col = (index - 1) % perRow
 
-    local yLocal
+    local remaining = count - row * perRow
+    local rowCount = math.min(perRow, remaining)
+    local rowWidth = rowCount * size + math.max(0, rowCount - 1) * spacingX
+    local startX = (width - rowWidth) / 2
+
+    local x = startX + col * (size + spacingX)
+    local y = yOffset + row * (size + spacingY)
+
     if grow == "UP" then
-      yLocal = -(row * (size + spacingY) + yOffset)
+      frame:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", x, y)
     else
-      yLocal = row * (size + spacingY) + yOffset
+      frame:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", x, -y)
     end
 
-    frame:SetPoint("BOTTOMLEFT", UI.attachments.TOP, "TOPLEFT",
-      startX + col * (size + spacingX),
-      yLocal)
-
-    col = col + 1
-    if col >= perRow then col, row = 0, row + 1 end
-    maxRow = math.max(maxRow, row)
     frame:Show()
   end
 
-  -- lag container for høyde
   if not UI.topBarFrame then
     UI.topBarFrame = CreateFrame("Frame", "ClassHUDTopBarFrame", UI.anchor)
   end
+
+  local totalHeight = rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY + yOffset
+  totalHeight = math.max(totalHeight, 0)
+
   UI.topBarFrame:ClearAllPoints()
-  UI.topBarFrame:SetPoint("BOTTOMLEFT", UI.attachments.TOP, "TOPLEFT", 0, 0)
-  UI.topBarFrame:SetPoint("BOTTOMRIGHT", UI.attachments.TOP, "TOPRIGHT", 0, 0)
-  local totalHeight = (maxRow + 1) * (size + spacingY) + yOffset
+  if grow == "UP" then
+    UI.topBarFrame:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 0)
+    UI.topBarFrame:SetPoint("BOTTOMRIGHT", anchor, "TOPRIGHT", 0, 0)
+  else
+    UI.topBarFrame:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, 0)
+    UI.topBarFrame:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, 0)
+  end
   UI.topBarFrame:SetHeight(totalHeight)
 
-  -- lag/oppdater TOPBAR-anker
   if not UI.attachments.TOPBAR then
     UI.attachments.TOPBAR = CreateFrame("Frame", "ClassHUDAttachTOPBAR", UI.topBarFrame)
   end
@@ -372,13 +385,15 @@ local function LayoutSideBar(frames, side)
   local size    = ClassHUD.db.profile.sideBars.size or 36
   local spacing = ClassHUD.db.profile.sideBars.spacing or 4
   local offset  = ClassHUD.db.profile.sideBars.offset or 6
+  local yOffset = ClassHUD.db.profile.sideBars.yOffset or 0
   for i, frame in ipairs(frames) do
     frame:SetSize(size, size)
     frame:ClearAllPoints()
+    local y = yOffset - (i - 1) * (size + spacing)
     if side == "LEFT" then
-      frame:SetPoint("TOPRIGHT", UI.attachments.LEFT, "TOPLEFT", -offset, -(i - 1) * (size + spacing))
+      frame:SetPoint("TOPRIGHT", UI.attachments.LEFT, "TOPLEFT", -offset, y)
     elseif side == "RIGHT" then
-      frame:SetPoint("TOPLEFT", UI.attachments.RIGHT, "TOPRIGHT", offset, -(i - 1) * (size + spacing))
+      frame:SetPoint("TOPLEFT", UI.attachments.RIGHT, "TOPRIGHT", offset, y)
     end
   end
 end
@@ -451,11 +466,16 @@ local function ConfigureTrackedBarFrame(frame, entry, config)
 
   frame.label:SetFont(ClassHUD:FetchFont(12))
   frame.timer:SetFont(ClassHUD:FetchFont(12))
+  if frame.stacks then
+    frame.stacks:SetFont(ClassHUD:FetchFont(12))
+    frame.stacks:Hide()
+  end
 
   local name = entry and entry.name
   if not name then
     name = C_Spell.GetSpellName(frame.buffID) or ("Spell " .. frame.buffID)
   end
+  frame.defaultLabel = name
   frame.label:SetText(name)
 
   local iconID = entry and entry.iconID
@@ -484,59 +504,62 @@ local function ConfigureTrackedBarFrame(frame, entry, config)
   if not frame._showTimer and frame.timer then
     frame.timer:Hide()
   end
+  if frame.timer then
+    frame.timer:ClearAllPoints()
+    frame.timer:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -2)
+  end
 end
 
 local function UpdateTrackedBarFrame(frame)
   local buffID = frame.buffID
-  if not buffID then return end
+  if not buffID then return false end
 
-  frame:Show()
+  local aura, auraSpellID = FindAuraFromCandidates(frame.auraSpellIDs)
+  if aura then
+    frame:Show()
 
-  local aura = FindAuraFromCandidates(frame.auraSpellIDs)
-
-  if aura and aura.duration and aura.duration > 0 and aura.expirationTime then
-    local duration = aura.duration
-    local expiration = aura.expirationTime
-
-    frame._duration = duration
-    frame._expiration = expiration
-    frame:SetMinMaxValues(0, duration)
-    frame:SetValue(math.max(0, expiration - GetTime()))
-    frame:SetStatusBarColor(frame._activeColor.r, frame._activeColor.g, frame._activeColor.b, frame._activeColor.a)
-    frame:SetScript("OnUpdate", OnTrackedBarUpdate)
-    OnTrackedBarUpdate(frame)
-    return
-  elseif aura then
-    -- Permanent aura without a timer
-    frame._duration = nil
-    frame._expiration = nil
-    frame:SetMinMaxValues(0, 1)
-    frame:SetValue(1)
-    frame:SetStatusBarColor(frame._activeColor.r, frame._activeColor.g, frame._activeColor.b, frame._activeColor.a)
-    frame:SetScript("OnUpdate", nil)
-    if frame._showTimer and frame.timer then
-      frame.timer:SetText("")
-      frame.timer:Hide()
-    elseif frame.timer then
-      frame.timer:Hide()
+    local texture = aura.icon or (auraSpellID and C_Spell.GetSpellTexture(auraSpellID))
+    if frame.icon and frame.icon:IsShown() and texture then
+      frame.icon:SetTexture(texture)
     end
-    return
-  end
 
-  local cooldownSpellID = frame.cooldownSpellID or buffID
-  local cd = cooldownSpellID and C_Spell.GetSpellCooldown(cooldownSpellID)
-  if cd and cd.startTime and cd.duration and cd.duration > 0 then
-    local duration = cd.duration
-    local expiration = cd.startTime + cd.duration
+    local displayName = aura.name or (auraSpellID and C_Spell.GetSpellName(auraSpellID)) or frame.defaultLabel
+    if displayName then
+      frame.label:SetText(displayName)
+    end
 
-    frame._duration = duration
-    frame._expiration = expiration
-    frame:SetMinMaxValues(0, duration)
-    frame:SetValue(math.max(0, expiration - GetTime()))
+    local stacks = aura.applications or aura.stackCount or aura.charges
+    if frame.stacks then
+      if stacks and stacks > 1 then
+        frame.stacks:SetText(stacks)
+        frame.stacks:Show()
+      else
+        frame.stacks:Hide()
+      end
+    end
+
     frame:SetStatusBarColor(frame._activeColor.r, frame._activeColor.g, frame._activeColor.b, frame._activeColor.a)
-    frame:SetScript("OnUpdate", OnTrackedBarUpdate)
-    OnTrackedBarUpdate(frame)
-    return
+
+    if aura.duration and aura.duration > 0 and aura.expirationTime then
+      frame._duration = aura.duration
+      frame._expiration = aura.expirationTime
+      frame:SetMinMaxValues(0, aura.duration)
+      frame:SetValue(math.max(0, aura.expirationTime - GetTime()))
+      frame:SetScript("OnUpdate", OnTrackedBarUpdate)
+      OnTrackedBarUpdate(frame)
+    else
+      frame._duration = nil
+      frame._expiration = nil
+      frame:SetMinMaxValues(0, 1)
+      frame:SetValue(1)
+      frame:SetScript("OnUpdate", nil)
+      if frame.timer then
+        frame.timer:SetText("")
+        frame.timer:Hide()
+      end
+    end
+
+    return true
   end
 
   frame._duration = nil
@@ -550,6 +573,16 @@ local function UpdateTrackedBarFrame(frame)
     frame.timer:SetText("")
     frame.timer:Hide()
   end
+  if frame.stacks then
+    frame.stacks:Hide()
+  end
+
+  if frame.defaultLabel then
+    frame.label:SetText(frame.defaultLabel)
+  end
+
+  frame:Hide()
+  return false
 end
 
 function ClassHUD:BuildTrackedBuffFrames()
@@ -646,8 +679,11 @@ function ClassHUD:BuildTrackedBuffFrames()
     if config.showBar and hasBar then
       local bar = CreateTrackedBarFrame(buffID)
       ConfigureTrackedBarFrame(bar, entry, config)
-      UpdateTrackedBarFrame(bar)
-      table.insert(barFrames, bar)
+      if UpdateTrackedBarFrame(bar) then
+        table.insert(barFrames, bar)
+      else
+        bar:Hide()
+      end
     end
 
     if config.showIcon then
@@ -690,16 +726,8 @@ local function UpdateSpellFrame(frame)
   -- =====================
   -- Cooldown
   -- =====================
-  local cd = C_Spell.GetSpellCooldown(sid)
-  if cd and cd.startTime and cd.duration and cd.duration > 0 then
-    CooldownFrame_Set(frame.cooldown, cd.startTime, cd.duration, true)
-    frame._cooldownEnd = cd.startTime + cd.duration
-    frame.icon:SetDesaturated(true)
-  else
-    CooldownFrame_Clear(frame.cooldown)
-    frame._cooldownEnd = nil
-    frame.icon:SetDesaturated(false)
-  end
+  local cdStart, cdDuration
+  local shouldDesaturate = false
 
   -- =====================
   -- Charges
@@ -707,16 +735,35 @@ local function UpdateSpellFrame(frame)
   local ch = C_Spell.GetSpellCharges(sid)
   local chargesShown = false
   if ch and ch.maxCharges and ch.maxCharges > 1 then
-    frame.count:SetText(ch.currentCharges or 0)
+    local current = ch.currentCharges or 0
+    frame.count:SetText(current)
     frame.count:Show()
     chargesShown = true
-    if ch.cooldownStartTime and ch.cooldownDuration and ch.cooldownDuration > 0 then
-      CooldownFrame_Set(frame.cooldown, ch.cooldownStartTime, ch.cooldownDuration, true)
-      frame._cooldownEnd = ch.cooldownStartTime + ch.cooldownDuration
+
+    if current <= 0 and ch.cooldownStartTime and ch.cooldownDuration and ch.cooldownDuration > 0 then
+      cdStart = ch.cooldownStartTime
+      cdDuration = ch.cooldownDuration
+      shouldDesaturate = true
     end
   else
     frame.count:Hide()
+    local cd = C_Spell.GetSpellCooldown(sid)
+    if cd and cd.startTime and cd.duration and cd.duration > 0 then
+      cdStart = cd.startTime
+      cdDuration = cd.duration
+      shouldDesaturate = true
+    end
   end
+
+  if cdStart and cdDuration then
+    CooldownFrame_Set(frame.cooldown, cdStart, cdDuration, true)
+    frame._cooldownEnd = cdStart + cdDuration
+  else
+    CooldownFrame_Clear(frame.cooldown)
+    frame._cooldownEnd = nil
+  end
+
+  frame.icon:SetDesaturated(shouldDesaturate)
 
   -- =====================
   -- Aura overlay + glow

@@ -108,7 +108,12 @@ function ClassHUD:Layout()
     trackedContainer:SetHeight(0)
     trackedContainer:Hide()
   else
-    trackedContainer:Show()
+    local height = trackedContainer:GetHeight() or 0
+    if height > 0 then
+      trackedContainer:Show()
+    else
+      trackedContainer:Hide()
+    end
   end
 
   local trackedHeight = trackedContainer:GetHeight() or 0
@@ -142,8 +147,8 @@ function ClassHUD:Layout()
   -- Update attachment points for spell icon layout
   local top = ensure("TOP")
   top:ClearAllPoints()
-  top:SetPoint("BOTTOMLEFT", trackedContainer, "TOPLEFT", 0, 0)
-  top:SetPoint("BOTTOMRIGHT", trackedContainer, "TOPRIGHT", 0, 0)
+  top:SetPoint("TOPLEFT", trackedContainer, "BOTTOMLEFT", 0, 0)
+  top:SetPoint("TOPRIGHT", trackedContainer, "BOTTOMRIGHT", 0, 0)
   top:SetHeight(1)
 
   -- BOTTOM: 1px strip aligned to bottom of power

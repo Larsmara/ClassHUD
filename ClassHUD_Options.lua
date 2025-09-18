@@ -425,6 +425,7 @@ function ClassHUD_BuildOptions(addon)
   db.profile.sideBars.size = db.profile.sideBars.size or 36
   db.profile.sideBars.spacing = db.profile.sideBars.spacing or 4
   db.profile.sideBars.offset = db.profile.sideBars.offset or 6
+  db.profile.sideBars.yOffset = db.profile.sideBars.yOffset or 0
   db.profile.trackedBuffBar = db.profile.trackedBuffBar or {}
   db.profile.trackedBuffBar.perRow = db.profile.trackedBuffBar.perRow or 8
   db.profile.trackedBuffBar.spacingX = db.profile.trackedBuffBar.spacingX or 4
@@ -837,6 +838,19 @@ function ClassHUD_BuildOptions(addon)
                 get = function() return db.profile.sideBars.offset end,
                 set = function(_, value)
                   db.profile.sideBars.offset = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
+              yOffset = {
+                type = "range",
+                name = "Sidebar Y-Offset",
+                order = 4,
+                min = -200,
+                max = 200,
+                step = 1,
+                get = function() return db.profile.sideBars.yOffset or 0 end,
+                set = function(_, value)
+                  db.profile.sideBars.yOffset = value
                   addon:BuildFramesForSpec()
                 end,
               },
