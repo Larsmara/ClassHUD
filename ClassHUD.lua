@@ -240,11 +240,18 @@ end
 ---Rebuilds the Cooldown Viewer snapshot for the current class/spec.
 ---The snapshot is the authoritative data source for layout, options and UI.
 function ClassHUD:UpdateCDMSnapshot()
-  if not self:IsCooldownViewerAvailable() then return end
+  if not self:IsCooldownViewerAvailable() then return false end
 
   local class, specID = self:GetPlayerClassSpec()
+  if not specID or specID == 0 then
+    -- The specialization API can return 0 while logging in. Delay until it is ready.
+    return false
+  end
+
+  self._lastSpecID = specID
+
   local snapshot = self:GetSnapshotForSpec(class, specID, true)
-  if not snapshot then return end
+  if not snapshot then return false end
 
   for key in pairs(snapshot) do snapshot[key] = nil end
 
@@ -256,6 +263,7 @@ function ClassHUD:UpdateCDMSnapshot()
   }
 
   local orderByCategory = {}
+  local updatedCount = 0
 
   for cat, catName in pairs(categories) do
     local ids = C_CooldownViewer.GetCooldownViewerCategorySet(cat)
@@ -279,6 +287,7 @@ function ClassHUD:UpdateCDMSnapshot()
               lastUpdated = GetServerTime and GetServerTime() or time(),
             }
             snapshot[sid] = entry
+            updatedCount = updatedCount + 1
           else
             entry.name        = info and info.name or entry.name
             entry.iconID      = info and info.iconID or entry.iconID
@@ -300,7 +309,11 @@ function ClassHUD:UpdateCDMSnapshot()
     end
   end
 
-  print(string.format("|cff00ff88ClassHUD|r Cooldown snapshot updated for %s spec %d", class, specID))
+  if updatedCount > 0 then
+    print(string.format("|cff00ff88ClassHUD|r Cooldown snapshot updated for %s spec %d", class, specID))
+  end
+
+  return true
 end
 
 -- ===== Options bootstrap (registers with AceConfigRegistry directly) =====
@@ -353,6 +366,24 @@ function ClassHUD:RegisterOptions()
 
   self._opts_registered = true
   return true
+end
+
+function ClassHUD:RefreshRegisteredOptions()
+  local builder = _G.ClassHUD_BuildOptions
+  if type(builder) ~= "function" then return end
+
+  local ok, opts = pcall(builder, self)
+  if not ok or not opts then return end
+
+  self._opts = opts
+
+  if self._opts_registered then
+    local ACR = LibStub("AceConfigRegistry-3.0", true)
+    if ACR then
+      ACR:RegisterOptionsTable("ClassHUD", opts)
+      ACR:NotifyChange("ClassHUD")
+    end
+  end
 end
 
 function ClassHUD:OpenOptions()
@@ -421,27 +452,19 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   if event == "PLAYER_ENTERING_WORLD" then
     ClassHUD:FullUpdate()
     ClassHUD:ApplyAnchorPosition()
-    ClassHUD:UpdateCDMSnapshot()
+    local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
     return
   end
 
   -- Spec change
   if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
+    ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
-    ClassHUD:UpdateCDMSnapshot()
-    if ClassHUD._opts then
-      local builder = _G.ClassHUD_BuildOptions
-      if builder then
-        local ok, opts = pcall(builder, ClassHUD)
-        if ok and opts then
-          ClassHUD._opts = opts
-          LibStub("AceConfigRegistry-3.0"):NotifyChange("ClassHUD")
-        end
-      end
-    end
+    ClassHUD:RefreshRegisteredOptions()
     return
   end
 

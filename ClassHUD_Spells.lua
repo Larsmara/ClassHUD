@@ -253,8 +253,8 @@ function ClassHUD:BuildTrackedBuffFrames()
 
   if not self.db.profile.show.buffs then return end
 
-  local _, class         = UnitClass("player")
-  local specID           = GetSpecializationInfo(GetSpecialization() or 0)
+  local class, specID = self:GetPlayerClassSpec()
+  if not specID or specID == 0 then return end
 
   local tracked          = self.db.profile.trackedBuffs[class]
       and self.db.profile.trackedBuffs[class][specID]
@@ -426,8 +426,10 @@ function ClassHUD:UpdateAllFrames()
   end
 
   -- Før auto-map, håndter manuelle buffLinks fra DB
-  local _, class = UnitClass("player")
-  local specID   = GetSpecializationInfo(GetSpecialization() or 0)
+  local class, specID = self:GetPlayerClassSpec()
+  if not specID or specID == 0 then
+    return
+  end
 
   local links    = (ClassHUD.db.profile.buffLinks[class] and ClassHUD.db.profile.buffLinks[class][specID]) or {}
 
@@ -472,13 +474,22 @@ function ClassHUD:BuildFramesForSpec()
     end
   end
 
+  self.trackedBuffToSpell = {}
+
+  local class, specID = self:GetPlayerClassSpec()
+  if not specID or specID == 0 then
+    return
+  end
+
+  local snapshot = self:GetSnapshotForSpec(class, specID, false)
+  if not snapshot or next(snapshot) == nil then
+    self.cdmSpells = {}
+    return
+  end
+
   self:RefreshSnapshotCache()
 
-  local snapshot = self:GetSnapshotForSpec(nil, nil, false)
-  if not snapshot then return end
-
   local built = {}
-  self.trackedBuffToSpell = {}
 
   local function acquire(spellID)
     local frame = CreateSpellFrame(spellID)
@@ -544,8 +555,6 @@ function ClassHUD:BuildFramesForSpec()
   if #utilFrames.RIGHT > 0 then LayoutSideBar(utilFrames.RIGHT, "RIGHT") end
 
   -- Auto-map tracked buffs to spells using snapshot descriptions
-  local class, specID = self:GetPlayerClassSpec()
-
   self.db.profile.buffLinks = self.db.profile.buffLinks or {}
   self.db.profile.buffLinks[class] = self.db.profile.buffLinks[class] or {}
   self.db.profile.buffLinks[class][specID] = self.db.profile.buffLinks[class][specID] or {}

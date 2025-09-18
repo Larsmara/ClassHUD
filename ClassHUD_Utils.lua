@@ -4,6 +4,8 @@
 ---@type ClassHUD
 local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 
+ClassHUD._lastSpecID = ClassHUD._lastSpecID or 0
+
 -- ---------------------------------------------------------------------------
 -- Profile helpers
 -- ---------------------------------------------------------------------------
@@ -13,7 +15,18 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 function ClassHUD:GetPlayerClassSpec()
   local _, class = UnitClass("player")
   local specIndex = GetSpecialization()
-  local specID = specIndex and GetSpecializationInfo(specIndex) or 0
+  local specID = 0
+
+  if specIndex then
+    specID = GetSpecializationInfo(specIndex) or 0
+  end
+
+  if specID and specID > 0 then
+    self._lastSpecID = specID
+  elseif self._lastSpecID and self._lastSpecID > 0 then
+    specID = self._lastSpecID
+  end
+
   return class, specID
 end
 
