@@ -511,7 +511,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   end
 
   -- Spells (auras + cooldowns)
-  if (event == "UNIT_AURA" and unit == "player") or
+  if (event == "UNIT_AURA" and (unit == "player" or unit == "pet")) or
       event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES" or event == "UNIT_SPELLCAST_SUCCEEDED" then
     if ClassHUD.UpdateAllFrames then ClassHUD:UpdateAllFrames() end
     -- Also show instant-cast fake bar if bars module hooked SUCCEEDED

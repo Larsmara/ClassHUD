@@ -204,6 +204,60 @@ function ClassHUD:GetTrackedEntryConfig(class, specID, buffID, create)
   return nil
 end
 
+---Determines the best spell information to represent a tracked bar entry.
+---@param entry table|nil Cooldown snapshot entry.
+---@param primaryID number|nil Fallback spellID if no better match is found.
+---@param candidates number[]|nil Pre-computed aura candidate list.
+---@return number|nil displaySpellID
+---@return string displayName
+---@return number|nil iconID
+---@return number[]|nil candidateList
+function ClassHUD:ResolveTrackedBarDisplay(entry, primaryID, candidates)
+  candidates = candidates or self:GetAuraCandidatesForEntry(entry, primaryID)
+
+  local displaySpellID, displayName, iconID
+
+  if candidates then
+    for _, spellID in ipairs(candidates) do
+      if type(spellID) == "number" and spellID > 0 then
+        local info = C_Spell.GetSpellInfo(spellID)
+        if info and info.name then
+          displaySpellID = spellID
+          displayName = info.name
+          iconID = info.iconID
+          break
+        end
+      end
+    end
+  end
+
+  if not displaySpellID and primaryID then
+    local info = C_Spell.GetSpellInfo(primaryID)
+    if info and info.name then
+      displaySpellID = primaryID
+      displayName = displayName or info.name
+      iconID = iconID or info.iconID
+    end
+  end
+
+  if entry then
+    displayName = displayName or entry.name
+    iconID = iconID or entry.iconID
+  end
+
+  if not displayName then
+    if displaySpellID then
+      displayName = C_Spell.GetSpellName(displaySpellID)
+    elseif primaryID then
+      displayName = C_Spell.GetSpellName(primaryID)
+    end
+  end
+
+  displayName = displayName or (primaryID and ("Spell " .. primaryID)) or "Unknown"
+
+  return displaySpellID, displayName, iconID, candidates
+end
+
 ---Iterates over snapshot entries for a given category and calls the handler.
 ---@param category string One of "essential", "utility", "buff", "bar".
 ---@param handler fun(spellID:number, entry:table, categoryData:table)
@@ -238,9 +292,10 @@ end
 ---@return string
 function ClassHUD.FormatSeconds(seconds)
   if seconds >= 60 then
-    return string.format("%dm", math.ceil(seconds / 60))
+    local minutes = math.max(1, math.floor(seconds / 60 + 0.5))
+    return string.format("%dm", minutes)
   elseif seconds >= 10 then
-    return tostring(math.floor(seconds + 0.5))
+    return string.format("%d", math.floor(seconds))
   else
     return string.format("%.1f", seconds)
   end

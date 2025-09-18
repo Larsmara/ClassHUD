@@ -455,7 +455,12 @@ local function ConfigureTrackedBarFrame(frame, entry, config)
 
   frame.snapshotEntry = entry
   frame.config = config
-  frame.auraSpellIDs = CollectAuraSpellIDs(entry, frame.buffID)
+
+  local candidates = CollectAuraSpellIDs(entry, frame.buffID)
+  local displaySpellID, displayName, displayIcon = ClassHUD:ResolveTrackedBarDisplay(entry, frame.buffID, candidates)
+
+  frame.auraSpellIDs = candidates
+  frame.displaySpellID = displaySpellID
   frame.cooldownSpellID = (entry and entry.spellID) or frame.buffID
 
   local color = CopyColor(config.barColor) or CopyColor(ClassHUD:GetDefaultTrackedBarColor())
@@ -471,17 +476,15 @@ local function ConfigureTrackedBarFrame(frame, entry, config)
     frame.stacks:Hide()
   end
 
-  local name = entry and entry.name
-  if not name then
-    name = C_Spell.GetSpellName(frame.buffID) or ("Spell " .. frame.buffID)
-  end
-  frame.defaultLabel = name
-  frame.label:SetText(name)
+  frame.defaultLabel = displayName
+  frame.label:SetText(displayName)
 
-  local iconID = entry and entry.iconID
+  local iconID = displayIcon or (displaySpellID and C_Spell.GetSpellTexture(displaySpellID))
   if not iconID then
-    local info = C_Spell.GetSpellInfo(frame.buffID)
-    iconID = info and info.iconID
+    iconID = entry and entry.iconID
+  end
+  if not iconID and frame.buffID then
+    iconID = C_Spell.GetSpellTexture(frame.buffID)
   end
 
   local height = ClassHUD.db.profile.trackedBuffBar.height or 16
@@ -529,11 +532,13 @@ local function UpdateTrackedBarFrame(frame)
     end
 
     local stacks = aura.applications or aura.stackCount or aura.charges
+    stacks = tonumber(stacks)
     if frame.stacks then
       if stacks and stacks > 1 then
-        frame.stacks:SetText(stacks)
+        frame.stacks:SetText(tostring(stacks))
         frame.stacks:Show()
       else
+        frame.stacks:SetText("")
         frame.stacks:Hide()
       end
     end
@@ -574,6 +579,7 @@ local function UpdateTrackedBarFrame(frame)
     frame.timer:Hide()
   end
   if frame.stacks then
+    frame.stacks:SetText("")
     frame.stacks:Hide()
   end
 
@@ -1009,4 +1015,8 @@ function ClassHUD:BuildFramesForSpec()
   end
 
   self:UpdateAllFrames()
+
+  if self.Layout then
+    self:Layout()
+  end
 end

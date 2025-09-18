@@ -119,8 +119,16 @@ function ClassHUD:Layout()
   local trackedHeight = trackedContainer:GetHeight() or 0
   if trackedHeight < 0 then trackedHeight = 0 end
 
+  local topBarFrame = UI.topBarFrame
+  local topBarHeight = topBarFrame and topBarFrame:GetHeight() or 0
+
   local previous = trackedContainer
   local offset = (trackedHeight > 0 and gap) or 0
+
+  if topBarFrame and topBarHeight and topBarHeight > 0 then
+    previous = topBarFrame
+    offset = gap
+  end
 
   local function anchorBar(frame, enabled, height)
     if not frame then return end
