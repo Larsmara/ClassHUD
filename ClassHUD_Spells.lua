@@ -105,7 +105,9 @@ local function CreateSpellFrame(spellID)
         selfFrame.cooldownText:Hide()
         selfFrame.icon:SetDesaturated(false)
       else
-        selfFrame.cooldownText:SetText(ClassHUD.FormatSeconds(remain))
+        -- Kun ett tall (avrundet ned)
+        local secs = math.floor(remain + 0.5)
+        selfFrame.cooldownText:SetText(secs)
         selfFrame.cooldownText:Show()
       end
     end
@@ -142,6 +144,7 @@ local function CreateBuffFrame(buffID)
   f.count:SetPoint("BOTTOMRIGHT", -2, 2)
   f.count:SetFont(ClassHUD:FetchFont(12))
   f.count:SetText("")
+  f.stacks = f.count
 
   f.buffID = buffID
   trackedBuffPool[buffID] = f
@@ -226,10 +229,10 @@ local function LayoutTrackedBars(barFrames, opts)
   local container = EnsureAttachment("TRACKED_BARS")
   if not container then return end
 
-  local settings = ClassHUD.db.profile.trackedBuffBar or {}
-  local width    = ClassHUD.db.profile.width or 250
-  local spacingY = settings.spacingY or 4
-  local barHeight = settings.height or 16
+  local settings   = ClassHUD.db.profile.trackedBuffBar or {}
+  local width      = ClassHUD.db.profile.width or 250
+  local spacingY   = settings.spacingY or 4
+  local barHeight  = settings.height or 16
   local topPadding = 0
 
   if #barFrames > 0 then
@@ -277,12 +280,12 @@ local function LayoutTrackedIcons(iconFrames, opts)
   local container = EnsureAttachment("TRACKED_ICONS")
   if not container then return end
 
-  local settings = ClassHUD.db.profile.trackedBuffBar or {}
-  local width    = ClassHUD.db.profile.width or 250
-  local perRow   = math.max(settings.perRow or 8, 1)
-  local spacingX = settings.spacingX or 4
-  local spacingY = settings.spacingY or 4
-  local align    = settings.align or "CENTER"
+  local settings   = ClassHUD.db.profile.trackedBuffBar or {}
+  local width      = ClassHUD.db.profile.width or 250
+  local perRow     = math.max(settings.perRow or 8, 1)
+  local spacingX   = settings.spacingX or 4
+  local spacingY   = settings.spacingY or 4
+  local align      = settings.align or "CENTER"
   local topPadding = 0
 
   if #iconFrames > 0 then
@@ -439,9 +442,9 @@ local function LayoutBottomBar(frames)
     return
   end
 
-  local size     = (width - (perRow - 1) * spacingX) / perRow
-  local count    = #frames
-  local rowsUsed = math.ceil(count / perRow)
+  local size       = (width - (perRow - 1) * spacingX) / perRow
+  local count      = #frames
+  local rowsUsed   = math.ceil(count / perRow)
   local topPadding = spacingY + yOffset
 
   for index, frame in ipairs(frames) do
@@ -449,12 +452,12 @@ local function LayoutBottomBar(frames)
     frame:SetParent(container)
     frame:ClearAllPoints()
 
-    local row = math.floor((index - 1) / perRow)
-    local col = (index - 1) % perRow
+    local row       = math.floor((index - 1) / perRow)
+    local col       = (index - 1) % perRow
     local remaining = count - row * perRow
-    local rowCount = math.min(perRow, remaining)
-    local rowWidth = rowCount * size + math.max(0, rowCount - 1) * spacingX
-    local startX   = (width - rowWidth) / 2
+    local rowCount  = math.min(perRow, remaining)
+    local rowWidth  = rowCount * size + math.max(0, rowCount - 1) * spacingX
+    local startX    = (width - rowWidth) / 2
 
     frame:SetPoint("TOPLEFT", container, "TOPLEFT",
       startX + col * (size + spacingX),
@@ -481,17 +484,18 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
 
   frame.icon:SetTexture(iconID or C_Spell.GetSpellTexture(buffID) or 134400)
 
-  if aura.expirationTime and aura.duration and aura.duration > 0 then
+  if aura and aura.expirationTime and aura.duration and aura.duration > 0 then
     CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
   else
     CooldownFrame_Clear(frame.cooldown)
   end
 
-  local stacks = aura.applications or aura.stackCount or aura.charges
+  local stacks = aura and (aura.applications or aura.stackCount or aura.charges)
   if stacks and stacks > 1 then
     frame.count:SetText(stacks)
     frame.count:Show()
   else
+    frame.count:SetText("")
     frame.count:Hide()
   end
 
@@ -725,26 +729,19 @@ function ClassHUD:BuildTrackedBuffFrames()
     local auraCandidates = CollectAuraSpellIDs(entry, buffID)
 
     local hasBar = entry and entry.categories and entry.categories.bar
-    if config.showBar and not hasBar then
-      config.showBar = false
-    end
-    if config.showBar and hasBar then
-      local bar = CreateTrackedBarFrame(buffID)
-      ConfigureTrackedBarFrame(bar, entry, config)
-      if UpdateTrackedBarFrame(bar) then
-        table.insert(barFrames, bar)
-      else
-        bar:Hide()
-      end
-    end
+
+    -- if config.showBar then
+    --   local bar = CreateTrackedBarFrame(buffID)
+    --   ConfigureTrackedBarFrame(bar, entry, config)
+    --   UpdateTrackedBarFrame(bar) -- setter aktiv/inaktiv state
+    --   table.insert(barFrames, bar)
+    -- end
 
     if config.showIcon then
       local aura = FindAuraFromCandidates(auraCandidates)
-      if aura then
-        local iconFrame = CreateBuffFrame(buffID)
-        PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
-        table.insert(iconFrames, iconFrame)
-      end
+      local iconFrame = CreateBuffFrame(buffID)
+      PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
+      table.insert(iconFrames, iconFrame)
     end
   end
 
@@ -809,7 +806,7 @@ local function UpdateSpellFrame(frame)
   else
     frame.count:Hide()
     local cd = C_Spell.GetSpellCooldown(sid)
-    if cd and cd.startTime and cd.duration and cd.duration > 0 then
+    if cd and cd.startTime and cd.duration and cd.duration > 1.5 then
       cdStart = cd.startTime
       cdDuration = cd.duration
       shouldDesaturate = true
@@ -914,7 +911,7 @@ function ClassHUD:UpdateAllFrames()
     return
   end
 
-  local links    = (ClassHUD.db.profile.buffLinks[class] and ClassHUD.db.profile.buffLinks[class][specID]) or {}
+  local links = (ClassHUD.db.profile.buffLinks[class] and ClassHUD.db.profile.buffLinks[class][specID]) or {}
 
   for buffID, spellID in pairs(links) do
     local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)

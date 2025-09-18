@@ -138,9 +138,9 @@ local defaults = {
       perRow   = 8,
       spacingX = 4,
       spacingY = 4,
-      yOffset  = 4,              -- litt luft over TopBar
-      align    = "CENTER",       -- "LEFT" | "CENTER" | "RIGHT"
-      height  = 16,
+      yOffset  = 4,        -- litt luft over TopBar
+      align    = "CENTER", -- "LEFT" | "CENTER" | "RIGHT"
+      height   = 16,
     },
 
     -- =========================
@@ -241,19 +241,13 @@ end
 ---Rebuilds the Cooldown Viewer snapshot for the current class/spec.
 ---The snapshot is the authoritative data source for layout, options and UI.
 function ClassHUD:UpdateCDMSnapshot()
-  if not self:IsCooldownViewerAvailable() then return false end
+  if not self:IsCooldownViewerAvailable() then return end
 
   local class, specID = self:GetPlayerClassSpec()
-  if not specID or specID == 0 then
-    -- The specialization API can return 0 while logging in. Delay until it is ready.
-    return false
-  end
-
-  self._lastSpecID = specID
-
   local snapshot = self:GetSnapshotForSpec(class, specID, true)
-  if not snapshot then return false end
+  if not snapshot then return end
 
+  -- clear old
   for key in pairs(snapshot) do snapshot[key] = nil end
 
   local categories = {
@@ -264,7 +258,6 @@ function ClassHUD:UpdateCDMSnapshot()
   }
 
   local orderByCategory = {}
-  local updatedCount = 0
 
   for cat, catName in pairs(categories) do
     local ids = C_CooldownViewer.GetCooldownViewerCategorySet(cat)
@@ -288,7 +281,6 @@ function ClassHUD:UpdateCDMSnapshot()
               lastUpdated = GetServerTime and GetServerTime() or time(),
             }
             snapshot[sid] = entry
-            updatedCount = updatedCount + 1
           else
             entry.name        = info and info.name or entry.name
             entry.iconID      = info and info.iconID or entry.iconID
@@ -301,7 +293,7 @@ function ClassHUD:UpdateCDMSnapshot()
           entry.categories[catName] = {
             cooldownID      = cooldownID,
             overrideSpellID = raw.overrideSpellID,
-            linkedSpellIDs  = raw.linkedSpellIDs and { table.unpack(raw.linkedSpellIDs) } or nil,
+            linkedSpellIDs  = raw.linkedSpellIDs and { unpack(raw.linkedSpellIDs) } or nil,
             hasAura         = raw.hasAura,
             order           = orderByCategory[catName],
           }
@@ -310,12 +302,85 @@ function ClassHUD:UpdateCDMSnapshot()
     end
   end
 
-  if updatedCount > 0 then
-    print(string.format("|cff00ff88ClassHUD|r Cooldown snapshot updated for %s spec %d", class, specID))
-  end
-
-  return true
+  print(string.format("|cff00ff88ClassHUD|r Cooldown snapshot updated for %s spec %d", class, specID))
 end
+
+-- function ClassHUD:UpdateCDMSnapshot()
+--   if not self:IsCooldownViewerAvailable() then return false end
+
+--   local class, specID = self:GetPlayerClassSpec()
+--   if not specID or specID == 0 then
+--     -- The specialization API can return 0 while logging in. Delay until it is ready.
+--     return false
+--   end
+
+--   self._lastSpecID = specID
+
+--   local snapshot = self:GetSnapshotForSpec(class, specID, true)
+--   if not snapshot then return false end
+
+--   for key in pairs(snapshot) do snapshot[key] = nil end
+
+--   local categories = {
+--     [Enum.CooldownViewerCategory.Essential]   = "essential",
+--     [Enum.CooldownViewerCategory.Utility]     = "utility",
+--     [Enum.CooldownViewerCategory.TrackedBuff] = "buff",
+--     [Enum.CooldownViewerCategory.TrackedBar]  = "bar",
+--   }
+
+--   local orderByCategory = {}
+--   local updatedCount = 0
+
+--   for cat, catName in pairs(categories) do
+--     local ids = C_CooldownViewer.GetCooldownViewerCategorySet(cat)
+--     if type(ids) == "table" then
+--       for _, cooldownID in ipairs(ids) do
+--         local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
+--         local sid = raw and (raw.spellID or raw.overrideSpellID or (raw.linkedSpellIDs and raw.linkedSpellIDs[1]))
+--         if sid then
+--           local info = C_Spell.GetSpellInfo(sid)
+--           local desc = C_Spell.GetSpellDescription(sid)
+
+--           local entry = snapshot[sid]
+--           if not entry then
+--             entry = {
+--               spellID     = sid,
+--               name        = info and info.name or ("Spell " .. sid),
+--               iconID      = info and info.iconID,
+--               desc        = desc,
+--               categories  = {},
+--               category    = catName,
+--               lastUpdated = GetServerTime and GetServerTime() or time(),
+--             }
+--             snapshot[sid] = entry
+--             updatedCount = updatedCount + 1
+--           else
+--             entry.name        = info and info.name or entry.name
+--             entry.iconID      = info and info.iconID or entry.iconID
+--             entry.desc        = desc or entry.desc
+--             entry.category    = entry.category or catName
+--             entry.lastUpdated = GetServerTime and GetServerTime() or time()
+--           end
+
+--           orderByCategory[catName] = (orderByCategory[catName] or 0) + 1
+--           entry.categories[catName] = {
+--             cooldownID      = cooldownID,
+--             overrideSpellID = raw.overrideSpellID,
+--             linkedSpellIDs  = raw.linkedSpellIDs and { table.unpack(raw.linkedSpellIDs) } or nil,
+--             hasAura         = raw.hasAura,
+--             order           = orderByCategory[catName],
+--           }
+--         end
+--       end
+--     end
+--   end
+
+--   if updatedCount > 0 then
+--     print(string.format("|cff00ff88ClassHUD|r Cooldown snapshot updated for %s spec %d", class, specID))
+--   end
+
+--   return true
+-- end
 
 -- ===== Options bootstrap (registers with AceConfigRegistry directly) =====
 function ClassHUD:RegisterOptions()
@@ -657,7 +722,7 @@ SlashCmdList.CHUDTRACKED = function()
         enabled = "|cffff0000OFF|r"
       end
 
-      local status  = active and "|cff00ff00ACTIVE|r" or "inactive"
+      local status = active and "|cff00ff00ACTIVE|r" or "inactive"
 
       print(string.format("  [%d] %s → tracked=%s, %s",
         buffID, name, enabled, status))

@@ -217,23 +217,23 @@ local function BuildTrackedBuffArgs(addon, container)
             NotifyOptionsChanged()
           end,
         },
-        showBar = {
-          type = "toggle",
-          name = "Show as Bar",
-          order = 2,
-          disabled = not data.hasBar,
-          get = function()
-            local cfg = getConfig(false)
-            return cfg and cfg.showBar or false
-          end,
-          set = function(_, value)
-            local cfg = getConfig(true)
-            cfg.showBar = not not value
-            addon:BuildTrackedBuffFrames()
-            BuildTrackedBuffArgs(addon, container)
-            NotifyOptionsChanged()
-          end,
-        },
+        -- showBar = {
+        --   type = "toggle",
+        --   name = "Show as Bar",
+        --   order = 2,
+        --   disabled = not data.hasBar,
+        --   get = function()
+        --     local cfg = getConfig(false)
+        --     return cfg and cfg.showBar or false
+        --   end,
+        --   set = function(_, value)
+        --     local cfg = getConfig(true)
+        --     cfg.showBar = not not value
+        --     addon:BuildTrackedBuffFrames()
+        --     BuildTrackedBuffArgs(addon, container)
+        --     NotifyOptionsChanged()
+        --   end,
+        -- },
         barShowIcon = {
           type = "toggle",
           name = "Show Icon",
@@ -313,7 +313,8 @@ local function BuildBuffLinkArgs(addon, container)
   if not next(links) then
     container.empty = {
       type = "description",
-      name = "No manual links stored for this spec. They are created automatically when buffs reference spells in their description.",
+      name =
+      "No manual links stored for this spec. They are created automatically when buffs reference spells in their description.",
       order = order,
     }
     return
@@ -941,7 +942,8 @@ function ClassHUD_BuildOptions(addon)
                   if not spellID then return end
                   addon.db.profile.utilityPlacement[spellID] = "TOP"
                   addon:BuildFramesForSpec()
-                  BuildPlacementArgs(addon, topBarContainer, "essential", "TOP", "No essential spells reported for this spec.")
+                  BuildPlacementArgs(addon, topBarContainer, "essential", "TOP",
+                    "No essential spells reported for this spec.")
                   NotifyOptionsChanged()
                 end,
               },
@@ -1085,8 +1087,10 @@ function ClassHUD_BuildOptions(addon)
             func = function()
               addon:UpdateCDMSnapshot()
               addon:BuildFramesForSpec()
-              BuildPlacementArgs(addon, topBarContainer, "essential", "TOP", "No essential spells reported for this spec.")
-              BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN", "No utility cooldowns reported by the snapshot for this spec.")
+              BuildPlacementArgs(addon, topBarContainer, "essential", "TOP",
+                "No essential spells reported for this spec.")
+              BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
+                "No utility cooldowns reported by the snapshot for this spec.")
               BuildTrackedBuffArgs(addon, trackedContainer)
               BuildBuffLinkArgs(addon, linkContainer)
               NotifyOptionsChanged()
@@ -1095,7 +1099,8 @@ function ClassHUD_BuildOptions(addon)
           note = {
             type = "description",
             order = 2,
-            name = "The snapshot is rebuilt automatically on login and specialization changes. Use this button if Blizzard updates the Cooldown Viewer data while you are logged in.",
+            name =
+            "The snapshot is rebuilt automatically on login and specialization changes. Use this button if Blizzard updates the Cooldown Viewer data while you are logged in.",
           },
         },
       },
@@ -1103,7 +1108,8 @@ function ClassHUD_BuildOptions(addon)
   }
 
   BuildPlacementArgs(addon, topBarContainer, "essential", "TOP", "No essential spells reported for this spec.")
-  BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN", "No utility cooldowns reported by the snapshot for this spec.")
+  BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
+    "No utility cooldowns reported by the snapshot for this spec.")
   BuildTrackedBuffArgs(addon, trackedContainer)
   BuildBuffLinkArgs(addon, linkContainer)
 

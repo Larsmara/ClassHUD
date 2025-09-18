@@ -101,7 +101,7 @@ function ClassHUD:Layout()
   local containers = {
     TRACKED_ICONS = ensure("TRACKED_ICONS"),
     TOP           = ensure("TOP"),
-    TRACKED_BARS  = ensure("TRACKED_BARS"),
+    -- TRACKED_BARS  = ensure("TRACKED_BARS"),
     CAST          = ensure("CAST"),
     HP            = ensure("HP"),
     RESOURCE      = ensure("RESOURCE"),
@@ -133,7 +133,9 @@ function ClassHUD:Layout()
     end
   end
 
-  layoutStatusBar(UI.cast, "CAST", self.db.profile.show.cast, self.db.profile.height.cast)
+  if UI.cast and UI.cast:IsShown() then
+    layoutStatusBar(UI.cast, "CAST", true, self.db.profile.height.cast)
+  end
   layoutStatusBar(UI.hp, "HP", self.db.profile.show.hp, self.db.profile.height.hp)
   layoutStatusBar(UI.resource, "RESOURCE", self.db.profile.show.resource, self.db.profile.height.resource)
 
@@ -161,7 +163,7 @@ function ClassHUD:Layout()
   local order = {
     "TRACKED_ICONS",
     "TOP",
-    "TRACKED_BARS",
+    -- "TRACKED_BARS",
     "CAST",
     "HP",
     "RESOURCE",
