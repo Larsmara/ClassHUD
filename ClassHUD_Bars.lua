@@ -289,17 +289,27 @@ function ClassHUD:Layout()
   end
 
 
+  -- Fallbacks for legacy profiles that may miss nested fields
+  local showCast     = (db.show and db.show.cast);     if showCast     == nil then showCast     = true end
+  local showHP       = (db.show and db.show.hp);       if showHP       == nil then showHP       = true end
+  local showResource = (db.show and db.show.resource); if showResource == nil then showResource = true end
+
+  local heightCast     = (db.height and db.height.cast)     or 18
+  local heightHP       = (db.height and db.height.hp)       or 14
+  local heightResource = (db.height and db.height.resource) or 14
+
   -- Viktig: bruk samme layoutfunksjon også for CAST og sørg for at den får 0-høyde når av
-  layoutStatusBar(UI.cast, "CAST", db.show.cast, db.height.cast)
-  layoutStatusBar(UI.hp, "HP", db.show.hp, db.height.hp)
-  layoutStatusBar(UI.resource, "RESOURCE", db.show.resource, db.height.resource)
+  layoutStatusBar(UI.cast, "CAST", showCast, heightCast)
+  layoutStatusBar(UI.hp, "HP", showHP, heightHP)
+  layoutStatusBar(UI.resource, "RESOURCE", showResource, heightResource)
 
   -- CLASS (special power) container
   do
     local container = containers.CLASS
     if container then
-      local showPower = db.show.power
-      local h = (showPower and db.height.power) or 0
+      local showPower = (db.show and db.show.power); if showPower == nil then showPower = true end
+      local h = (db.height and db.height.power) or 14
+      h = showPower and h or 0
       container._height = h
       container:SetHeight(math.max(h, 1)) -- 👈 alltid minst 1px høy
 
@@ -479,17 +489,22 @@ function ClassHUD:UNIT_SPELLCAST_FAILED(unit) if unit == "player" then self:Stop
 
 -- HP/Primary updates
 function ClassHUD:UpdateHP()
-  if not self.db.profile.show.hp then return end
+  local showHP = (self.db and self.db.profile and self.db.profile.show and self.db.profile.show.hp)
+  if showHP == nil then showHP = true end
+  if not showHP then return end
   local cur, max = UnitHealth("player"), UnitHealthMax("player")
   UI.hp:SetMinMaxValues(0, max)
   UI.hp:SetValue(cur)
   local pct = (max > 0) and (cur / max * 100) or 0
   UI.hp.text:SetFormattedText("%d%%", pct + 0.5)
+  if UI.hp and UI.hp._holder then UI.hp._holder:Show() end
   UI.hp:Show()
 end
 
 function ClassHUD:UpdatePrimaryResource()
-  if not self.db.profile.show.resource then return end
+  local showResource = (self.db and self.db.profile and self.db.profile.show and self.db.profile.show.resource)
+  if showResource == nil then showResource = true end
+  if not showResource then return end
 
   local id, token = UnitPowerType("player")
   local cur, max = UnitPower("player", id), UnitPowerMax("player", id)
@@ -505,5 +520,6 @@ function ClassHUD:UpdatePrimaryResource()
   else
     UI.resource.text:SetText(cur)
   end
+  if UI.resource and UI.resource._holder then UI.resource._holder:Show() end
   UI.resource:Show()
 end

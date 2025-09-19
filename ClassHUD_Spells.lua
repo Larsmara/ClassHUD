@@ -1070,10 +1070,10 @@ function ClassHUD:BuildFramesForSpec()
     return
   end
 
-  local snapshot = self:GetSnapshotForSpec(class, specID, false)
-  if not snapshot or next(snapshot) == nil then
+  local snapshot = self:GetSnapshotForSpec(class, specID, false) or {}
+  -- Do not hard-return if snapshot is missing; still allow manual placements to render
+  if next(snapshot) == nil then
     self.cdmSpells = {}
-    return
   end
 
   self:RefreshSnapshotCache()
@@ -1146,11 +1146,17 @@ function ClassHUD:BuildFramesForSpec()
     placeSpell(item.spellID, "HIDDEN")
   end
 
-  -- for _, item in ipairs(collect("bar")) do
-  --   placeSpell(item.spellID, "BOTTOM")
-  -- end
+  -- If user has no explicit placements for this spec yet, seed from snapshot (when available)
+  if (not placements or next(placements) == nil) and next(snapshot) ~= nil then
+    for _, item in ipairs(collect("essential")) do
+      placeSpell(item.spellID, "TOP")
+    end
+    for _, item in ipairs(collect("bar")) do
+      placeSpell(item.spellID, "BOTTOM")
+    end
+  end
 
-  for spellID, placement in pairs(placements) do
+  for spellID, placement in pairs(placements or {}) do
     if not built[spellID] then
       placeSpell(spellID, placement)
     end
@@ -1161,26 +1167,28 @@ function ClassHUD:BuildFramesForSpec()
   if #sideFrames.LEFT > 0 then LayoutSideBar(sideFrames.LEFT, "LEFT") end
   if #sideFrames.RIGHT > 0 then LayoutSideBar(sideFrames.RIGHT, "RIGHT") end
 
-  -- Auto-map tracked buffs to spells using snapshot descriptions
-  self.db.profile.buffLinks = self.db.profile.buffLinks or {}
-  self.db.profile.buffLinks[class] = self.db.profile.buffLinks[class] or {}
-  self.db.profile.buffLinks[class][specID] = self.db.profile.buffLinks[class][specID] or {}
+  -- Auto-map tracked buffs to spells using snapshot descriptions (only when snapshot is available)
+  if next(snapshot) ~= nil then
+    self.db.profile.buffLinks = self.db.profile.buffLinks or {}
+    self.db.profile.buffLinks[class] = self.db.profile.buffLinks[class] or {}
+    self.db.profile.buffLinks[class][specID] = self.db.profile.buffLinks[class][specID] or {}
 
-  for buffID, entry in pairs(snapshot) do
-    if entry.categories and entry.categories.buff then
-      local desc = entry.desc or C_Spell.GetSpellDescription(buffID)
-      if desc then
-        for spellID, frame in pairs(self.spellFrames) do
-          if frame and frame.snapshotEntry then
-            local spellName = C_Spell.GetSpellName(spellID)
-            if spellName and string.find(desc, spellName, 1, true) then
-              self.trackedBuffToSpell[buffID] = spellID
+    for buffID, entry in pairs(snapshot) do
+      if entry.categories and entry.categories.buff then
+        local desc = entry.desc or C_Spell.GetSpellDescription(buffID)
+        if desc then
+          for spellID, frame in pairs(self.spellFrames) do
+            if frame then
+              local spellName = C_Spell.GetSpellName(spellID)
+              if spellName and string.find(desc, spellName, 1, true) then
+                self.trackedBuffToSpell[buffID] = spellID
 
-              local links = self.db.profile.buffLinks[class][specID]
-              if not links[buffID] then
-                links[buffID] = spellID
+                local links = self.db.profile.buffLinks[class][specID]
+                if not links[buffID] then
+                  links[buffID] = spellID
+                end
+                break
               end
-              break
             end
           end
         end

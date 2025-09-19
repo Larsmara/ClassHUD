@@ -412,8 +412,11 @@ function ClassHUD:OnEnable()
   if not UI.resource and self.CreateResourceBar then self:CreateResourceBar() end
   if not UI.power and self.CreatePowerContainer then self:CreatePowerContainer() end
 
+  -- Ensure initial layout and values
   if self.Layout then self:Layout() end
   if self.ApplyBarSkins then self:ApplyBarSkins() end
+  if self.FullUpdate then self:FullUpdate() end
+  if self.ApplyAnchorPosition then self:ApplyAnchorPosition() end
 
   -- Rebuild spells after DB exists & layout is ready
   if self.BuildFramesForSpec then
