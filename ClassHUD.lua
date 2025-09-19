@@ -463,6 +463,8 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     ClassHUD:RefreshRegisteredOptions()
+    ClassHUD:RebuildSpellTree()
+    ClassHUD:UpdateAllFrames()
     return
   end
 

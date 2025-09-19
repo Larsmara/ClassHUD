@@ -321,31 +321,77 @@ local function CreateBuffFrame(buffID)
   end
 
   local parent = (UI.attachments and UI.attachments.TRACKED_ICONS) or UI.anchor
-  local f = CreateFrame("Frame", "ClassHUDBuff" .. buffID, parent)
-  f:SetFrameLevel((parent:GetFrameLevel() or 0) + 1)
+  local f = CreateFrame("Frame", nil, parent)
   f:SetSize(32, 32)
 
   f.icon = f:CreateTexture(nil, "ARTWORK")
-  f.icon:SetAllPoints(f)    -- 👈 riktig bruk
+  f.icon:SetAllPoints(true)
   f.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-  f.icon:SetTexture(134400) -- 👈 fallback ikon (spørsmålstegn)
 
   f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
-  f.cooldown:SetAllPoints(f)
+  f.cooldown:SetAllPoints(true)
+  f.cooldown:SetHideCountdownNumbers(true) -- vi viser vår egen tekst
+  f.cooldown.noCooldownCount = true
 
-  f.count = f:CreateFontString(nil, "OVERLAY")
-  f.count:SetPoint("BOTTOMRIGHT", -2, 2)
-  f.count:SetFont(ClassHUD:FetchFont(12))
+  -- overlay så tekst havner over cooldown swipe/edge
+  f.overlay = CreateFrame("Frame", nil, f)
+  f.overlay:SetAllPoints(true)
+  f.overlay:SetFrameLevel(f.cooldown:GetFrameLevel() + 1)
+
+  local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.spellFontSize or 12)
+
+  -- CHARGES / STACKS: øverst (samme som spells)
+  f.count = f.overlay:CreateFontString(nil, "OVERLAY")
+  f.count:ClearAllPoints()
+  f.count:SetPoint("TOP", f, "TOP", 0, -2)
+  f.count:SetFont(fontPath, fontSize, "OUTLINE")
+  f.count:SetJustifyH("CENTER")
   f.count:SetText("")
   f.stacks = f.count
 
+  -- COOLDOWN-TEKST: nederst (samme som spells)
+  f.cooldownText = f.overlay:CreateFontString(nil, "OVERLAY")
+  f.cooldownText:ClearAllPoints()
+  f.cooldownText:SetPoint("BOTTOM", f, "BOTTOM", 0, 2)
+  f.cooldownText:SetFont(fontPath, fontSize, "OUTLINE")
+  f.cooldownText:SetJustifyH("CENTER")
+  f.cooldownText:SetJustifyV("MIDDLE")
+  f.cooldownText:Hide()
+
   f.buffID = buffID
+  f._cooldownEnd = nil
+
+  -- Live oppdatering av vår egen cooldown-tekst
+  f:SetScript("OnUpdate", function(self)
+    local t = self._cooldownEnd
+    if not t then
+      if self.cooldownText:IsShown() then
+        self.cooldownText:SetText("")
+        self.cooldownText:Hide()
+      end
+      return
+    end
+    local remain = t - GetTime()
+    if remain > 0 then
+      local secs = math.floor(remain + 0.5)
+      if secs > 0 then
+        self.cooldownText:SetText(secs)
+        self.cooldownText:Show()
+      else
+        self.cooldownText:SetText("")
+        self.cooldownText:Hide()
+      end
+    else
+      self._cooldownEnd = nil
+      self.cooldownText:SetText("")
+      self.cooldownText:Hide()
+    end
+  end)
+
   trackedBuffPool[buffID] = f
-
-  f:Show() -- 👈 sørg for at det faktisk vises
-
   return f
 end
+
 
 
 local function OnTrackedBarUpdate(self)
@@ -663,13 +709,28 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
     local info = C_Spell.GetSpellInfo(buffID)
     iconID = info and info.iconID
   end
-
   frame.icon:SetTexture(iconID or C_Spell.GetSpellTexture(buffID) or 134400)
 
   if aura and aura.expirationTime and aura.duration and aura.duration > 0 then
     CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
+
+    -- sørg for at overlay er over cooldown
+    if frame.overlay and frame.cooldown then
+      local need = frame.cooldown:GetFrameLevel() + 1
+      if frame.overlay:GetFrameLevel() <= need then
+        frame.overlay:SetFrameLevel(need)
+      end
+    end
+
+    -- >>> legg til disse to linjene:
+    frame._cooldownEnd = aura.expirationTime
+    frame.cooldownText:Show()
   else
     CooldownFrame_Clear(frame.cooldown)
+    -- >>> og disse to linjene:
+    frame._cooldownEnd = nil
+    frame.cooldownText:SetText("")
+    frame.cooldownText:Hide()
   end
 
   local stacks = aura and (aura.applications or aura.stackCount or aura.charges)
@@ -683,6 +744,7 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
 
   frame:Show()
 end
+
 
 
 local function UpdateTrackedBarFrame(frame)
@@ -913,6 +975,35 @@ local function UpdateSpellFrame(frame)
   local chargesShown, gcdActive = UpdateCooldown(frame, sid, false)
 
   UpdateAuraOverlay(frame, aura, chargesShown)
+
+  -- Gråing logikk: kombiner cooldown-status og usability-status
+  do
+    local desaturate = false
+
+    -- 1. Fra cooldown/charges (UpdateCooldown returnerer allerede shouldDesaturate, men vi kan beregne her også)
+    local charges = C_Spell.GetSpellCharges(sid)
+    if charges and charges.maxCharges and charges.maxCharges > 0 then
+      if (charges.currentCharges or 0) <= 0 then
+        desaturate = true
+      end
+    else
+      local cd = C_Spell.GetSpellCooldown(sid)
+      if cd and cd.startTime and cd.duration and cd.duration > 1.5 then
+        desaturate = true
+      end
+    end
+
+    -- 2. Fra usability (condition spells)
+    local usable, noMana = C_Spell.IsSpellUsable(sid)
+    if not usable and not noMana then
+      desaturate = true
+    end
+
+    -- Apply combined result
+    frame.icon:SetDesaturated(desaturate)
+  end
+
+
 
   -- Glow
   UpdateGlow(frame, aura, sid, data)
