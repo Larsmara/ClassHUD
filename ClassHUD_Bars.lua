@@ -3,6 +3,114 @@
 local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local UI = ClassHUD.UI
 
+local VALID_LAYOUT_ENTRIES = {
+  TOP      = true,
+  CAST     = true,
+  HP       = true,
+  RESOURCE = true,
+  CLASS    = true,
+  BOTTOM   = true,
+}
+
+local DEFAULT_LAYOUT_ORDER = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+
+local function sanitizeLayoutOrder(order)
+  local sanitized = {}
+  local seen = {}
+
+  if type(order) == "table" then
+    for _, name in ipairs(order) do
+      if VALID_LAYOUT_ENTRIES[name] and not seen[name] then
+        table.insert(sanitized, name)
+        seen[name] = true
+      end
+    end
+  end
+
+  for _, name in ipairs(DEFAULT_LAYOUT_ORDER) do
+    if not seen[name] then
+      table.insert(sanitized, name)
+      seen[name] = true
+    end
+  end
+
+  return sanitized
+end
+
+local function ensureLayoutProfile(addon)
+  if not (addon and addon.db and addon.db.profile) then
+    return nil
+  end
+  addon.db.profile.layout = addon.db.profile.layout or {}
+  return addon.db.profile.layout
+end
+
+function ClassHUD:GetLayoutOrder()
+  local layout = ensureLayoutProfile(self)
+  if not layout then
+    local copy = {}
+    for i, name in ipairs(DEFAULT_LAYOUT_ORDER) do
+      copy[i] = name
+    end
+    return copy
+  end
+
+  layout.order = sanitizeLayoutOrder(layout.order)
+  return layout.order
+end
+
+function ClassHUD:SetLayoutOrder(newOrder)
+  local layout = ensureLayoutProfile(self)
+  if not layout then return end
+
+  layout.order = sanitizeLayoutOrder(newOrder)
+
+  if self.Layout then
+    self:Layout()
+  end
+end
+
+function ClassHUD:SetLayoutLeader(name)
+  if not VALID_LAYOUT_ENTRIES[name] then return end
+
+  local current = self:GetLayoutOrder()
+  local reordered = { name }
+  for _, entry in ipairs(current) do
+    if entry ~= name then
+      table.insert(reordered, entry)
+    end
+  end
+
+  self:SetLayoutOrder(reordered)
+end
+
+function ClassHUD:MoveLayoutEntry(name, delta)
+  if not VALID_LAYOUT_ENTRIES[name] then return end
+
+  local current = self:GetLayoutOrder()
+  local order = {}
+  for i, entry in ipairs(current) do
+    order[i] = entry
+  end
+
+  local index
+  for i, entry in ipairs(order) do
+    if entry == name then
+      index = i
+      break
+    end
+  end
+
+  if not index then return end
+
+  local target = index + (delta or 0)
+  if target < 1 or target > #order or target == index then return end
+
+  order[index], order[target] = order[target], order[index]
+
+  self:SetLayoutOrder(order)
+end
+
 -- Anchor
 function ClassHUD:CreateAnchor()
   local f = CreateFrame("Frame", "ClassHUDAnchor", UIParent, "BackdropTemplate")
@@ -60,7 +168,7 @@ function ClassHUD:CreatePowerContainer()
   UI.power = f
 end
 
--- Layout (top→bottom): tracked buffs → cast → hp → resource → power
+-- Layout helpers
 function ClassHUD:ApplyBarSkins()
   local tex = self:FetchStatusbar()
   local c   = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
@@ -111,12 +219,13 @@ function ClassHUD:Layout()
 
   -- Opprett/finn containere (ALLTID – kjeden må bestå)
   local containers = {
-    TOP      = ensure("TOP"),
-    CAST     = ensure("CAST"),
-    HP       = ensure("HP"),
-    RESOURCE = ensure("RESOURCE"),
-    CLASS    = ensure("CLASS"),
-    BOTTOM   = ensure("BOTTOM"),
+    TRACKED_BARS = ensure("TRACKED_BARS"),
+    TOP          = ensure("TOP"),
+    CAST         = ensure("CAST"),
+    HP           = ensure("HP"),
+    RESOURCE     = ensure("RESOURCE"),
+    CLASS        = ensure("CLASS"),
+    BOTTOM       = ensure("BOTTOM"),
   }
 
   local function layoutStatusBar(frame, containerName, enabled, height)
@@ -128,7 +237,42 @@ function ClassHUD:Layout()
     container._height = h
     container:SetHeight(math.max(h, 1))
 
-    if frame then
+    if not frame then return end
+
+    local holder = frame._holder
+    if holder then
+      holder:SetParent(container)
+      holder:ClearAllPoints()
+      holder:SetWidth(w)
+      holder:SetHeight((enabled and h > 0) and h or 0)
+
+      if enabled and h > 0 then
+        holder:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+        holder:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+        if frame ~= UI.cast then
+          holder:Show()
+        elseif holder:IsShown() then
+          -- keep current visibility when toggling layout while casting
+          holder:Show()
+        end
+      else
+        holder:Hide()
+      end
+
+      frame:SetParent(holder)
+      frame:ClearAllPoints()
+      local edge = frame._edge or 0
+      frame:SetPoint("TOPLEFT", holder, "TOPLEFT", edge, -edge)
+      frame:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", -edge, edge)
+
+      if enabled and h > 0 then
+        if holder:IsShown() or frame ~= UI.cast then
+          frame:Show()
+        end
+      else
+        frame:Hide()
+      end
+    else
       frame:SetParent(container)
       frame:ClearAllPoints()
       frame:SetWidth(w)
@@ -145,17 +289,27 @@ function ClassHUD:Layout()
   end
 
 
+  -- Fallbacks for legacy profiles that may miss nested fields
+  local showCast     = (db.show and db.show.cast);     if showCast     == nil then showCast     = true end
+  local showHP       = (db.show and db.show.hp);       if showHP       == nil then showHP       = true end
+  local showResource = (db.show and db.show.resource); if showResource == nil then showResource = true end
+
+  local heightCast     = (db.height and db.height.cast)     or 18
+  local heightHP       = (db.height and db.height.hp)       or 14
+  local heightResource = (db.height and db.height.resource) or 14
+
   -- Viktig: bruk samme layoutfunksjon også for CAST og sørg for at den får 0-høyde når av
-  layoutStatusBar(UI.cast, "CAST", db.show.cast, db.height.cast)
-  layoutStatusBar(UI.hp, "HP", db.show.hp, db.height.hp)
-  layoutStatusBar(UI.resource, "RESOURCE", db.show.resource, db.height.resource)
+  layoutStatusBar(UI.cast, "CAST", showCast, heightCast)
+  layoutStatusBar(UI.hp, "HP", showHP, heightHP)
+  layoutStatusBar(UI.resource, "RESOURCE", showResource, heightResource)
 
   -- CLASS (special power) container
   do
     local container = containers.CLASS
     if container then
-      local showPower = db.show.power
-      local h = (showPower and db.height.power) or 0
+      local showPower = (db.show and db.show.power); if showPower == nil then showPower = true end
+      local h = (db.height and db.height.power) or 14
+      h = showPower and h or 0
       container._height = h
       container:SetHeight(math.max(h, 1)) -- 👈 alltid minst 1px høy
 
@@ -185,7 +339,13 @@ function ClassHUD:Layout()
   end
 
   -- Kjederekkefølge – ALDRI hopp over containere selv om høyden er 0
-  local order      = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+  local configuredOrder = self:GetLayoutOrder()
+  local order = { "TRACKED_BARS" }
+  for _, name in ipairs(configuredOrder) do
+    if containers[name] then
+      table.insert(order, name)
+    end
+  end
 
   local previous   = UI.anchor
   local prevHeight = 0
@@ -329,17 +489,22 @@ function ClassHUD:UNIT_SPELLCAST_FAILED(unit) if unit == "player" then self:Stop
 
 -- HP/Primary updates
 function ClassHUD:UpdateHP()
-  if not self.db.profile.show.hp then return end
+  local showHP = (self.db and self.db.profile and self.db.profile.show and self.db.profile.show.hp)
+  if showHP == nil then showHP = true end
+  if not showHP then return end
   local cur, max = UnitHealth("player"), UnitHealthMax("player")
   UI.hp:SetMinMaxValues(0, max)
   UI.hp:SetValue(cur)
   local pct = (max > 0) and (cur / max * 100) or 0
   UI.hp.text:SetFormattedText("%d%%", pct + 0.5)
+  if UI.hp and UI.hp._holder then UI.hp._holder:Show() end
   UI.hp:Show()
 end
 
 function ClassHUD:UpdatePrimaryResource()
-  if not self.db.profile.show.resource then return end
+  local showResource = (self.db and self.db.profile and self.db.profile.show and self.db.profile.show.resource)
+  if showResource == nil then showResource = true end
+  if not showResource then return end
 
   local id, token = UnitPowerType("player")
   local cur, max = UnitPower("player", id), UnitPowerMax("player", id)
@@ -355,5 +520,6 @@ function ClassHUD:UpdatePrimaryResource()
   else
     UI.resource.text:SetText(cur)
   end
+  if UI.resource and UI.resource._holder then UI.resource._holder:Show() end
   UI.resource:Show()
 end

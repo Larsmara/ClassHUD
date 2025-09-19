@@ -15,6 +15,82 @@ local PLACEMENTS = {
   RIGHT = "Right Side",
 }
 
+local LAYOUT_BAR_NAMES = {
+  TOP      = "Top Bar",
+  CAST     = "Cast Bar",
+  HP       = "Health Bar",
+  RESOURCE = "Primary Resource Bar",
+  CLASS    = "Special Power Bar",
+  BOTTOM   = "Bottom Bar",
+}
+
+local layoutOrderArgs = {}
+
+local function BuildLayoutOrderOptions(addon, container)
+  for k in pairs(container) do container[k] = nil end
+
+  container.description = {
+    type  = "description",
+    name  = "Choose which bar leads the stack and rearrange the order they appear in the HUD.",
+    order = 0,
+  }
+
+  container.leader = {
+    type   = "select",
+    name   = "Leader Bar",
+    order  = 0.5,
+    values = LAYOUT_BAR_NAMES,
+    get    = function()
+      local orderList = addon:GetLayoutOrder()
+      return orderList and orderList[1] or "TOP"
+    end,
+    set    = function(_, value)
+      addon:SetLayoutLeader(value)
+      BuildLayoutOrderOptions(addon, container)
+      NotifyOptionsChanged()
+    end,
+  }
+
+  local orderList = addon:GetLayoutOrder()
+  local total = #orderList
+
+  for index, key in ipairs(orderList) do
+    local label = LAYOUT_BAR_NAMES[key] or key
+    container["entry" .. index] = {
+      type   = "group",
+      name   = string.format("%d. %s", index, label),
+      inline = true,
+      order  = index + 1,
+      args   = {
+        up = {
+          type     = "execute",
+          name     = "Move Up",
+          order    = 1,
+          width    = "half",
+          disabled = (index == 1),
+          func     = function()
+            addon:MoveLayoutEntry(key, -1)
+            BuildLayoutOrderOptions(addon, container)
+            NotifyOptionsChanged()
+          end,
+        },
+        down = {
+          type     = "execute",
+          name     = "Move Down",
+          order    = 2,
+          width    = "half",
+          disabled = (index == total),
+          func     = function()
+            addon:MoveLayoutEntry(key, 1)
+            BuildLayoutOrderOptions(addon, container)
+            NotifyOptionsChanged()
+          end,
+        },
+      },
+    }
+  end
+end
+
 local optionsState = {
   newLinkBuffID = "",
   newLinkSpellID = "",
@@ -897,6 +973,18 @@ function ClassHUD_BuildOptions(addon)
               addon:FullUpdate()
             end,
           },
+          layoutHeader = {
+            type = "header",
+            name = "Bar Order",
+            order = 12,
+          },
+          layoutControls = {
+            type = "group",
+            name = "Arrange Bars",
+            order = 13,
+            inline = true,
+            args = layoutOrderArgs,
+          },
           topLayout = {
             type = "group",
             name = "Top Bar Layout",
@@ -1397,6 +1485,7 @@ function ClassHUD_BuildOptions(addon)
     "No utility cooldowns reported by the snapshot for this spec.")
   BuildTrackedBuffArgs(addon, trackedContainer)
   BuildBuffLinkArgs(addon, linkContainer)
+  BuildLayoutOrderOptions(addon, layoutOrderArgs)
 
   return opts
 end

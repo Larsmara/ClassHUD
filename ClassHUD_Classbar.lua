@@ -198,7 +198,11 @@ end
 
 -- Main update entry
 function ClassHUD:UpdateSpecialPower()
-  if not self.db.profile.show.power then return end
+  local showPower = (self.db and self.db.profile and self.db.profile.show and self.db.profile.show.power)
+  if showPower == nil then showPower = true end
+  if not showPower then
+    HideAllSegments(1); if UI.power then UI.power:Hide() end; return
+  end
   local ptype, specID = ResolveSpecialPower()
   if not ptype then
     HideAllSegments(1); UI.power:Hide(); return
