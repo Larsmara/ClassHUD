@@ -237,7 +237,42 @@ function ClassHUD:Layout()
     container._height = h
     container:SetHeight(math.max(h, 1))
 
-    if frame then
+    if not frame then return end
+
+    local holder = frame._holder
+    if holder then
+      holder:SetParent(container)
+      holder:ClearAllPoints()
+      holder:SetWidth(w)
+      holder:SetHeight((enabled and h > 0) and h or 0)
+
+      if enabled and h > 0 then
+        holder:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+        holder:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+        if frame ~= UI.cast then
+          holder:Show()
+        elseif holder:IsShown() then
+          -- keep current visibility when toggling layout while casting
+          holder:Show()
+        end
+      else
+        holder:Hide()
+      end
+
+      frame:SetParent(holder)
+      frame:ClearAllPoints()
+      local edge = frame._edge or 0
+      frame:SetPoint("TOPLEFT", holder, "TOPLEFT", edge, -edge)
+      frame:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", -edge, edge)
+
+      if enabled and h > 0 then
+        if holder:IsShown() or frame ~= UI.cast then
+          frame:Show()
+        end
+      else
+        frame:Hide()
+      end
+    else
       frame:SetParent(container)
       frame:ClearAllPoints()
       frame:SetWidth(w)
