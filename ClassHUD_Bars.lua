@@ -88,9 +88,10 @@ function ClassHUD:ApplyBarSkins()
 end
 
 function ClassHUD:Layout()
-  local w   = self.db.profile.width
-  local gap = self.db.profile.spacing or 0
+  local UI  = self.UI
   local db  = self.db.profile
+  local w   = db.width or 250
+  local gap = db.spacing or 2
 
   if UI.anchor then UI.anchor:SetWidth(w) end
   UI.attachments = UI.attachments or {}
@@ -109,7 +110,7 @@ function ClassHUD:Layout()
     return f
   end
 
-  -- Opprett/finn containere (ALLTID – kjeden må bestå)
+  -- Opprett containere
   local containers = {
     TOP      = ensure("TOP"),
     CAST     = ensure("CAST"),
@@ -119,11 +120,11 @@ function ClassHUD:Layout()
     BOTTOM   = ensure("BOTTOM"),
   }
 
+  -- Helper for statusbars
   local function layoutStatusBar(frame, containerName, enabled, height)
     local container = containers[containerName]
     if not container then return end
 
-    -- behold containeren i layouten: minst 1px høyde
     local h = (enabled and height) or 0
     container._height = h
     container:SetHeight(math.max(h, 1))
@@ -133,7 +134,6 @@ function ClassHUD:Layout()
       frame:ClearAllPoints()
       frame:SetWidth(w)
       frame:SetHeight(h)
-
       if enabled and h > 0 then
         frame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
         frame:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
@@ -144,20 +144,19 @@ function ClassHUD:Layout()
     end
   end
 
-
-  -- Viktig: bruk samme layoutfunksjon også for CAST og sørg for at den får 0-høyde når av
+  -- Bygg standard bars
   layoutStatusBar(UI.cast, "CAST", db.show.cast, db.height.cast)
   layoutStatusBar(UI.hp, "HP", db.show.hp, db.height.hp)
   layoutStatusBar(UI.resource, "RESOURCE", db.show.resource, db.height.resource)
 
-  -- CLASS (special power) container
+  -- CLASS bar (special power)
   do
     local container = containers.CLASS
     if container then
       local showPower = db.show.power
       local h = (showPower and db.height.power) or 0
       container._height = h
-      container:SetHeight(math.max(h, 1)) -- 👈 alltid minst 1px høy
+      container:SetHeight(math.max(h, 1))
 
       if UI.power then
         UI.power:SetParent(container)
@@ -175,7 +174,7 @@ function ClassHUD:Layout()
     end
   end
 
-  -- BOTTOM container (always keep at least 1px so it doesn't collapse)
+  -- BOTTOM container
   do
     local container = containers.BOTTOM
     if container then
@@ -184,35 +183,49 @@ function ClassHUD:Layout()
     end
   end
 
-  -- Kjederekkefølge – ALDRI hopp over containere selv om høyden er 0
-  local order      = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+  -- Buff containers
+  local trackedIcons = UI.attachments.TRACKED_ICONS
+  local trackedBars  = UI.attachments.TRACKED_BARS
+  local anchor       = UI.anchor
+  local y            = 0
 
-  local previous   = UI.anchor
-  local prevHeight = 0
-  for _, name in ipairs(order) do
-    local container = containers[name]
-    container:SetWidth(w)
+  local function place(container)
+    if not container or not container:IsShown() then return end
+    local h = container._height or 0
+    local g = (container._afterGap ~= nil) and container._afterGap or gap
     container:ClearAllPoints()
-
-    if previous == UI.anchor then
-      container:SetPoint("TOPLEFT", previous, "TOPLEFT", 0, 0)
-      container:SetPoint("TOPRIGHT", previous, "TOPRIGHT", 0, 0)
-    else
-      -- kun legg inn gap hvis forrige faktisk hadde høyde
-      local offset = (prevHeight > 0) and gap or 0
-      if previous._afterGap ~= nil then
-        offset = previous._afterGap
-        previous._afterGap = nil
-      end
-      container:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -offset)
-      container:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, -offset)
-    end
-
-    previous   = container
-    prevHeight = container._height or 0
+    container:SetPoint("TOP", anchor, "TOP", 0, -y)
+    y = y + h + g
   end
 
-  -- Side-ankere (for ikonkolonner). Må alltid eksistere.
+  -- Alltid: Icons først, så Buff bars
+  if db.show.buffs then
+    place(trackedIcons)
+    place(trackedBars)
+  end
+
+  -- Sanitér barOrder
+  local order = db.barOrder
+  if type(order) ~= "table" or #order == 0 then
+    order = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+    db.barOrder = order
+  end
+  local fixed = {}
+  for _, key in ipairs(order) do
+    if containers[key] then table.insert(fixed, key) end
+  end
+  if #fixed == 0 then
+    fixed = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+  end
+  order = fixed
+  db.barOrder = fixed
+
+  -- Legg ut i valgt rekkefølge
+  for _, key in ipairs(order) do
+    place(containers[key])
+  end
+
+  -- Side-ankere
   local left = UI.attachments.LEFT
   if not left then
     UI.attachments.LEFT = CreateFrame("Frame", "ClassHUDAttachLEFT", UI.anchor)

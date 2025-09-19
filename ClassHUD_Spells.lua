@@ -22,42 +22,17 @@ local function EnsureAttachment(name)
   if not UI.attachments[name] then
     UI.attachments[name] = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
     UI.attachments[name]._height = 0
+    -- Sørg for forutsigbar z-order
+    local baseLevel = UI.anchor:GetFrameLevel() or 0
+    if name == "TRACKED_ICONS" then
+      UI.attachments[name]:SetFrameLevel(baseLevel + 40)
+    elseif name == "TRACKED_BARS" then
+      UI.attachments[name]:SetFrameLevel(baseLevel + 30)
+    else
+      UI.attachments[name]:SetFrameLevel(baseLevel + 10)
+    end
   end
   return UI.attachments[name]
-end
-
--- Overlay-glow helper: dedup + fallback til SpellAlertManager hvis Show/HideOverlayGlow ikke finnes
-local function SetOverlayGlow(frame, enable)
-  if enable then
-    if not frame.isGlowing then
-      if ActionButton_ShowOverlayGlow then
-        ActionButton_ShowOverlayGlow(frame)
-      else
-        ActionButtonSpellAlertManager:ShowAlert(frame)
-      end
-      frame.isGlowing = true
-    end
-  else
-    if frame.isGlowing then
-      if ActionButton_HideOverlayGlow then
-        ActionButton_HideOverlayGlow(frame)
-      else
-        ActionButtonSpellAlertManager:HideAlert(frame)
-      end
-      frame.isGlowing = false
-    end
-  end
-end
-
-
-local function CopyColor(tbl)
-  if type(tbl) ~= "table" then return nil end
-  return {
-    r = tbl.r or 1,
-    g = tbl.g or 1,
-    b = tbl.b or 1,
-    a = tbl.a or 1,
-  }
 end
 
 local function CollectAuraSpellIDs(entry, primaryID)
@@ -491,31 +466,24 @@ local function LayoutTrackedIcons(iconFrames, opts)
   local container = EnsureAttachment("TRACKED_ICONS")
   if not container then return end
 
-  container:ClearAllPoints()
-  container:SetPoint("BOTTOM", UI.attachments.TOP, "TOP", 0, 4) -- 4 px over Top bar
-  container:SetWidth(ClassHUD.db.profile.width or 250)
-
-  local settings   = ClassHUD.db.profile.trackedBuffBar or {}
-  local width      = ClassHUD.db.profile.width or 250
-  local perRow     = math.max(settings.perRow or 8, 1)
-  local spacingX   = settings.spacingX or 4
-  local spacingY   = settings.spacingY or 4
-  local align      = settings.align or "CENTER"
-  local topPadding = 0
-
-  if #iconFrames > 0 then
-    topPadding = (opts and opts.topPadding) or 0
-  end
+  local db       = ClassHUD.db.profile
+  local settings = db.trackedBuffBar or {}
+  local width    = db.width or 250
+  local perRow   = math.max(settings.perRow or 8, 1)
+  local spacingX = settings.spacingX or 4
+  local spacingY = settings.spacingY or 4
+  local align    = settings.align or "CENTER"
 
   container:SetWidth(width)
 
+  local topPadding = (#iconFrames > 0) and ((opts and opts.topPadding) or 0) or 0
   local totalHeight = 0
 
   if #iconFrames > 0 then
     local size = (width - (perRow - 1) * spacingX) / perRow
     if size < 1 then size = 1 end
 
-    local count = #iconFrames
+    local count    = #iconFrames
     local rowsUsed = math.ceil(count / perRow)
 
     for index, frame in ipairs(iconFrames) do
@@ -523,12 +491,12 @@ local function LayoutTrackedIcons(iconFrames, opts)
       frame:SetSize(size, size)
       frame:ClearAllPoints()
 
-      local row = math.floor((index - 1) / perRow)
-      local col = (index - 1) % perRow
+      local row       = math.floor((index - 1) / perRow)
+      local col       = (index - 1) % perRow
 
       local remaining = count - row * perRow
-      local rowCount = math.min(perRow, remaining)
-      local rowWidth = rowCount * size + math.max(0, rowCount - 1) * spacingX
+      local rowCount  = math.min(perRow, remaining)
+      local rowWidth  = rowCount * size + math.max(0, rowCount - 1) * spacingX
 
       local startX
       if align == "LEFT" then
@@ -545,19 +513,19 @@ local function LayoutTrackedIcons(iconFrames, opts)
       frame:Show()
     end
 
+    -- total høyde = padding + rader
     local iconsHeight = rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY
     totalHeight = topPadding + iconsHeight
+    container:Show()
   else
-    -- ingen aktive buffs → hold containeren i live med 1 px høyde
-    totalHeight = 1
+    totalHeight = 0
+    container:Hide()
   end
 
-  container._height = totalHeight
-  container:SetHeight(totalHeight)
-  container._afterGap = nil
-  container:Show()
+  -- sørg for at Layout() alltid har riktige verdier
+  container._height   = totalHeight
+  container._afterGap = (#iconFrames > 0) and (db.spacing or 2) or 0
 end
-
 
 
 
@@ -722,69 +690,6 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
   end
 
   frame:Show()
-end
-
-local function ConfigureTrackedBarFrame(frame, entry, config)
-  frame:SetParent(EnsureAttachment("TRACKED_BARS") or UI.anchor)
-
-  frame.snapshotEntry = entry
-  frame.config = config
-
-  local candidates = CollectAuraSpellIDs(entry, frame.buffID)
-  local displaySpellID, displayName, displayIcon = ClassHUD:ResolveTrackedBarDisplay(entry, frame.buffID, candidates)
-
-  frame.auraSpellIDs = candidates
-  frame.displaySpellID = displaySpellID
-  frame.cooldownSpellID = (entry and entry.spellID) or frame.buffID
-
-  local color = CopyColor(config.barColor) or CopyColor(ClassHUD:GetDefaultTrackedBarColor())
-  frame._activeColor = color
-  frame._inactiveColor = frame._inactiveColor or CopyColor(INACTIVE_BAR_COLOR)
-
-  frame:SetStatusBarColor(color.r, color.g, color.b, color.a)
-
-  frame.label:SetFont(ClassHUD:FetchFont(12))
-  frame.timer:SetFont(ClassHUD:FetchFont(12))
-  if frame.stacks then
-    frame.stacks:SetFont(ClassHUD:FetchFont(12))
-    frame.stacks:Hide()
-  end
-
-  frame.defaultLabel = displayName
-  frame.label:SetText(displayName)
-
-  local iconID = displayIcon or (displaySpellID and C_Spell.GetSpellTexture(displaySpellID))
-  if not iconID then
-    iconID = entry and entry.iconID
-  end
-  if not iconID and frame.buffID then
-    iconID = C_Spell.GetSpellTexture(frame.buffID)
-  end
-
-  local height = ClassHUD.db.profile.trackedBuffBar.height or 16
-
-  if config.barShowIcon ~= false then
-    frame.icon:SetTexture(iconID or 134400)
-    frame.icon:SetSize(height, height)
-    frame.icon:Show()
-    frame.icon:ClearAllPoints()
-    frame.icon:SetPoint("LEFT", frame, "LEFT", 0, 0)
-    frame.label:ClearAllPoints()
-    frame.label:SetPoint("LEFT", frame.icon, "RIGHT", 4, 0)
-  else
-    frame.icon:Hide()
-    frame.label:ClearAllPoints()
-    frame.label:SetPoint("LEFT", frame, "LEFT", 4, 0)
-  end
-
-  frame._showTimer = config.barShowTimer ~= false
-  if not frame._showTimer and frame.timer then
-    frame.timer:Hide()
-  end
-  if frame.timer then
-    frame.timer:ClearAllPoints()
-    frame.timer:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -2)
-  end
 end
 
 local function UpdateTrackedBarFrame(frame)
@@ -1106,6 +1011,12 @@ function ClassHUD:BuildFramesForSpec()
   self.db.profile.utilityPlacement[class][specID] = self.db.profile.utilityPlacement[class][specID] or {}
 
   local placements = self.db.profile.utilityPlacement[class][specID]
+  local order = self.db.profile.barOrder or {}
+  if order[1] ~= "TOP" then
+    self.db.profile.topBar.grow = "DOWN"
+  else
+    self.db.profile.topBar.grow = "UP"
+  end
 
 
   local topFrames, bottomFrames = {}, {}
@@ -1149,6 +1060,24 @@ function ClassHUD:BuildFramesForSpec()
       placeSpell(spellID, placement)
     end
   end
+
+  -- Auto-grow for Top-bar basert på plassering
+  do
+    local order = self.db.profile.barOrder or {}
+    local topIndex
+    for i, key in ipairs(order) do
+      if key == "TOP" then
+        topIndex = i
+        break
+      end
+    end
+    if topIndex and topIndex > 1 then
+      self.db.profile.topBar.grow = "DOWN"
+    else
+      self.db.profile.topBar.grow = "UP"
+    end
+  end
+
 
   LayoutTopBar(topFrames)
   LayoutBottomBar(bottomFrames)
