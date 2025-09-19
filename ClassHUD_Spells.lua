@@ -26,6 +26,30 @@ local function EnsureAttachment(name)
   return UI.attachments[name]
 end
 
+-- Overlay-glow helper: dedup + fallback til SpellAlertManager hvis Show/HideOverlayGlow ikke finnes
+local function SetOverlayGlow(frame, enable)
+  if enable then
+    if not frame.isGlowing then
+      if ActionButton_ShowOverlayGlow then
+        ActionButton_ShowOverlayGlow(frame)
+      else
+        ActionButtonSpellAlertManager:ShowAlert(frame)
+      end
+      frame.isGlowing = true
+    end
+  else
+    if frame.isGlowing then
+      if ActionButton_HideOverlayGlow then
+        ActionButton_HideOverlayGlow(frame)
+      else
+        ActionButtonSpellAlertManager:HideAlert(frame)
+      end
+      frame.isGlowing = false
+    end
+  end
+end
+
+
 local function CopyColor(tbl)
   if type(tbl) ~= "table" then return nil end
   return {
@@ -76,20 +100,28 @@ local function CreateSpellFrame(spellID)
   frame.icon = frame:CreateTexture(nil, "ARTWORK")
   frame.icon:SetAllPoints(frame)
 
-  frame.count = frame:CreateFontString(nil, "OVERLAY")
-  frame.count:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 2)
-  frame.count:SetFont(ClassHUD:FetchFont(14))
-  frame.count:Hide()
-
+  -- Cooldown
   frame.cooldown = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
   frame.cooldown:SetAllPoints(frame)
   frame.cooldown:SetHideCountdownNumbers(true)
   frame.cooldown.noCooldownCount = true
 
-  frame.cooldownText = frame:CreateFontString(nil, "OVERLAY")
+  -- Overlay-frame (alltid over cooldown)
+  frame.overlay = CreateFrame("Frame", nil, frame)
+  frame.overlay:SetAllPoints(frame)
+  frame.overlay:SetFrameLevel(frame.cooldown:GetFrameLevel() + 1)
+
+  -- Flytt tekstene til overlay
+  frame.count = frame.overlay:CreateFontString(nil, "OVERLAY")
+  frame.count:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 2)
+  frame.count:SetFont(ClassHUD:FetchFont(14))
+  frame.count:Hide()
+
+  frame.cooldownText = frame.overlay:CreateFontString(nil, "OVERLAY")
   frame.cooldownText:SetPoint("CENTER", frame, "CENTER", 0, 0)
   frame.cooldownText:SetFont(ClassHUD:FetchFont(16))
   frame.cooldownText:Hide()
+
 
   frame._cooldownEnd = nil
   frame.spellID = spellID
@@ -503,6 +535,12 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
 
   if aura and aura.expirationTime and aura.duration and aura.duration > 0 then
     CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
+    if frame.overlay and frame.cooldown then
+      local need = frame.cooldown:GetFrameLevel() + 1
+      if frame.overlay:GetFrameLevel() <= need then
+        frame.overlay:SetFrameLevel(need)
+      end
+    end
   else
     CooldownFrame_Clear(frame.cooldown)
   end
@@ -809,22 +847,18 @@ local function UpdateSpellFrame(frame)
     frame.count:Show()
     chargesShown = true
 
-    if current <= 0 and ch.cooldownStartTime and ch.cooldownDuration and ch.cooldownDuration > 0 then
+    if current < ch.maxCharges and ch.cooldownStartTime and ch.cooldownDuration and ch.cooldownDuration > 0 then
+      -- alltid vis nedtelling til neste charge
       cdStart = ch.cooldownStartTime
       cdDuration = ch.cooldownDuration
-      shouldDesaturate = true
     end
-  else
-    frame.count:Hide()
-    local cd = C_Spell.GetSpellCooldown(sid)
-    if cd and cd.startTime and cd.duration and cd.duration > 1.5 then
-      cdStart = cd.startTime
-      cdDuration = cd.duration
-      shouldDesaturate = true
-    end
+
+    -- desaturer kun hvis du faktisk har 0 charges
+    shouldDesaturate = (current <= 0)
   end
 
-  -- GCD overlay (spellID 61304)
+
+  -- GCD overlay (spellID 61304) – uten tekst
   do
     local gcd = C_Spell.GetSpellCooldown(61304)
     if gcd and gcd.startTime and gcd.duration and gcd.duration > 0 then
@@ -839,6 +873,13 @@ local function UpdateSpellFrame(frame)
 
   if cdStart and cdDuration then
     CooldownFrame_Set(frame.cooldown, cdStart, cdDuration, true)
+    if frame.overlay and frame.cooldown then
+      local need = frame.cooldown:GetFrameLevel() + 1
+      if frame.overlay:GetFrameLevel() <= need then
+        frame.overlay:SetFrameLevel(need)
+      end
+    end
+
     frame._cooldownEnd = cdStart + cdDuration
   else
     CooldownFrame_Clear(frame.cooldown)
@@ -848,34 +889,65 @@ local function UpdateSpellFrame(frame)
   frame.icon:SetDesaturated(shouldDesaturate)
 
   -- =====================
-  -- Aura overlay + glow
+  -- Aura / overlay + GLOW (én sannhet)
   -- =====================
-  local auraID = nil
-  if data then
-    if data.buff then
-      auraID = data.buff.overrideSpellID or (data.buff.linkedSpellIDs and data.buff.linkedSpellIDs[1]) or
-          data.buff.spellID
-    elseif data.bar then
-      auraID = data.bar.overrideSpellID or (data.bar.linkedSpellIDs and data.bar.linkedSpellIDs[1]) or data.bar.spellID
+
+  -- 1) Finn "riktig" aura for denne knappen via snapshot-kandidatene
+  local candidates = ClassHUD:GetAuraCandidatesForEntry(entry, sid) -- bruker alle buff/linked IDs
+  local aura, auraSpellID = ClassHUD:FindAuraFromCandidates(candidates, { "player", "pet" })
+
+  -- 2) Beregn shouldGlow: direkte aura ELLER lenket buff (manuell) ELLER automap
+  local shouldGlow = false
+  if aura then
+    shouldGlow = true
+  else
+    -- manuelt buffLink
+    local class, specID = ClassHUD:GetPlayerClassSpec()
+    local links = (ClassHUD.db.profile.buffLinks[class] and ClassHUD.db.profile.buffLinks[class][specID]) or {}
+    for buffID, linkedSpellID in pairs(links) do
+      if linkedSpellID == sid then
+        if ClassHUD:GetAuraForSpell(buffID, { "player", "pet" }) then
+          shouldGlow = true
+          break
+        end
+      end
+    end
+    -- automap
+    if not shouldGlow and ClassHUD.trackedBuffToSpell then
+      for buffID, linkedSpellID in pairs(ClassHUD.trackedBuffToSpell) do
+        if linkedSpellID == sid then
+          if ClassHUD:GetAuraForSpell(buffID, { "player", "pet" }) then
+            shouldGlow = true
+            break
+          end
+        end
+      end
     end
   end
-  auraID = auraID or sid
 
-  local aura = ClassHUD:GetAuraForSpell(auraID)
+  -- 3) Selve glow-toggle (idempotent)
+  SetOverlayGlow(frame, shouldGlow)
 
+  -- 4) Auraswipe (gul) + stacks hvis aura faktisk har timer
   if aura then
     local stacks = aura.applications or aura.stackCount or aura.charges or 0
-
-    if not frame.isGlowing then
-      ActionButtonSpellAlertManager:ShowAlert(frame)
-      frame.isGlowing = true
-    end
-
     if aura.duration and aura.duration > 0 and aura.expirationTime then
+      -- Aura med varighet → gul swipe
       frame.cooldown:SetSwipeColor(1, 0.85, 0.1, 0.9)
       CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
+      if frame.overlay and frame.cooldown then
+        local need = frame.cooldown:GetFrameLevel() + 1
+        if frame.overlay:GetFrameLevel() <= need then
+          frame.overlay:SetFrameLevel(need)
+        end
+      end
+
       frame._cooldownEnd = aura.expirationTime
       frame.icon:SetVertexColor(1, 1, 0.3)
+    else
+      -- Aura uten varighet → bruk lys "vanlig" swipe
+      frame.cooldown:SetSwipeColor(0, 0, 0, 0.25)
+      frame.icon:SetVertexColor(1, 1, 1)
     end
 
     if stacks > 1 and not chargesShown then
@@ -883,47 +955,25 @@ local function UpdateSpellFrame(frame)
       frame.count:Show()
     end
   else
-    if frame.isGlowing then
-      local keepGlow = false
-      local map = ClassHUD.trackedBuffToSpell
-      if map then
-        for buffID, mappedSpellID in pairs(map) do
-          if mappedSpellID == frame.spellID then
-            local auraCheck = ClassHUD:GetAuraForSpell(buffID)
-            if auraCheck then
-              keepGlow = true
-              break
-            end
-          end
-        end
-      end
-      if not keepGlow then
-        ActionButtonSpellAlertManager:HideAlert(frame)
-        frame.isGlowing = false
-      end
-    end
-    frame.cooldown:SetSwipeColor(0, 0, 0, 0.8)
+    -- Ingen aura → lysere cooldown swipe (ikke blackout)
+    frame.cooldown:SetSwipeColor(0, 0, 0, 0.25)
     frame.icon:SetVertexColor(1, 1, 1)
   end
 
+
   -- =====================
-  -- Fix: cooldown tekst
+  -- Cooldown-tekst: aldri for GCD, aldri "0"
   -- =====================
   if frame._cooldownEnd then
     local remain = frame._cooldownEnd - GetTime()
-    if remain <= 0 then
+    if remain <= 0 or gcdActive then
       frame.cooldownText:SetText("")
       frame.cooldownText:Hide()
     else
-      if not gcdActive then -- ikke vis tekst for GCD
-        local secs = math.floor(remain + 0.5)
-        if secs > 0 then
-          frame.cooldownText:SetText(secs)
-          frame.cooldownText:Show()
-        else
-          frame.cooldownText:SetText("")
-          frame.cooldownText:Hide()
-        end
+      local secs = math.floor(remain + 0.5)
+      if secs > 0 and not gcdActive then
+        frame.cooldownText:SetText(secs)
+        frame.cooldownText:Show()
       else
         frame.cooldownText:SetText("")
         frame.cooldownText:Hide()
@@ -934,7 +984,6 @@ local function UpdateSpellFrame(frame)
     frame.cooldownText:Hide()
   end
 end
-
 
 
 
@@ -966,28 +1015,28 @@ function ClassHUD:UpdateAllFrames()
     if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
       aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
     end
-    if aura then
-      local frame = self.spellFrames[spellID]
-      if frame and not frame.isGlowing then
-        ActionButtonSpellAlertManager:ShowAlert(frame)
-        frame.isGlowing = true
-      end
-    end
+    -- if aura then
+    --   local frame = self.spellFrames[spellID]
+    --   if frame and not frame.isGlowing then
+    --     ActionButtonSpellAlertManager:ShowAlert(frame)
+    --     frame.isGlowing = true
+    --   end
+    -- end
   end
 
   -- Glow spells basert på tracked buff matches
-  if self.trackedBuffToSpell then
-    for buffID, spellID in pairs(self.trackedBuffToSpell) do
-      local aura = self:GetAuraForSpell(buffID)
-      if aura then
-        local frame = self.spellFrames[spellID]
-        if frame and not frame.isGlowing then
-          ActionButtonSpellAlertManager:ShowAlert(frame)
-          frame.isGlowing = true
-        end
-      end
-    end
-  end
+  -- if self.trackedBuffToSpell then
+  --   for buffID, spellID in pairs(self.trackedBuffToSpell) do
+  --     local aura = self:GetAuraForSpell(buffID)
+  --     if aura then
+  --       local frame = self.spellFrames[spellID]
+  --       if frame and not frame.isGlowing then
+  --         ActionButtonSpellAlertManager:ShowAlert(frame)
+  --         frame.isGlowing = true
+  --       end
+  --     end
+  --   end
+  -- end
 end
 
 function ClassHUD:BuildFramesForSpec()
