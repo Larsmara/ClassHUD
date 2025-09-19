@@ -190,19 +190,19 @@ function ClassHUD:Layout()
   local y            = 0
 
   local function place(container)
-    if not container or not container:IsShown() then return end
+    if not container then return end
     local h = container._height or 0
     local g = (container._afterGap ~= nil) and container._afterGap or gap
     container:ClearAllPoints()
     container:SetPoint("TOP", anchor, "TOP", 0, -y)
-    y = y + h + g
+    if container:IsShown() then
+      y = y + h + g
+    end
   end
 
   -- Alltid: Icons først, så Buff bars
-  if db.show.buffs then
-    place(trackedIcons)
-    place(trackedBars)
-  end
+  place(trackedIcons)
+  place(trackedBars)
 
   -- Sanitér barOrder
   local order = db.barOrder

@@ -20,20 +20,25 @@ local function EnsureAttachment(name)
   if not UI.anchor then return nil end
   UI.attachments = UI.attachments or {}
   if not UI.attachments[name] then
-    UI.attachments[name] = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
-    UI.attachments[name]._height = 0
-    -- Sørg for forutsigbar z-order
-    local baseLevel = UI.anchor:GetFrameLevel() or 0
+    local f = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
+    UI.attachments[name] = f
+    f._height = 0
+
+    local baseLvl = UI.anchor:GetFrameLevel() or 0
     if name == "TRACKED_ICONS" then
-      UI.attachments[name]:SetFrameLevel(baseLevel + 40)
+      f:SetFrameStrata("HIGH")
+      f:SetFrameLevel(baseLvl + 40)
     elseif name == "TRACKED_BARS" then
-      UI.attachments[name]:SetFrameLevel(baseLevel + 30)
+      f:SetFrameStrata("MEDIUM")
+      f:SetFrameLevel(baseLvl + 30)
     else
-      UI.attachments[name]:SetFrameLevel(baseLevel + 10)
+      f:SetFrameStrata("LOW")
+      f:SetFrameLevel(baseLvl + 10)
     end
   end
   return UI.attachments[name]
 end
+
 
 local function CollectAuraSpellIDs(entry, primaryID)
   return ClassHUD:GetAuraCandidatesForEntry(entry, primaryID)
@@ -316,15 +321,17 @@ local function CreateBuffFrame(buffID)
   end
 
   local parent = (UI.attachments and UI.attachments.TRACKED_ICONS) or UI.anchor
-  local f = CreateFrame("Frame", nil, parent)
+  local f = CreateFrame("Frame", "ClassHUDBuff" .. buffID, parent)
+  f:SetFrameLevel((parent:GetFrameLevel() or 0) + 1)
   f:SetSize(32, 32)
 
   f.icon = f:CreateTexture(nil, "ARTWORK")
-  f.icon:SetAllPoints(true)
+  f.icon:SetAllPoints(f)    -- 👈 riktig bruk
   f.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  f.icon:SetTexture(134400) -- 👈 fallback ikon (spørsmålstegn)
 
   f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
-  f.cooldown:SetAllPoints(true)
+  f.cooldown:SetAllPoints(f)
 
   f.count = f:CreateFontString(nil, "OVERLAY")
   f.count:SetPoint("BOTTOMRIGHT", -2, 2)
@@ -335,8 +342,11 @@ local function CreateBuffFrame(buffID)
   f.buffID = buffID
   trackedBuffPool[buffID] = f
 
+  f:Show() -- 👈 sørg for at det faktisk vises
+
   return f
 end
+
 
 local function OnTrackedBarUpdate(self)
   if not self._duration or not self._expiration then
@@ -476,55 +486,43 @@ local function LayoutTrackedIcons(iconFrames, opts)
 
   container:SetWidth(width)
 
-  local topPadding = (#iconFrames > 0) and ((opts and opts.topPadding) or 0) or 0
-  local totalHeight = 0
+  local size = (width - (perRow - 1) * spacingX) / perRow
+  if size < 1 then size = 1 end
 
-  if #iconFrames > 0 then
-    local size = (width - (perRow - 1) * spacingX) / perRow
-    if size < 1 then size = 1 end
+  -- alltid minst én rad høyde
+  local rowsUsed = math.max(1, math.ceil(#iconFrames / perRow))
+  local totalHeight = rowsUsed * size + (rowsUsed - 1) * spacingY
 
-    local count    = #iconFrames
-    local rowsUsed = math.ceil(count / perRow)
+  for index, frame in ipairs(iconFrames) do
+    frame:SetParent(container)
+    frame:SetSize(size, size)
+    frame:ClearAllPoints()
 
-    for index, frame in ipairs(iconFrames) do
-      frame:SetParent(container)
-      frame:SetSize(size, size)
-      frame:ClearAllPoints()
+    local row       = math.floor((index - 1) / perRow)
+    local col       = (index - 1) % perRow
 
-      local row       = math.floor((index - 1) / perRow)
-      local col       = (index - 1) % perRow
+    local remaining = #iconFrames - row * perRow
+    local rowCount  = math.max(1, math.min(perRow, remaining))
+    local rowWidth  = rowCount * size + math.max(0, rowCount - 1) * spacingX
 
-      local remaining = count - row * perRow
-      local rowCount  = math.min(perRow, remaining)
-      local rowWidth  = rowCount * size + math.max(0, rowCount - 1) * spacingX
-
-      local startX
-      if align == "LEFT" then
-        startX = 0
-      elseif align == "RIGHT" then
-        startX = width - rowWidth
-      else
-        startX = (width - rowWidth) / 2
-      end
-
-      frame:SetPoint("TOPLEFT", container, "TOPLEFT",
-        startX + col * (size + spacingX),
-        -(topPadding + row * (size + spacingY)))
-      frame:Show()
+    local startX
+    if align == "LEFT" then
+      startX = 0
+    elseif align == "RIGHT" then
+      startX = width - rowWidth
+    else
+      startX = (width - rowWidth) / 2 -- sentrert
     end
 
-    -- total høyde = padding + rader
-    local iconsHeight = rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY
-    totalHeight = topPadding + iconsHeight
-    container:Show()
-  else
-    totalHeight = 0
-    container:Hide()
+    frame:SetPoint("TOPLEFT", container, "TOPLEFT",
+      startX + col * (size + spacingX),
+      -(row * (size + spacingY)))
   end
 
-  -- sørg for at Layout() alltid har riktige verdier
+  container:SetHeight(totalHeight)
   container._height   = totalHeight
-  container._afterGap = (#iconFrames > 0) and (db.spacing or 2) or 0
+  container._afterGap = db.spacing or 2
+  container:Show()
 end
 
 
@@ -670,12 +668,6 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
 
   if aura and aura.expirationTime and aura.duration and aura.duration > 0 then
     CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
-    if frame.overlay and frame.cooldown then
-      local need = frame.cooldown:GetFrameLevel() + 1
-      if frame.overlay:GetFrameLevel() <= need then
-        frame.overlay:SetFrameLevel(need)
-      end
-    end
   else
     CooldownFrame_Clear(frame.cooldown)
   end
@@ -691,6 +683,7 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
 
   frame:Show()
 end
+
 
 local function UpdateTrackedBarFrame(frame)
   local buffID = frame.buffID
@@ -771,6 +764,7 @@ local function UpdateTrackedBarFrame(frame)
 end
 
 function ClassHUD:BuildTrackedBuffFrames()
+  -- Skjul gamle frames
   if self.trackedBuffFrames then
     for _, frame in ipairs(self.trackedBuffFrames) do
       frame:Hide()
@@ -786,6 +780,7 @@ function ClassHUD:BuildTrackedBuffFrames()
   wipe(self.trackedBuffFrames)
   wipe(self.trackedBarFrames)
 
+  -- Sørg for containere
   EnsureAttachment("TRACKED_ICONS")
   EnsureAttachment("TRACKED_BARS")
 
@@ -832,9 +827,9 @@ function ClassHUD:BuildTrackedBuffFrames()
       table.insert(ordered, {
         buffID = buffID,
         config = config,
-        entry = entry,
-        order = order,
-        name = name,
+        entry  = entry,
+        order  = order,
+        name   = name,
       })
     end
   end
@@ -847,31 +842,35 @@ function ClassHUD:BuildTrackedBuffFrames()
   end)
 
   local iconFrames = {}
-  local barFrames = {}
+  local barFrames  = {}
 
   for _, info in ipairs(ordered) do
-    local buffID = info.buffID
-    local config = info.config
-    local entry = info.entry
+    local buffID         = info.buffID
+    local entry          = info.entry
     local auraCandidates = CollectAuraSpellIDs(entry, buffID)
+    local aura           = FindAuraFromCandidates(auraCandidates)
 
-    if config.showIcon then
-      local aura = FindAuraFromCandidates(auraCandidates)
-      if aura then
-        local iconFrame = CreateBuffFrame(buffID)
-        PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
-        table.insert(iconFrames, iconFrame)
-      end
+    local iconFrame      = CreateBuffFrame(buffID)
+    PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
+
+    if aura then
+      iconFrame:Show()
+    else
+      iconFrame:Hide()
     end
+
+    table.insert(iconFrames, iconFrame)
   end
 
   self.trackedBuffFrames = iconFrames
-  self.trackedBarFrames = barFrames
-  local settings = self.db.profile.trackedBuffBar or {}
-  local yOffset = settings.yOffset or 0
+  self.trackedBarFrames  = barFrames
 
-  local barTopPadding = (#barFrames > 0) and yOffset or 0
-  local iconTopPadding = (#barFrames == 0 and #iconFrames > 0) and yOffset or 0
+  local settings         = self.db.profile.trackedBuffBar or {}
+  local yOffset          = settings.yOffset or 0
+
+  local barTopPadding    = (#barFrames > 0) and yOffset or 0
+  local iconTopPadding   = (#barFrames == 0 and #iconFrames > 0) and yOffset or 0
+
   LayoutTrackedBars(barFrames, { topPadding = barTopPadding })
   LayoutTrackedIcons(iconFrames, { topPadding = iconTopPadding })
 
