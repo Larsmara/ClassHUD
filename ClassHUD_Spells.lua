@@ -200,7 +200,6 @@ end
 
 
 local function UpdateCooldownText(frame, gcdActive)
-  -- Kortslutt: aldri tekst for GCD
   if gcdActive then
     frame.cooldownText:SetText("")
     frame.cooldownText:Hide()
@@ -209,24 +208,20 @@ local function UpdateCooldownText(frame, gcdActive)
 
   if frame._cooldownEnd then
     local remain = frame._cooldownEnd - GetTime()
-    if remain <= 0 then
+    if remain > 0 then
+      local secs = ClassHUD.FormatSeconds(remain)
+      frame.cooldownText:SetText(secs or "")
+      frame.cooldownText:Show()
+    else
       frame.cooldownText:SetText("")
       frame.cooldownText:Hide()
-    else
-      local secs = math.floor(remain + 0.5)
-      if secs > 0 then
-        frame.cooldownText:SetText(secs)
-        frame.cooldownText:Show()
-      else
-        frame.cooldownText:SetText("")
-        frame.cooldownText:Hide()
-      end
     end
   else
     frame.cooldownText:SetText("")
     frame.cooldownText:Hide()
   end
 end
+
 
 
 
@@ -280,28 +275,24 @@ local function CreateSpellFrame(spellID)
   frame:SetScript("OnUpdate", function(selfFrame)
     if selfFrame._cooldownEnd then
       local remain = selfFrame._cooldownEnd - GetTime()
-      if remain <= 0 then
-        selfFrame._cooldownEnd = nil
-        selfFrame.cooldownText:SetText("")
-        selfFrame.cooldownText:Hide()
-        selfFrame.icon:SetDesaturated(false)
-      else
-        if not selfFrame._gcdActive then -- 👈 aldri vis tekst på GCD
-          local secs = math.floor(remain + 0.5)
-          if secs > 0 then
-            selfFrame.cooldownText:SetText(secs)
-            selfFrame.cooldownText:Show()
-          else
-            selfFrame.cooldownText:SetText("")
-            selfFrame.cooldownText:Hide()
-          end
+      if remain > 0 then
+        if not selfFrame._gcdActive then
+          local secs = ClassHUD.FormatSeconds(remain)
+          selfFrame.cooldownText:SetText(secs or "")
+          selfFrame.cooldownText:Show()
         else
           selfFrame.cooldownText:SetText("")
           selfFrame.cooldownText:Hide()
         end
+      else
+        selfFrame._cooldownEnd = nil
+        selfFrame.cooldownText:SetText("")
+        selfFrame.cooldownText:Hide()
+        selfFrame.icon:SetDesaturated(false)
       end
     end
   end)
+
 
 
   return frame
