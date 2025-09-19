@@ -445,6 +445,7 @@ local function LayoutTrackedBars(barFrames, opts)
   local spacingY   = settings.spacingY or 4
   local barHeight  = settings.height or 16
   local topPadding = 0
+  local spacing    = (ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.spacing) or 0
 
   if #barFrames > 0 then
     topPadding = (opts and opts.topPadding) or 0
@@ -481,7 +482,7 @@ local function LayoutTrackedBars(barFrames, opts)
     totalHeight = math.max(totalHeight, 0)
     container._height = totalHeight
     container:SetHeight(totalHeight)
-    container._afterGap = nil
+    container._afterGap = spacing
   end
 
   container:Show()
@@ -492,7 +493,12 @@ local function LayoutTrackedIcons(iconFrames, opts)
   if not container then return end
 
   container:ClearAllPoints()
-  container:SetPoint("BOTTOM", UI.attachments.TOP, "TOP", 0, 4) -- 4 px over Top bar
+  local anchor = EnsureAttachment("TRACKED_BARS") or UI.attachments.TOP or UI.anchor
+  if anchor then
+    container:SetPoint("BOTTOM", anchor, "TOP", 0, 4) -- 4 px above buff bars (or fallback anchor)
+  else
+    container:SetPoint("BOTTOM", UI.anchor, "TOP", 0, 4)
+  end
   container:SetWidth(ClassHUD.db.profile.width or 250)
 
   local settings   = ClassHUD.db.profile.trackedBuffBar or {}

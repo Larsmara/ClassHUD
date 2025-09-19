@@ -143,6 +143,10 @@ local defaults = {
       height   = 16,
     },
 
+    layout           = {
+      order = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" },
+    },
+
     -- =========================
     -- Spell & Buff persistence
     -- =========================

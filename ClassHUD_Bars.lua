@@ -3,6 +3,114 @@
 local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local UI = ClassHUD.UI
 
+local VALID_LAYOUT_ENTRIES = {
+  TOP      = true,
+  CAST     = true,
+  HP       = true,
+  RESOURCE = true,
+  CLASS    = true,
+  BOTTOM   = true,
+}
+
+local DEFAULT_LAYOUT_ORDER = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+
+local function sanitizeLayoutOrder(order)
+  local sanitized = {}
+  local seen = {}
+
+  if type(order) == "table" then
+    for _, name in ipairs(order) do
+      if VALID_LAYOUT_ENTRIES[name] and not seen[name] then
+        table.insert(sanitized, name)
+        seen[name] = true
+      end
+    end
+  end
+
+  for _, name in ipairs(DEFAULT_LAYOUT_ORDER) do
+    if not seen[name] then
+      table.insert(sanitized, name)
+      seen[name] = true
+    end
+  end
+
+  return sanitized
+end
+
+local function ensureLayoutProfile(addon)
+  if not (addon and addon.db and addon.db.profile) then
+    return nil
+  end
+  addon.db.profile.layout = addon.db.profile.layout or {}
+  return addon.db.profile.layout
+end
+
+function ClassHUD:GetLayoutOrder()
+  local layout = ensureLayoutProfile(self)
+  if not layout then
+    local copy = {}
+    for i, name in ipairs(DEFAULT_LAYOUT_ORDER) do
+      copy[i] = name
+    end
+    return copy
+  end
+
+  layout.order = sanitizeLayoutOrder(layout.order)
+  return layout.order
+end
+
+function ClassHUD:SetLayoutOrder(newOrder)
+  local layout = ensureLayoutProfile(self)
+  if not layout then return end
+
+  layout.order = sanitizeLayoutOrder(newOrder)
+
+  if self.Layout then
+    self:Layout()
+  end
+end
+
+function ClassHUD:SetLayoutLeader(name)
+  if not VALID_LAYOUT_ENTRIES[name] then return end
+
+  local current = self:GetLayoutOrder()
+  local reordered = { name }
+  for _, entry in ipairs(current) do
+    if entry ~= name then
+      table.insert(reordered, entry)
+    end
+  end
+
+  self:SetLayoutOrder(reordered)
+end
+
+function ClassHUD:MoveLayoutEntry(name, delta)
+  if not VALID_LAYOUT_ENTRIES[name] then return end
+
+  local current = self:GetLayoutOrder()
+  local order = {}
+  for i, entry in ipairs(current) do
+    order[i] = entry
+  end
+
+  local index
+  for i, entry in ipairs(order) do
+    if entry == name then
+      index = i
+      break
+    end
+  end
+
+  if not index then return end
+
+  local target = index + (delta or 0)
+  if target < 1 or target > #order or target == index then return end
+
+  order[index], order[target] = order[target], order[index]
+
+  self:SetLayoutOrder(order)
+end
+
 -- Anchor
 function ClassHUD:CreateAnchor()
   local f = CreateFrame("Frame", "ClassHUDAnchor", UIParent, "BackdropTemplate")
@@ -60,7 +168,7 @@ function ClassHUD:CreatePowerContainer()
   UI.power = f
 end
 
--- Layout (top→bottom): tracked buffs → cast → hp → resource → power
+-- Layout helpers
 function ClassHUD:ApplyBarSkins()
   local tex = self:FetchStatusbar()
   local c   = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
@@ -111,12 +219,13 @@ function ClassHUD:Layout()
 
   -- Opprett/finn containere (ALLTID – kjeden må bestå)
   local containers = {
-    TOP      = ensure("TOP"),
-    CAST     = ensure("CAST"),
-    HP       = ensure("HP"),
-    RESOURCE = ensure("RESOURCE"),
-    CLASS    = ensure("CLASS"),
-    BOTTOM   = ensure("BOTTOM"),
+    TRACKED_BARS = ensure("TRACKED_BARS"),
+    TOP          = ensure("TOP"),
+    CAST         = ensure("CAST"),
+    HP           = ensure("HP"),
+    RESOURCE     = ensure("RESOURCE"),
+    CLASS        = ensure("CLASS"),
+    BOTTOM       = ensure("BOTTOM"),
   }
 
   local function layoutStatusBar(frame, containerName, enabled, height)
@@ -185,7 +294,13 @@ function ClassHUD:Layout()
   end
 
   -- Kjederekkefølge – ALDRI hopp over containere selv om høyden er 0
-  local order      = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+  local configuredOrder = self:GetLayoutOrder()
+  local order = { "TRACKED_BARS" }
+  for _, name in ipairs(configuredOrder) do
+    if containers[name] then
+      table.insert(order, name)
+    end
+  end
 
   local previous   = UI.anchor
   local prevHeight = 0
