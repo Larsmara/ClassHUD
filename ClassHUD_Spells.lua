@@ -86,6 +86,170 @@ function ClassHUD:RefreshSnapshotCache()
   end
 end
 
+-- =====================
+-- Helpers
+-- =====================
+
+local function UpdateSpellIcon(frame, sid, entry)
+  local iconID = entry and entry.iconID
+  if not iconID then
+    local s = C_Spell.GetSpellInfo(sid)
+    iconID = s and s.iconID
+  end
+  frame.icon:SetTexture(iconID or 134400)
+end
+
+local function UpdateCooldown(frame, sid, gcdActive)
+  local cdStart, cdDuration
+  local shouldDesaturate = false
+
+  -- Charges
+  local ch = C_Spell.GetSpellCharges(sid)
+  local chargesShown = false
+  if ch and ch.maxCharges and ch.maxCharges > 1 then
+    local current = ch.currentCharges or 0
+    frame.count:SetText(current)
+    frame.count:Show()
+    chargesShown = true
+
+    if current < ch.maxCharges and ch.cooldownStartTime and ch.cooldownDuration and ch.cooldownDuration > 0 then
+      cdStart = ch.cooldownStartTime
+      cdDuration = ch.cooldownDuration
+    end
+
+    shouldDesaturate = (current <= 0)
+  else
+    frame.count:Hide()
+    local cd = C_Spell.GetSpellCooldown(sid)
+    if cd and cd.startTime and cd.duration and cd.duration > 1.5 then
+      cdStart = cd.startTime
+      cdDuration = cd.duration
+      shouldDesaturate = true
+    end
+  end
+
+  -- GCD overlay (spellID 61304)
+  local gcd = C_Spell.GetSpellCooldown(61304)
+  if gcd and gcd.startTime and gcd.duration and gcd.duration > 0 then
+    if not cdStart or (gcd.startTime + gcd.duration) > (cdStart + cdDuration) then
+      cdStart    = gcd.startTime
+      cdDuration = gcd.duration
+      gcdActive  = true
+      -- Viktig: ikke sett frame._cooldownEnd for GCD, da vil teksten dukke opp
+    end
+  end
+
+  if cdStart and cdDuration then
+    CooldownFrame_Set(frame.cooldown, cdStart, cdDuration, true)
+
+    if not gcdActive then
+      frame._cooldownEnd = cdStart + cdDuration
+    else
+      frame._cooldownEnd = nil
+    end
+  else
+    CooldownFrame_Clear(frame.cooldown)
+    frame._cooldownEnd = nil
+  end
+
+
+  frame.icon:SetDesaturated(shouldDesaturate)
+  return chargesShown, gcdActive
+end
+
+local function UpdateAuraOverlay(frame, aura, chargesShown)
+  if aura then
+    local stacks = aura.applications or aura.stackCount or aura.charges or 0
+    if aura.duration and aura.duration > 0 and aura.expirationTime then
+      frame.cooldown:SetSwipeColor(1, 0.85, 0.1, 0.9)
+      CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
+      frame._cooldownEnd = aura.expirationTime
+      frame.icon:SetVertexColor(1, 1, 0.3)
+    else
+      frame.cooldown:SetSwipeColor(0, 0, 0, 0.25)
+      frame.icon:SetVertexColor(1, 1, 1)
+    end
+
+    if stacks > 1 and not chargesShown then
+      frame.count:SetText(stacks)
+      frame.count:Show()
+    end
+  else
+    frame.cooldown:SetSwipeColor(0, 0, 0, 0.25)
+    frame.icon:SetVertexColor(1, 1, 1)
+  end
+end
+
+-- Erstatt hele UpdateGlow med denne:
+local function UpdateGlow(frame, aura, sid, data)
+  -- 1) Samme semantikk som original: aura tilstede → glow
+  local shouldGlow = (aura ~= nil)
+
+  -- 2) Manuelle buffLinks kan holde glow (som originalt "keepGlow")
+  if not shouldGlow then
+    local class, specID = ClassHUD:GetPlayerClassSpec()
+    local links = (ClassHUD.db.profile.buffLinks[class] and ClassHUD.db.profile.buffLinks[class][specID]) or {}
+    -- links: [buffID] = linkedSpellID
+    for buffID, linkedSpellID in pairs(links) do
+      if linkedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
+        shouldGlow = true
+        break
+      end
+    end
+  end
+
+  -- 3) Auto-mapping fallback (som i originalens "keepGlow")
+  if not shouldGlow and ClassHUD.trackedBuffToSpell then
+    for buffID, mappedSpellID in pairs(ClassHUD.trackedBuffToSpell) do
+      if mappedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
+        shouldGlow = true
+        break
+      end
+    end
+  end
+
+  -- 4) Idempotent toggle (ikke spam Show/Hide)
+  if shouldGlow and not frame.isGlowing then
+    ActionButtonSpellAlertManager:ShowAlert(frame)
+    frame.isGlowing = true
+  elseif not shouldGlow and frame.isGlowing then
+    ActionButtonSpellAlertManager:HideAlert(frame)
+    frame.isGlowing = false
+  end
+end
+
+
+local function UpdateCooldownText(frame, gcdActive)
+  -- Kortslutt: aldri tekst for GCD
+  if gcdActive then
+    frame.cooldownText:SetText("")
+    frame.cooldownText:Hide()
+    return
+  end
+
+  if frame._cooldownEnd then
+    local remain = frame._cooldownEnd - GetTime()
+    if remain <= 0 then
+      frame.cooldownText:SetText("")
+      frame.cooldownText:Hide()
+    else
+      local secs = math.floor(remain + 0.5)
+      if secs > 0 then
+        frame.cooldownText:SetText(secs)
+        frame.cooldownText:Show()
+      else
+        frame.cooldownText:SetText("")
+        frame.cooldownText:Hide()
+      end
+    end
+  else
+    frame.cooldownText:SetText("")
+    frame.cooldownText:Hide()
+  end
+end
+
+
+
 -- ==================================================
 -- Frame factory
 -- ==================================================
@@ -113,13 +277,17 @@ local function CreateSpellFrame(spellID)
 
   -- Flytt tekstene til overlay
   frame.count = frame.overlay:CreateFontString(nil, "OVERLAY")
-  frame.count:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 2)
-  frame.count:SetFont(ClassHUD:FetchFont(14))
+  frame.count:ClearAllPoints()
+  frame.count:SetPoint("TOP", frame, "TOP", 0, -2)
+  local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.spellFontSize or 12)
+  frame.count:SetFont(fontPath, fontSize, "OUTLINE")
   frame.count:Hide()
 
   frame.cooldownText = frame.overlay:CreateFontString(nil, "OVERLAY")
-  frame.cooldownText:SetPoint("CENTER", frame, "CENTER", 0, 0)
-  frame.cooldownText:SetFont(ClassHUD:FetchFont(16))
+  frame.cooldownText:ClearAllPoints()
+  frame.cooldownText:SetPoint("BOTTOM", frame, "BOTTOM", 0, 2)
+  local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.spellFontSize or 12)
+  frame.cooldownText:SetFont(fontPath, fontSize, "OUTLINE")
   frame.cooldownText:Hide()
 
 
@@ -448,10 +616,9 @@ local function LayoutTopBar(frames)
 
   container._height = totalHeight
   container:SetHeight(totalHeight)
-  container._afterGap = nil
+  container._afterGap = ClassHUD.db.profile.spacing or 0 -- 👈 vertical spacing option
   container:Show()
 end
-
 
 local function LayoutSideBar(frames, side)
   if not UI.attachments or not UI.attachments[side] then return end
@@ -518,7 +685,7 @@ local function LayoutBottomBar(frames)
   totalHeight = math.max(totalHeight, 0)
   container._height = totalHeight
   container:SetHeight(totalHeight)
-  container._afterGap = nil
+  container._afterGap = ClassHUD.db.profile.spacing or 0 -- 👈 vertical spacing option
   container:Show()
 end
 
@@ -815,177 +982,39 @@ local function UpdateSpellFrame(frame)
   local sid = frame.spellID
   if not sid then return end
 
-  -- Slå opp i vår motor
   local data = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
-
-  -- =====================
-  -- Ikon
-  -- =====================
   local entry = ClassHUD:GetSnapshotEntry(sid)
-  local iconID = entry and entry.iconID
-  if not iconID then
-    local s = C_Spell.GetSpellInfo(sid)
-    iconID = s and s.iconID
-  end
-  frame.icon:SetTexture(iconID or 134400)
 
-  -- =====================
-  -- Cooldown
-  -- =====================
-  local cdStart, cdDuration
-  local shouldDesaturate = false
-  local gcdActive = false
-
-  -- =====================
-  -- Charges
-  -- =====================
-  local ch = C_Spell.GetSpellCharges(sid)
-  local chargesShown = false
-  if ch and ch.maxCharges and ch.maxCharges > 1 then
-    local current = ch.currentCharges or 0
-    frame.count:SetText(current)
-    frame.count:Show()
-    chargesShown = true
-
-    if current < ch.maxCharges and ch.cooldownStartTime and ch.cooldownDuration and ch.cooldownDuration > 0 then
-      -- alltid vis nedtelling til neste charge
-      cdStart = ch.cooldownStartTime
-      cdDuration = ch.cooldownDuration
-    end
-
-    -- desaturer kun hvis du faktisk har 0 charges
-    shouldDesaturate = (current <= 0)
-  end
+  -- Ikon
+  UpdateSpellIcon(frame, sid, entry)
 
 
-  -- GCD overlay (spellID 61304) – uten tekst
-  do
-    local gcd = C_Spell.GetSpellCooldown(61304)
-    if gcd and gcd.startTime and gcd.duration and gcd.duration > 0 then
-      if not cdStart or (gcd.startTime + gcd.duration) > (cdStart + cdDuration) then
-        cdStart = gcd.startTime
-        cdDuration = gcd.duration
-        gcdActive = true
-      end
-    end
-    frame._gcdActive = gcdActive
-  end
-
-  if cdStart and cdDuration then
-    CooldownFrame_Set(frame.cooldown, cdStart, cdDuration, true)
-    if frame.overlay and frame.cooldown then
-      local need = frame.cooldown:GetFrameLevel() + 1
-      if frame.overlay:GetFrameLevel() <= need then
-        frame.overlay:SetFrameLevel(need)
-      end
-    end
-
-    frame._cooldownEnd = cdStart + cdDuration
-  else
-    CooldownFrame_Clear(frame.cooldown)
-    frame._cooldownEnd = nil
-  end
-
-  frame.icon:SetDesaturated(shouldDesaturate)
-
-  -- =====================
-  -- Aura / overlay + GLOW (én sannhet)
-  -- =====================
-
-  -- 1) Finn "riktig" aura for denne knappen via snapshot-kandidatene
-  local candidates = ClassHUD:GetAuraCandidatesForEntry(entry, sid) -- bruker alle buff/linked IDs
-  local aura, auraSpellID = ClassHUD:FindAuraFromCandidates(candidates, { "player", "pet" })
-
-  -- 2) Beregn shouldGlow: direkte aura ELLER lenket buff (manuell) ELLER automap
-  local shouldGlow = false
-  if aura then
-    shouldGlow = true
-  else
-    -- manuelt buffLink
-    local class, specID = ClassHUD:GetPlayerClassSpec()
-    local links = (ClassHUD.db.profile.buffLinks[class] and ClassHUD.db.profile.buffLinks[class][specID]) or {}
-    for buffID, linkedSpellID in pairs(links) do
-      if linkedSpellID == sid then
-        if ClassHUD:GetAuraForSpell(buffID, { "player", "pet" }) then
-          shouldGlow = true
-          break
-        end
-      end
-    end
-    -- automap
-    if not shouldGlow and ClassHUD.trackedBuffToSpell then
-      for buffID, linkedSpellID in pairs(ClassHUD.trackedBuffToSpell) do
-        if linkedSpellID == sid then
-          if ClassHUD:GetAuraForSpell(buffID, { "player", "pet" }) then
-            shouldGlow = true
-            break
-          end
-        end
-      end
+  -- Aura
+  local auraID
+  if data then
+    if data.buff then
+      auraID = data.buff.overrideSpellID
+          or (data.buff.linkedSpellIDs and data.buff.linkedSpellIDs[1])
+          or data.buff.spellID
+    elseif data.bar then
+      auraID = data.bar.overrideSpellID
+          or (data.bar.linkedSpellIDs and data.bar.linkedSpellIDs[1])
+          or data.bar.spellID
     end
   end
+  auraID = auraID or sid
 
-  -- 3) Selve glow-toggle (idempotent)
-  SetOverlayGlow(frame, shouldGlow)
+  local aura = ClassHUD:GetAuraForSpell(auraID)
+  -- Cooldown & charges
+  local chargesShown, gcdActive = UpdateCooldown(frame, sid, false)
 
-  -- 4) Auraswipe (gul) + stacks hvis aura faktisk har timer
-  if aura then
-    local stacks = aura.applications or aura.stackCount or aura.charges or 0
-    if aura.duration and aura.duration > 0 and aura.expirationTime then
-      -- Aura med varighet → gul swipe
-      frame.cooldown:SetSwipeColor(1, 0.85, 0.1, 0.9)
-      CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
-      if frame.overlay and frame.cooldown then
-        local need = frame.cooldown:GetFrameLevel() + 1
-        if frame.overlay:GetFrameLevel() <= need then
-          frame.overlay:SetFrameLevel(need)
-        end
-      end
+  UpdateAuraOverlay(frame, aura, chargesShown)
 
-      frame._cooldownEnd = aura.expirationTime
-      frame.icon:SetVertexColor(1, 1, 0.3)
-    else
-      -- Aura uten varighet → bruk lys "vanlig" swipe
-      frame.cooldown:SetSwipeColor(0, 0, 0, 0.25)
-      frame.icon:SetVertexColor(1, 1, 1)
-    end
-
-    if stacks > 1 and not chargesShown then
-      frame.count:SetText(stacks)
-      frame.count:Show()
-    end
-  else
-    -- Ingen aura → lysere cooldown swipe (ikke blackout)
-    frame.cooldown:SetSwipeColor(0, 0, 0, 0.25)
-    frame.icon:SetVertexColor(1, 1, 1)
-  end
-
-
-  -- =====================
-  -- Cooldown-tekst: aldri for GCD, aldri "0"
-  -- =====================
-  if frame._cooldownEnd then
-    local remain = frame._cooldownEnd - GetTime()
-    if remain <= 0 or gcdActive then
-      frame.cooldownText:SetText("")
-      frame.cooldownText:Hide()
-    else
-      local secs = math.floor(remain + 0.5)
-      if secs > 0 and not gcdActive then
-        frame.cooldownText:SetText(secs)
-        frame.cooldownText:Show()
-      else
-        frame.cooldownText:SetText("")
-        frame.cooldownText:Hide()
-      end
-    end
-  else
-    frame.cooldownText:SetText("")
-    frame.cooldownText:Hide()
-  end
+  -- Glow
+  UpdateGlow(frame, aura, sid, data)
+  -- Tekst
+  UpdateCooldownText(frame, gcdActive)
 end
-
-
 
 -- ==================================================
 -- Public API (kalles fra ClassHUD.lua events)
@@ -1015,28 +1044,7 @@ function ClassHUD:UpdateAllFrames()
     if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
       aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
     end
-    -- if aura then
-    --   local frame = self.spellFrames[spellID]
-    --   if frame and not frame.isGlowing then
-    --     ActionButtonSpellAlertManager:ShowAlert(frame)
-    --     frame.isGlowing = true
-    --   end
-    -- end
   end
-
-  -- Glow spells basert på tracked buff matches
-  -- if self.trackedBuffToSpell then
-  --   for buffID, spellID in pairs(self.trackedBuffToSpell) do
-  --     local aura = self:GetAuraForSpell(buffID)
-  --     if aura then
-  --       local frame = self.spellFrames[spellID]
-  --       if frame and not frame.isGlowing then
-  --         ActionButtonSpellAlertManager:ShowAlert(frame)
-  --         frame.isGlowing = true
-  --       end
-  --     end
-  --   end
-  -- end
 end
 
 function ClassHUD:BuildFramesForSpec()
@@ -1093,7 +1101,12 @@ function ClassHUD:BuildFramesForSpec()
     return list
   end
 
-  local placements = self.db.profile.utilityPlacement or {}
+  local class, specID = self:GetPlayerClassSpec()
+  self.db.profile.utilityPlacement[class] = self.db.profile.utilityPlacement[class] or {}
+  self.db.profile.utilityPlacement[class][specID] = self.db.profile.utilityPlacement[class][specID] or {}
+
+  local placements = self.db.profile.utilityPlacement[class][specID]
+
 
   local topFrames, bottomFrames = {}, {}
   local sideFrames = { LEFT = {}, RIGHT = {} }
@@ -1127,8 +1140,14 @@ function ClassHUD:BuildFramesForSpec()
     placeSpell(item.spellID, "HIDDEN")
   end
 
-  for _, item in ipairs(collect("bar")) do
-    placeSpell(item.spellID, "BOTTOM")
+  -- for _, item in ipairs(collect("bar")) do
+  --   placeSpell(item.spellID, "BOTTOM")
+  -- end
+
+  for spellID, placement in pairs(placements) do
+    if not built[spellID] then
+      placeSpell(spellID, placement)
+    end
   end
 
   LayoutTopBar(topFrames)

@@ -42,11 +42,165 @@ local function SortEntries(snapshot, category)
   return list
 end
 
+-- Bygger Top Bar Spells-editoren inline (uten å lage ny venstremeny-node)
+local function BuildTopBarSpellsEditor(addon, container)
+  for k in pairs(container) do container[k] = nil end
+
+  local class, specID = addon:GetPlayerClassSpec()
+
+  addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
+  addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or {}
+  local placements = addon.db.profile.utilityPlacement[class][specID]
+
+  local snapshot = addon:GetSnapshotForSpec(class, specID, false)
+  local seen, list = {}, {}
+
+  -- 1) Ta med alle spells manuelt lagt i Top Bar
+  for spellID, placement in pairs(placements) do
+    if placement == "TOP" then
+      table.insert(list, spellID)
+      seen[spellID] = true
+    end
+  end
+
+  -- 2) Ta med alle essential-spells fra snapshot
+  if snapshot then
+    for spellID, entry in pairs(snapshot) do
+      if entry.categories and entry.categories.essential then
+        if not seen[spellID] then
+          table.insert(list, spellID)
+          seen[spellID] = true
+        end
+      end
+    end
+  end
+  table.sort(list, function(a, b)
+    local ia, ib = C_Spell.GetSpellInfo(a), C_Spell.GetSpellInfo(b)
+    local na, nb = (ia and ia.name) or tostring(a), (ib and ib.name) or tostring(b)
+    if na == nb then return a < b else return na < nb end
+  end)
+
+  local order = 1
+  if #list == 0 then
+    container.empty = {
+      type = "description",
+      name = "No spells on the Top Bar yet. Use 'Add Spell ID' to add one.",
+      order = order,
+    }
+    return
+  end
+
+  -- Build group per spell (inline = true => ingen underkategori i venstremenyen)
+  for _, spellID in ipairs(list) do
+    local s = C_Spell.GetSpellInfo(spellID)
+    local icon = s and s.iconID and ("|T" .. s.iconID .. ":16|t ") or ""
+    local name = (s and s.name) or ("Spell " .. spellID)
+
+    -- Linked buffs for denne spellen (vis som klikk-for-å-fjerne)
+    local linkedArgs, idx = {}, 1
+    local links = addon.db.profile.buffLinks[class] and addon.db.profile.buffLinks[class][specID]
+    if links then
+      local buffIDs = {}
+      for buffID, linkedSpellID in pairs(links) do
+        if linkedSpellID == spellID then table.insert(buffIDs, buffID) end
+      end
+      table.sort(buffIDs)
+      for _, buffID in ipairs(buffIDs) do
+        local b = C_Spell.GetSpellInfo(buffID)
+        local bi = b and b.iconID and ("|T" .. b.iconID .. ":16|t ") or ""
+        local bn = (b and b.name) or ("Buff " .. buffID)
+        linkedArgs["b" .. buffID] = {
+          type  = "execute",
+          name  = bi .. bn .. " (" .. buffID .. ")",
+          desc  = "Click to remove this link",
+          order = idx,
+          func  = function()
+            addon.db.profile.buffLinks[class][specID][buffID] = nil
+            BuildTopBarSpellsEditor(addon, container)
+            addon:BuildFramesForSpec()
+            local ACR = LibStub("AceConfigRegistry-3.0", true)
+            if ACR then ACR:NotifyChange("ClassHUD") end
+          end,
+        }
+        idx = idx + 1
+      end
+    end
+    if idx == 1 then
+      linkedArgs.none = { type = "description", name = "No linked buffs yet.", order = 1 }
+    end
+
+    container["spell" .. spellID] = {
+      type   = "group",
+      name   = icon .. name .. " (" .. spellID .. ")",
+      inline = true,
+      order  = order,
+      args   = {
+        addBuff = {
+          type  = "input",
+          name  = "Add Buff ID",
+          order = 1,
+          width = "half",
+          get   = function() return "" end,
+          set   = function(_, val)
+            local buffID = tonumber(val); if not buffID then return end
+            addon.db.profile.buffLinks[class] = addon.db.profile.buffLinks[class] or {}
+            addon.db.profile.buffLinks[class][specID] = addon.db.profile.buffLinks[class][specID] or {}
+            addon.db.profile.buffLinks[class][specID][buffID] = spellID
+            BuildTopBarSpellsEditor(addon, container)
+            addon:BuildFramesForSpec()
+            local ACR = LibStub("AceConfigRegistry-3.0", true)
+            if ACR then ACR:NotifyChange("ClassHUD") end
+          end,
+        },
+        linked = {
+          type   = "group",
+          name   = "Linked Buffs",
+          order  = 2,
+          inline = true,
+          args   = linkedArgs,
+        },
+        removeSpell = {
+          type    = "execute",
+          name    = "Remove Spell",
+          confirm = true,
+          order   = 99,
+          func    = function()
+            -- Fjern selve spellen fra Top Bar
+            addon.db.profile.utilityPlacement[class][specID][spellID] = nil
+            -- Fjern alle buff-links som pekte på den
+            local bl = addon.db.profile.buffLinks[class] and addon.db.profile.buffLinks[class][specID]
+            if bl then
+              for bid, sid in pairs(bl) do
+                if sid == spellID then bl[bid] = nil end
+              end
+            end
+            BuildTopBarSpellsEditor(addon, container)
+            addon:BuildFramesForSpec()
+            local ACR = LibStub("AceConfigRegistry-3.0", true)
+            if ACR then ACR:NotifyChange("ClassHUD") end
+          end,
+        },
+      },
+    }
+    order = order + 1
+  end
+end
+
+
 local function BuildPlacementArgs(addon, container, category, defaultPlacement, emptyText)
   for k in pairs(container) do container[k] = nil end
 
-  addon.db.profile.utilityPlacement = addon.db.profile.utilityPlacement or {}
-  local placements = addon.db.profile.utilityPlacement
+  local class, specID = addon:GetPlayerClassSpec()
+  addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
+  addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or {}
+
+  local class, specID = addon:GetPlayerClassSpec()
+  addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
+  addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or {}
+
+  local placements = addon.db.profile.utilityPlacement[class][specID]
+
+
   local snapshot = addon:GetSnapshotForSpec(nil, nil, false)
   local list = SortEntries(snapshot, category)
   local order = 1
@@ -66,9 +220,27 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
 
     local icon = iconID and ("|T" .. iconID .. ":16|t ") or ""
 
+    -- Sjekk om noen buffLinks peker på denne spellen
+    local class, specID = addon:GetPlayerClassSpec()
+    local linkedBuffs = {}
+    if addon.db.profile.buffLinks[class] and addon.db.profile.buffLinks[class][specID] then
+      for buffID, linkedSpellID in pairs(addon.db.profile.buffLinks[class][specID]) do
+        if linkedSpellID == spellID then
+          local buffInfo = C_Spell.GetSpellInfo(buffID)
+          table.insert(linkedBuffs, (buffInfo and buffInfo.name) or ("Buff " .. buffID))
+        end
+      end
+    end
+
+    local linkNote
+    if #linkedBuffs > 0 then
+      linkNote = "|cff00ff00Linked Buffs:|r " .. table.concat(linkedBuffs, ", ")
+    end
+
     container["spell" .. spellID] = {
       type = "select",
       name = icon .. name .. " (" .. spellID .. ")",
+      desc = linkNote, -- 👈 viser link-informasjon i tooltip
       order = order,
       values = PLACEMENTS,
       get = function()
@@ -86,6 +258,7 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
       end,
     }
 
+
     order = order + 1
   end
 
@@ -97,6 +270,15 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
     for spellID, placement in pairs(placements) do
       if placement == "TOP" and not added[spellID] then
         local entry = snapshot and snapshot[spellID]
+        addOption(spellID, entry)
+      end
+    end
+  end
+
+  if category == "utility" then
+    for spellID, _ in pairs(placements) do
+      if not added[spellID] then
+        local entry = snapshot and snapshot[spellID] -- kan være nil
         addOption(spellID, entry)
       end
     end
@@ -217,23 +399,6 @@ local function BuildTrackedBuffArgs(addon, container)
             NotifyOptionsChanged()
           end,
         },
-        -- showBar = {
-        --   type = "toggle",
-        --   name = "Show as Bar",
-        --   order = 2,
-        --   disabled = not data.hasBar,
-        --   get = function()
-        --     local cfg = getConfig(false)
-        --     return cfg and cfg.showBar or false
-        --   end,
-        --   set = function(_, value)
-        --     local cfg = getConfig(true)
-        --     cfg.showBar = not not value
-        --     addon:BuildTrackedBuffFrames()
-        --     BuildTrackedBuffArgs(addon, container)
-        --     NotifyOptionsChanged()
-        --   end,
-        -- },
         barShowIcon = {
           type = "toggle",
           name = "Show Icon",
@@ -438,7 +603,7 @@ function ClassHUD_BuildOptions(addon)
   db.profile.trackedBuffs = db.profile.trackedBuffs or {}
   db.profile.buffLinks = db.profile.buffLinks or {}
 
-  local topBarContainer = {}
+  local topBarEditorContainer = {}
   local utilityContainer = {}
   local trackedContainer = {}
   local linkContainer = {}
@@ -599,6 +764,46 @@ function ClassHUD_BuildOptions(addon)
               addon:BuildTrackedBuffFrames()
             end,
           },
+          borderColor = {
+            type = "color",
+            name = "Bar Border Color",
+            order = 10,
+            hasAlpha = true,
+            get = function()
+              return db.profile.borderColor.r, db.profile.borderColor.g, db.profile.borderColor.b,
+                  db.profile.borderColor.a
+            end,
+            set = function(_, r, g, b, a)
+              db.profile.borderColor = { r = r, g = g, b = b, a = a }
+              addon:ApplyBarSkins()
+            end,
+          },
+          spellFontSize = {
+            type = "range",
+            name = "Spell Text Size",
+            min = 8,
+            max = 24,
+            step = 1,
+            order = 8,
+            get = function() return db.profile.spellFontSize or 12 end,
+            set = function(_, v)
+              db.profile.spellFontSize = v
+              addon:BuildFramesForSpec()
+            end,
+          },
+          buffFontSize = {
+            type = "range",
+            name = "Buff Text Size",
+            min = 8,
+            max = 24,
+            step = 1,
+            order = 9,
+            get = function() return db.profile.buffFontSize or 12 end,
+            set = function(_, v)
+              db.profile.buffFontSize = v
+              addon:BuildFramesForSpec()
+            end,
+          },
           trackedBarHeight = {
             type = "range",
             name = "Tracked Bar Height",
@@ -612,9 +817,24 @@ function ClassHUD_BuildOptions(addon)
               addon:BuildTrackedBuffFrames()
             end,
           },
+          spacing = {
+            type = "range",
+            name = "Vertical Spacing",
+            min = 0,
+            max = 30,
+            step = 1,
+            order = 5,
+            get = function() return db.profile.spacing or 2 end,
+            set = function(_, value)
+              db.profile.spacing = value
+              addon:FullUpdate()
+              addon:BuildFramesForSpec()
+            end,
+          },
+
           powerSpacing = {
             type = "range",
-            name = "Segment Spacing",
+            name = "Power Spacing",
             order = 7,
             min = 0,
             max = 12,
@@ -921,51 +1141,117 @@ function ClassHUD_BuildOptions(addon)
         name = "Spells & Buffs",
         order = 4,
         args = {
+          -- topBar = {
+          --   type = "group",
+          --   name = "Top Bar Spells",
+          --   order = 1,
+          --   args = {
+          --     description = {
+          --       type = "description",
+          --       name = "Assign essential abilities to HUD positions.",
+          --       order = 1,
+          --     },
+          --     addSpell = {
+          --       type = "input",
+          --       name = "Add Spell ID",
+          --       order = 2,
+          --       width = "half",
+          --       get = function() return "" end,
+          --       set = function(_, value)
+          --         local spellID = tonumber(value)
+          --         if not spellID then return end
+          --         local class, specID = addon:GetPlayerClassSpec()
+          --         addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
+          --         addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or
+          --             {}
+          --         addon.db.profile.utilityPlacement[class][specID][spellID] = "TOP"
+
+          --         addon:BuildFramesForSpec()
+          --         BuildPlacementArgs(addon, topBarContainer, "essential", "TOP",
+          --           "No essential spells reported for this spec.")
+          --         NotifyOptionsChanged()
+          --       end,
+          --     },
+          --     list = {
+          --       type = "group",
+          --       name = "Assignments",
+          --       inline = true,
+          --       order = 3,
+          --       args = topBarContainer,
+          --     },
+          --   },
+          -- },
           topBar = {
-            type = "group",
-            name = "Top Bar Spells",
+            type  = "group",
+            name  = "Top Bar Spells",
             order = 1,
-            args = {
+            args  = {
               description = {
-                type = "description",
-                name = "Assign essential abilities to HUD positions.",
+                type  = "description",
+                name  = "Manage spells that appear on the Top Bar and link buffs directly to them.",
                 order = 1,
               },
               addSpell = {
-                type = "input",
-                name = "Add Spell ID",
+                type  = "input",
+                name  = "Add Spell ID",
                 order = 2,
                 width = "half",
-                get = function() return "" end,
-                set = function(_, value)
+                get   = function() return "" end,
+                set   = function(_, value)
                   local spellID = tonumber(value)
                   if not spellID then return end
-                  addon.db.profile.utilityPlacement[spellID] = "TOP"
+                  local class, specID = addon:GetPlayerClassSpec()
+                  addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
+                  addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or
+                      {}
+                  addon.db.profile.utilityPlacement[class][specID][spellID] = "TOP"
+                  BuildTopBarSpellsEditor(addon, topBarEditorContainer)
                   addon:BuildFramesForSpec()
-                  BuildPlacementArgs(addon, topBarContainer, "essential", "TOP",
-                    "No essential spells reported for this spec.")
-                  NotifyOptionsChanged()
+                  local ACR = LibStub("AceConfigRegistry-3.0", true)
+                  if ACR then ACR:NotifyChange("ClassHUD") end
                 end,
               },
-              list = {
-                type = "group",
-                name = "Assignments",
-                inline = true,
-                order = 3,
-                args = topBarContainer,
+              editor = {
+                type   = "group",
+                name   = "",   -- tomt navn = ingen label
+                order  = 3,
+                inline = true, -- VIKTIG: ingen ny venstremeny-node
+                args   = topBarEditorContainer,
               },
             },
           },
+
+
           utility = {
             type = "group",
             name = "Utility Placement",
             order = 2,
             args = {
+              addSpell = {
+                type = "input",
+                name = "Add Spell ID",
+                order = 1,
+                width = "half",
+                get = function() return "" end,
+                set = function(_, value)
+                  local spellID = tonumber(value)
+                  if not spellID then return end
+                  local class, specID = addon:GetPlayerClassSpec()
+                  addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
+                  addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or
+                      {}
+                  addon.db.profile.utilityPlacement[class][specID][spellID] = "HIDDEN"
+                  addon:BuildFramesForSpec()
+                  BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
+                    "No utility cooldowns reported by the snapshot for this spec.")
+                  NotifyOptionsChanged()
+                end,
+              },
               list = {
                 type = "group",
                 name = "Spells",
                 inline = true,
-                order = 1,
+                order = 2,
                 args = utilityContainer,
               },
             },
@@ -1007,72 +1293,72 @@ function ClassHUD_BuildOptions(addon)
               },
             },
           },
-          buffLinks = {
-            type = "group",
-            name = "Buff Links",
-            order = 4,
-            args = {
-              description = {
-                type = "description",
-                name = "Manual overrides linking a buff to a spell. These are populated automatically when possible.",
-                order = 1,
-              },
-              list = {
-                type = "group",
-                name = "Links",
-                inline = true,
-                order = 2,
-                args = linkContainer,
-              },
-              add = {
-                type = "group",
-                name = "Add New Link",
-                inline = true,
-                order = 3,
-                args = {
-                  buffID = {
-                    type = "input",
-                    name = "Buff ID",
-                    order = 1,
-                    width = "half",
-                    get = function() return optionsState.newLinkBuffID end,
-                    set = function(_, value)
-                      optionsState.newLinkBuffID = value or ""
-                    end,
-                  },
-                  spellID = {
-                    type = "input",
-                    name = "Spell ID",
-                    order = 2,
-                    width = "half",
-                    get = function() return optionsState.newLinkSpellID end,
-                    set = function(_, value)
-                      optionsState.newLinkSpellID = value or ""
-                    end,
-                  },
-                  addButton = {
-                    type = "execute",
-                    name = "Add Link",
-                    order = 3,
-                    func = function()
-                      local buffID = tonumber(optionsState.newLinkBuffID)
-                      local spellID = tonumber(optionsState.newLinkSpellID)
-                      if not (buffID and spellID) then return end
-                      local class, specID = addon:GetPlayerClassSpec()
-                      addon.db.profile.buffLinks[class] = addon.db.profile.buffLinks[class] or {}
-                      addon.db.profile.buffLinks[class][specID] = addon.db.profile.buffLinks[class][specID] or {}
-                      addon.db.profile.buffLinks[class][specID][buffID] = spellID
-                      addon:BuildFramesForSpec()
-                      BuildBuffLinkArgs(addon, linkContainer)
-                      optionsState.newLinkBuffID = ""
-                      optionsState.newLinkSpellID = ""
-                      NotifyOptionsChanged()
-                    end,
-                  },
-                },
-              },
-            },
-          },
+          -- buffLinks = {
+          --   type = "group",
+          --   name = "Buff Links",
+          --   order = 4,
+          --   args = {
+          --     description = {
+          --       type = "description",
+          --       name = "Manual overrides linking a buff to a spell. These are populated automatically when possible.",
+          --       order = 1,
+          --     },
+          --     list = {
+          --       type = "group",
+          --       name = "Links",
+          --       inline = true,
+          --       order = 2,
+          --       args = linkContainer,
+          --     },
+          --     add = {
+          --       type = "group",
+          --       name = "Add New Link",
+          --       inline = true,
+          --       order = 3,
+          --       args = {
+          --         buffID = {
+          --           type = "input",
+          --           name = "Buff ID",
+          --           order = 1,
+          --           width = "half",
+          --           get = function() return optionsState.newLinkBuffID end,
+          --           set = function(_, value)
+          --             optionsState.newLinkBuffID = value or ""
+          --           end,
+          --         },
+          --         spellID = {
+          --           type = "input",
+          --           name = "Spell ID",
+          --           order = 2,
+          --           width = "half",
+          --           get = function() return optionsState.newLinkSpellID end,
+          --           set = function(_, value)
+          --             optionsState.newLinkSpellID = value or ""
+          --           end,
+          --         },
+          --         addButton = {
+          --           type = "execute",
+          --           name = "Add Link",
+          --           order = 3,
+          --           func = function()
+          --             local buffID = tonumber(optionsState.newLinkBuffID)
+          --             local spellID = tonumber(optionsState.newLinkSpellID)
+          --             if not (buffID and spellID) then return end
+          --             local class, specID = addon:GetPlayerClassSpec()
+          --             addon.db.profile.buffLinks[class] = addon.db.profile.buffLinks[class] or {}
+          --             addon.db.profile.buffLinks[class][specID] = addon.db.profile.buffLinks[class][specID] or {}
+          --             addon.db.profile.buffLinks[class][specID][buffID] = spellID
+          --             addon:BuildFramesForSpec()
+          --             BuildBuffLinkArgs(addon, linkContainer)
+          --             optionsState.newLinkBuffID = ""
+          --             optionsState.newLinkSpellID = ""
+          --             NotifyOptionsChanged()
+          --           end,
+          --         },
+          --       },
+          --     },
+          --   },
+          -- },
         },
       },
       snapshot = {
@@ -1087,8 +1373,7 @@ function ClassHUD_BuildOptions(addon)
             func = function()
               addon:UpdateCDMSnapshot()
               addon:BuildFramesForSpec()
-              BuildPlacementArgs(addon, topBarContainer, "essential", "TOP",
-                "No essential spells reported for this spec.")
+              BuildTopBarSpellsEditor(addon, topBarEditorContainer)
               BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
                 "No utility cooldowns reported by the snapshot for this spec.")
               BuildTrackedBuffArgs(addon, trackedContainer)
@@ -1107,7 +1392,7 @@ function ClassHUD_BuildOptions(addon)
     },
   }
 
-  BuildPlacementArgs(addon, topBarContainer, "essential", "TOP", "No essential spells reported for this spec.")
+  BuildTopBarSpellsEditor(addon, topBarEditorContainer)
   BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
     "No utility cooldowns reported by the snapshot for this spec.")
   BuildTrackedBuffArgs(addon, trackedContainer)

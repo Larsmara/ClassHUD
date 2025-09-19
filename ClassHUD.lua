@@ -94,7 +94,7 @@ local defaults = {
     spacing          = 2,
     powerSpacing     = 2,
     position         = { x = 0, y = -50 },
-
+    borderColor      = { r = 0, g = 0, b = 0, a = 1 },
     textures         = {
       bar  = "Blizzard",
       font = "Friz Quadrata TT",
@@ -206,19 +206,40 @@ function ClassHUD:ApplyAnchorPosition()
 end
 
 -- Exposed so Classbar can create uniform bars
-function ClassHUD:CreateStatusBar(parent, height)
-  local bar = CreateFrame("StatusBar", nil, parent, "BackdropTemplate")
+function ClassHUD:CreateStatusBar(parent, height, withBorder)
+  local holder = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+  holder:SetSize(self.db.profile.width or 250, height or 16)
+
+  local edge = (self.db.profile.borderSize and math.max(1, self.db.profile.borderSize)) or 1
+
+  if withBorder then
+    holder:SetBackdrop({
+      edgeFile = "Interface\\Buttons\\WHITE8x8",
+      edgeSize = edge,
+      insets   = { left = 0, right = 0, top = 0, bottom = 0 },
+    })
+    local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+    holder:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
+    holder:SetBackdropColor(0, 0, 0, 0.40)
+  end
+
+  local bar = CreateFrame("StatusBar", nil, holder)
+  bar:SetPoint("TOPLEFT", holder, "TOPLEFT", edge, -edge)
+  bar:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", -edge, edge)
   bar:SetStatusBarTexture(self:FetchStatusbar())
   bar:SetMinMaxValues(0, 1)
   bar:SetValue(0)
+
   bar.bg = bar:CreateTexture(nil, "BACKGROUND")
-  bar.bg:SetAllPoints(true)
+  bar.bg:SetAllPoints(bar)
   bar.bg:SetColorTexture(0, 0, 0, 0.55)
+
   bar.text = bar:CreateFontString(nil, "OVERLAY")
   bar.text:SetPoint("CENTER")
   bar.text:SetFont(self:FetchFont(12))
-  bar:SetHeight(height or 16)
-  bar:SetWidth(250)
+
+  bar._holder = holder
+  bar._edge   = edge
   return bar
 end
 
@@ -301,86 +322,7 @@ function ClassHUD:UpdateCDMSnapshot()
       end
     end
   end
-
-  print(string.format("|cff00ff88ClassHUD|r Cooldown snapshot updated for %s spec %d", class, specID))
 end
-
--- function ClassHUD:UpdateCDMSnapshot()
---   if not self:IsCooldownViewerAvailable() then return false end
-
---   local class, specID = self:GetPlayerClassSpec()
---   if not specID or specID == 0 then
---     -- The specialization API can return 0 while logging in. Delay until it is ready.
---     return false
---   end
-
---   self._lastSpecID = specID
-
---   local snapshot = self:GetSnapshotForSpec(class, specID, true)
---   if not snapshot then return false end
-
---   for key in pairs(snapshot) do snapshot[key] = nil end
-
---   local categories = {
---     [Enum.CooldownViewerCategory.Essential]   = "essential",
---     [Enum.CooldownViewerCategory.Utility]     = "utility",
---     [Enum.CooldownViewerCategory.TrackedBuff] = "buff",
---     [Enum.CooldownViewerCategory.TrackedBar]  = "bar",
---   }
-
---   local orderByCategory = {}
---   local updatedCount = 0
-
---   for cat, catName in pairs(categories) do
---     local ids = C_CooldownViewer.GetCooldownViewerCategorySet(cat)
---     if type(ids) == "table" then
---       for _, cooldownID in ipairs(ids) do
---         local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
---         local sid = raw and (raw.spellID or raw.overrideSpellID or (raw.linkedSpellIDs and raw.linkedSpellIDs[1]))
---         if sid then
---           local info = C_Spell.GetSpellInfo(sid)
---           local desc = C_Spell.GetSpellDescription(sid)
-
---           local entry = snapshot[sid]
---           if not entry then
---             entry = {
---               spellID     = sid,
---               name        = info and info.name or ("Spell " .. sid),
---               iconID      = info and info.iconID,
---               desc        = desc,
---               categories  = {},
---               category    = catName,
---               lastUpdated = GetServerTime and GetServerTime() or time(),
---             }
---             snapshot[sid] = entry
---             updatedCount = updatedCount + 1
---           else
---             entry.name        = info and info.name or entry.name
---             entry.iconID      = info and info.iconID or entry.iconID
---             entry.desc        = desc or entry.desc
---             entry.category    = entry.category or catName
---             entry.lastUpdated = GetServerTime and GetServerTime() or time()
---           end
-
---           orderByCategory[catName] = (orderByCategory[catName] or 0) + 1
---           entry.categories[catName] = {
---             cooldownID      = cooldownID,
---             overrideSpellID = raw.overrideSpellID,
---             linkedSpellIDs  = raw.linkedSpellIDs and { table.unpack(raw.linkedSpellIDs) } or nil,
---             hasAura         = raw.hasAura,
---             order           = orderByCategory[catName],
---           }
---         end
---       end
---     end
---   end
-
---   if updatedCount > 0 then
---     print(string.format("|cff00ff88ClassHUD|r Cooldown snapshot updated for %s spec %d", class, specID))
---   end
-
---   return true
--- end
 
 -- ===== Options bootstrap (registers with AceConfigRegistry directly) =====
 function ClassHUD:RegisterOptions()

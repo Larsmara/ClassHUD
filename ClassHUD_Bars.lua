@@ -14,7 +14,11 @@ end
 -- Bars
 function ClassHUD:CreateCastBar()
   local h = self.db.profile.height.cast
-  local b = self:CreateStatusBar(UI.anchor, h)
+  local b = self:CreateStatusBar(UI.anchor, h, false) -- castbar starter uten border
+
+  b:Hide()
+  b._holder:Hide() -- 👈 skjul holder også
+  b.bg:Hide()
 
   b.icon = b:CreateTexture(nil, "ARTWORK")
   b.icon:SetSize(h, h)
@@ -24,26 +28,23 @@ function ClassHUD:CreateCastBar()
   b.spell = b:CreateFontString(nil, "OVERLAY")
   b.spell:SetFont(self:FetchFont(12))
   b.spell:SetPoint("LEFT", b.icon, "RIGHT", 4, 0)
-  b.spell:SetJustifyH("LEFT")
 
   b.time = b:CreateFontString(nil, "OVERLAY")
   b.time:SetFont(self:FetchFont(12))
   b.time:SetPoint("RIGHT", b, "RIGHT", -3, 0)
-  b.time:SetJustifyH("RIGHT")
 
-  b:SetStatusBarColor(1, .7, 0)
   UI.cast = b
 end
 
 function ClassHUD:CreateHPBar()
-  local b = self:CreateStatusBar(UI.anchor, self.db.profile.height.hp)
+  local b = self:CreateStatusBar(UI.anchor, self.db.profile.height.hp, true) -- 👈 withBorder = true
   local r, g, bCol = self:GetClassColor()
   b:SetStatusBarColor(r, g, bCol)
   UI.hp = b
 end
 
 function ClassHUD:CreateResourceBar()
-  local b = self:CreateStatusBar(UI.anchor, self.db.profile.height.resource)
+  local b = self:CreateStatusBar(UI.anchor, self.db.profile.height.resource, true) -- 👈 withBorder = true
   if self.db.profile.colors.resourceClass then
     b:SetStatusBarColor(self:GetClassColor())
   else
@@ -62,9 +63,13 @@ end
 -- Layout (top→bottom): tracked buffs → cast → hp → resource → power
 function ClassHUD:ApplyBarSkins()
   local tex = self:FetchStatusbar()
+  local c   = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
   for _, sb in pairs({ UI.cast, UI.hp, UI.resource }) do
     if sb and sb.SetStatusBarTexture then
       sb:SetStatusBarTexture(tex)
+    end
+    if sb and sb.SetBackdropBorderColor then
+      sb:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
     end
   end
   if UI.cast then
@@ -73,14 +78,21 @@ function ClassHUD:ApplyBarSkins()
   end
   if UI.hp then UI.hp.text:SetFont(self:FetchFont(12)) end
   if UI.resource then UI.resource.text:SetFont(self:FetchFont(12)) end
+
+  local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+  for _, sb in pairs({ UI.cast, UI.hp, UI.resource }) do
+    if sb and sb.SetBackdropBorderColor then
+      sb:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
+    end
+  end
 end
 
 function ClassHUD:Layout()
   local w   = self.db.profile.width
   local gap = self.db.profile.spacing or 0
+  local db  = self.db.profile
 
   if UI.anchor then UI.anchor:SetWidth(w) end
-
   UI.attachments = UI.attachments or {}
 
   local function ensure(name)
@@ -88,18 +100,18 @@ function ClassHUD:Layout()
       UI.attachments[name] = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
       UI.attachments[name]._height = 0
     end
-    local frame = UI.attachments[name]
-    frame:SetParent(UI.anchor)
-    frame:SetWidth(w)
-    frame._height = frame._height or 0
-    frame:SetHeight(frame._height)
-    frame:Show()
-    return frame
+    local f = UI.attachments[name]
+    f:SetParent(UI.anchor)
+    f:SetWidth(w)
+    f._height = f._height or 0
+    f:SetHeight(f._height)
+    f:Show()
+    return f
   end
 
+  -- Opprett/finn containere (ALLTID – kjeden må bestå)
   local containers = {
     TOP      = ensure("TOP"),
-    -- TRACKED_BARS  = ensure("TRACKED_BARS"),
     CAST     = ensure("CAST"),
     HP       = ensure("HP"),
     RESOURCE = ensure("RESOURCE"),
@@ -111,94 +123,96 @@ function ClassHUD:Layout()
     local container = containers[containerName]
     if not container then return end
 
-    height = (enabled and height) or 0
-    container._height = math.max(height or 0, 0)
-    container:SetHeight(container._height)
+    -- behold containeren i layouten: minst 1px høyde
+    local h = (enabled and height) or 0
+    container._height = h
+    container:SetHeight(math.max(h, 1))
 
-    if not frame then return end
+    if frame then
+      frame:SetParent(container)
+      frame:ClearAllPoints()
+      frame:SetWidth(w)
+      frame:SetHeight(h)
 
-    frame:SetParent(container)
-    frame:ClearAllPoints()
-    frame:SetWidth(w)
-    frame:SetHeight(height or 0)
-
-    if enabled and height and height > 0 then
-      frame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
-      frame:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
-      frame:Show()
-    else
-      frame:Hide()
-    end
-  end
-
-  if UI.cast and UI.cast:IsShown() then
-    layoutStatusBar(UI.cast, "CAST", true, self.db.profile.height.cast)
-  end
-  layoutStatusBar(UI.hp, "HP", self.db.profile.show.hp, self.db.profile.height.hp)
-  layoutStatusBar(UI.resource, "RESOURCE", self.db.profile.show.resource, self.db.profile.height.resource)
-
-  local classContainer = containers.CLASS
-  if classContainer then
-    local showPower = self.db.profile.show.power
-    local height = self.db.profile.height.power or 0
-    classContainer._height = showPower and height or 0
-    classContainer:SetHeight(classContainer._height)
-    if UI.power then
-      UI.power:SetParent(classContainer)
-      UI.power:ClearAllPoints()
-      UI.power:SetPoint("TOPLEFT", classContainer, "TOPLEFT", 0, 0)
-      UI.power:SetPoint("TOPRIGHT", classContainer, "TOPRIGHT", 0, 0)
-      UI.power:SetWidth(w)
-      UI.power:SetHeight(height)
-      if showPower and height > 0 then
-        UI.power:Show()
+      if enabled and h > 0 then
+        frame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+        frame:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+        frame:Show()
       else
-        UI.power:Hide()
+        frame:Hide()
       end
     end
   end
 
-  local order = {
-    "TOP",
-    -- "TRACKED_BARS",
-    "CAST",
-    "HP",
-    "RESOURCE",
-    "CLASS",
-    "BOTTOM",
-  }
 
-  local previous = UI.anchor
+  -- Viktig: bruk samme layoutfunksjon også for CAST og sørg for at den får 0-høyde når av
+  layoutStatusBar(UI.cast, "CAST", db.show.cast, db.height.cast)
+  layoutStatusBar(UI.hp, "HP", db.show.hp, db.height.hp)
+  layoutStatusBar(UI.resource, "RESOURCE", db.show.resource, db.height.resource)
+
+  -- CLASS (special power) container
+  do
+    local container = containers.CLASS
+    if container then
+      local showPower = db.show.power
+      local h = (showPower and db.height.power) or 0
+      container._height = h
+      container:SetHeight(math.max(h, 1)) -- 👈 alltid minst 1px høy
+
+      if UI.power then
+        UI.power:SetParent(container)
+        UI.power:ClearAllPoints()
+        UI.power:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+        UI.power:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+        UI.power:SetWidth(w)
+        UI.power:SetHeight(h)
+        if showPower and h > 0 then
+          UI.power:Show()
+        else
+          UI.power:Hide()
+        end
+      end
+    end
+  end
+
+  -- BOTTOM container (always keep at least 1px so it doesn't collapse)
+  do
+    local container = containers.BOTTOM
+    if container then
+      local h = container._height or 0
+      container:SetHeight(math.max(h, 1))
+    end
+  end
+
+  -- Kjederekkefølge – ALDRI hopp over containere selv om høyden er 0
+  local order      = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+
+  local previous   = UI.anchor
   local prevHeight = 0
-
   for _, name in ipairs(order) do
     local container = containers[name]
-    if container then
-      container:SetWidth(w)
-      container:ClearAllPoints()
+    container:SetWidth(w)
+    container:ClearAllPoints()
 
-      if previous == UI.anchor then
-        container:SetPoint("TOPLEFT", previous, "TOPLEFT", 0, 0)
-        container:SetPoint("TOPRIGHT", previous, "TOPRIGHT", 0, 0)
-      else
-        local offset = 0
-        if prevHeight > 0 then
-          if previous._afterGap ~= nil then
-            offset = previous._afterGap
-          else
-            offset = gap
-          end
-        end
+    if previous == UI.anchor then
+      container:SetPoint("TOPLEFT", previous, "TOPLEFT", 0, 0)
+      container:SetPoint("TOPRIGHT", previous, "TOPRIGHT", 0, 0)
+    else
+      -- kun legg inn gap hvis forrige faktisk hadde høyde
+      local offset = (prevHeight > 0) and gap or 0
+      if previous._afterGap ~= nil then
+        offset = previous._afterGap
         previous._afterGap = nil
-        container:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -offset)
-        container:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, -offset)
       end
-
-      previous = container
-      prevHeight = container._height or 0
+      container:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -offset)
+      container:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, -offset)
     end
+
+    previous   = container
+    prevHeight = container._height or 0
   end
 
+  -- Side-ankere (for ikonkolonner). Må alltid eksistere.
   local left = UI.attachments.LEFT
   if not left then
     UI.attachments.LEFT = CreateFrame("Frame", "ClassHUDAttachLEFT", UI.anchor)
@@ -227,8 +241,13 @@ function ClassHUD:StopCast()
   if casting or channeling then return end
 
   if UI.cast then
+    local holder = UI.cast._holder
+    holder:SetBackdrop(nil) -- 👈 fjern backdrop
+    holder:Hide()           -- skjul helt
+    UI.cast:Hide()          -- skjul bar
+    UI.cast.bg:Hide()
+
     UI.cast:SetScript("OnUpdate", nil)
-    UI.cast:Hide()
     UI.cast:SetValue(0)
     UI.cast.time:SetText("")
     UI.cast.spell:SetText("")
@@ -238,6 +257,25 @@ end
 
 function ClassHUD:StartCast(name, icon, startMS, endMS, isChannel)
   if not self.db.profile.show.cast then return end
+  -- Aktiver border på holder
+  local edge   = UI.cast._edge or 1
+  local holder = UI.cast._holder
+
+  UI.cast:Show()
+  holder:Show()
+  UI.cast.bg:Show()
+
+  -- sett border dynamisk
+  holder:SetBackdrop({
+    bgFile   = "Interface\\Buttons\\WHITE8x8", -- 👈 nå med bakgrunn
+    edgeFile = "Interface\\Buttons\\WHITE8x8",
+    edgeSize = edge,
+    insets   = { left = 1, right = 1, top = 1, bottom = 1 },
+  })
+  local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+  holder:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
+  holder:SetBackdropColor(0, 0, 0, 0.4) -- 👈 mørk bakplate (juster alpha som du liker)
+
   local total = (endMS - startMS) / 1000
   local start = startMS / 1000
 
