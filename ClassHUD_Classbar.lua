@@ -31,6 +31,10 @@ local USES_PARTIAL_BY_SPEC = {
 -- Charged Combo Points highlight color (Rogue)
 local CHARGED_CP_COLOR = { 1.0, 0.95, 0.35 }
 
+local BALANCE_SPEC_ID = 102
+local ECLIPSE_SOLAR_COLOR = { 1.0, 0.7, 0.2 }
+local ECLIPSE_LUNAR_COLOR = { 0.3, 0.5, 1.0 }
+
 -- Base resource colors
 local RESOURCE_BASE_COLORS = {
   [Enum.PowerType.HolyPower]     = { 1.00, 0.88, 0.25 },
@@ -93,6 +97,51 @@ local function HideAllSegments(from)
   for i = from, #UI.powerSegments do
     if UI.powerSegments[i] then UI.powerSegments[i]:Hide() end
   end
+end
+
+local function HideEclipseBars()
+  if UI.eclipseSolar then
+    UI.eclipseSolar:Hide()
+    if UI.eclipseSolar._holder then UI.eclipseSolar._holder:Hide() end
+  end
+  if UI.eclipseLunar then
+    UI.eclipseLunar:Hide()
+    if UI.eclipseLunar._holder then UI.eclipseLunar._holder:Hide() end
+  end
+end
+
+local function EnsureEclipseBar(which, height, width)
+  local key = which == "solar" and "eclipseSolar" or "eclipseLunar"
+  local bar = UI[key]
+  if not bar then
+    bar = ClassHUD:CreateStatusBar(UI.power, height, true)
+    bar.text:Hide()
+    UI[key] = bar
+  end
+
+  bar:SetStatusBarTexture(ClassHUD:FetchStatusbar())
+
+  local color = (which == "solar") and ECLIPSE_SOLAR_COLOR or ECLIPSE_LUNAR_COLOR
+  bar:SetStatusBarColor(color[1], color[2], color[3])
+
+  local holder = bar._holder
+  if holder then
+    holder:SetParent(UI.power)
+    holder:ClearAllPoints()
+    holder:SetWidth(width)
+    holder:SetHeight(height)
+    if which == "solar" then
+      holder:SetPoint("TOPLEFT", UI.power, "TOPLEFT", 0, 0)
+      holder:SetPoint("TOPRIGHT", UI.power, "TOPRIGHT", 0, 0)
+    else
+      holder:SetPoint("BOTTOMLEFT", UI.power, "BOTTOMLEFT", 0, 0)
+      holder:SetPoint("BOTTOMRIGHT", UI.power, "BOTTOMRIGHT", 0, 0)
+    end
+    holder:Show()
+  end
+
+  bar:Show()
+  return bar
 end
 
 -- Advanced segment updater
@@ -183,27 +232,81 @@ function ClassHUD:UpdateEssenceSegments(ptype)
   HideAllSegments(max + 1)
 end
 
+function ClassHUD:UpdateEclipseBars()
+  if not UI.power then return end
+
+  HideAllSegments(1)
+
+  local width = (UI.power and UI.power:GetWidth()) or 0
+  if width <= 0 then
+    width = self.db.profile.width or 250
+  end
+  local totalHeight = self.db.profile.height.power or 0
+  local halfHeight = totalHeight > 0 and (totalHeight / 2) or totalHeight
+
+  local solar = EnsureEclipseBar("solar", halfHeight, width)
+  local lunar = EnsureEclipseBar("lunar", halfHeight, width)
+
+  local maxPower = UnitPowerMax("player", Enum.PowerType.LunarPower) or 0
+  if maxPower <= 0 then
+    HideEclipseBars()
+    if UI.power then UI.power:Hide() end
+    return
+  end
+
+  solar:SetMinMaxValues(0, maxPower)
+  lunar:SetMinMaxValues(0, maxPower)
+
+  local lunarPower = UnitPower("player", Enum.PowerType.LunarPower) or 0
+  lunarPower = math.min(math.max(lunarPower, 0), maxPower)
+  local solarPower = math.max(maxPower - lunarPower, 0)
+
+  solar:SetValue(solarPower)
+  lunar:SetValue(lunarPower)
+
+  solar.text:Hide()
+  lunar.text:Hide()
+end
+
 -- Resolve which special power to show
 local function ResolveSpecialPower()
   local _, class = UnitClass("player")
   local spec = GetSpecialization()
   local specID = spec and GetSpecializationInfo(spec) or 0
+  if class == "DRUID" then
+    if specID == BALANCE_SPEC_ID then
+      return Enum.PowerType.LunarPower, specID
+    end
+    if select(1, UnitPowerType("player")) ~= Enum.PowerType.Energy then
+      return nil
+    end
+  end
   local ptype = CLASS_POWER_ID[class]
   if REQUIRED_SPEC[class] and specID ~= REQUIRED_SPEC[class] then return nil end
-  if class == "DRUID" and select(1, UnitPowerType("player")) ~= Enum.PowerType.Energy then
-    return nil
-  end
   return ptype, specID
 end
 
 -- Main update entry
 function ClassHUD:UpdateSpecialPower()
-  if not self.db.profile.show.power then return end
+  if not self.db.profile.show.power then
+    HideEclipseBars()
+    return
+  end
   local ptype, specID = ResolveSpecialPower()
   if not ptype then
-    HideAllSegments(1); UI.power:Hide(); return
+    HideAllSegments(1)
+    HideEclipseBars()
+    if UI.power then UI.power:Hide() end
+    return
   end
-  UI.power:Show()
+  if UI.power then UI.power:Show() end
+
+  if specID == BALANCE_SPEC_ID and ptype == Enum.PowerType.LunarPower then
+    self:UpdateEclipseBars()
+    return
+  else
+    HideEclipseBars()
+  end
   if ptype == Enum.PowerType.Runes then
     self:UpdateRunes()
     return
