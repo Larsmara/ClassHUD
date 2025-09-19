@@ -2,11 +2,12 @@
 ## Title: ClassHUD
 ## Notes: Simple class HUD: cast bar, HP, primary resource, special power (segments/runes)
 ## Author: Lars-Martin Antonsen
-## Version: 0.1.0
+## Version: @project-version@
 ## SavedVariables: ClassHUDDB
+## X-Embeds: Ace3, LibSharedMedia-3.0
+## OptionalDeps: Ace3, LibSharedMedia-3.0
 
-## Dependencies: Ace3
-## OptionalDeps: LibSharedMedia-3.0
+embeds.xml
 
 ClassHUD.lua
 ClassHUD_Utils.lua

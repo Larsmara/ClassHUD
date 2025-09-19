@@ -13,6 +13,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Inject version into TOC
+        run: |
+          VERSION=${GITHUB_REF_NAME}   # GITHUB_REF_NAME = f.eks. v1.0.0
+          VERSION=${VERSION#v}         # fjern leading "v"
+          echo "Using version: $VERSION"
+          sed -i "s/@project-version@/$VERSION/" ClassHUD.toc
+
       - name: Set up addon metadata
         run: |
           ADDON_NAME="ClassHUD"
