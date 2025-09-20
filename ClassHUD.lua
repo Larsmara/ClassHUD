@@ -148,10 +148,64 @@ function ClassHUD:EnableCooldownViewer()
   if type(SetCVar) == "function" then
     SetCVar("cooldownViewerEnabled", "1")
   end
+
+  local loaders = {}
+  if C_AddOns and C_AddOns.LoadAddOn then
+    table.insert(loaders, function(name)
+      if not C_AddOns.IsAddOnLoaded or not C_AddOns.IsAddOnLoaded(name) then
+        pcall(C_AddOns.LoadAddOn, name)
+      end
+    end)
+  end
+  if UIParentLoadAddOn then
+    table.insert(loaders, function(name)
+      pcall(UIParentLoadAddOn, name)
+    end)
+  end
+
+  if #loaders > 0 then
+    for _, name in ipairs({ "Blizzard_CooldownViewer", "Blizzard_CooldownUI" }) do
+      for _, loader in ipairs(loaders) do
+        loader(name)
+      end
+    end
+  end
 end
 
 function ClassHUD:GetEssentialFrame()
   return _G.EssentialCooldownViewer
+end
+
+function ClassHUD:GetAnchorProxy()
+  if not self._anchorProxy then
+    local proxy = CreateFrame("Frame", "ClassHUDAnchorProxy", UIParent)
+    proxy:SetSize(1, 1)
+    self._anchorProxy = proxy
+  end
+
+  local proxy = self._anchorProxy
+  local cfg = self:GetBarsConfig() or {}
+  local anchor = self:GetEssentialFrame()
+
+  if anchor and anchor.GetParent then
+    proxy:SetParent(anchor:GetParent() or UIParent)
+  else
+    proxy:SetParent(UIParent)
+  end
+
+  proxy:ClearAllPoints()
+  proxy:SetHeight(1)
+
+  if anchor and anchor.GetTop then
+    proxy:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 0)
+    proxy:SetPoint("BOTTOMRIGHT", anchor, "TOPRIGHT", 0, 0)
+    proxy:SetWidth(cfg.width or 280)
+  else
+    proxy:SetPoint("CENTER", UIParent, "CENTER", 0, -180)
+    proxy:SetWidth(cfg.width or 280)
+  end
+
+  return proxy
 end
 
 function ClassHUD:EnsureModules()
@@ -176,12 +230,10 @@ function ClassHUD:AnchorFrames()
   local spacing = cfg.spacing or 0
   local width = cfg.width or 280
 
-  local anchor = self:GetEssentialFrame() or UIParent
-  if not anchor then
-    return
+  local prev = self:GetAnchorProxy()
+  if prev and prev.SetWidth then
+    prev:SetWidth(width)
   end
-
-  local prev = anchor
   local function anchorBar(frame, enabled, height)
     if not frame then return end
     frame:ClearAllPoints()

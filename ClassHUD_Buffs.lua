@@ -13,7 +13,12 @@ local function GetFontPath()
 end
 
 local function PrintMessage(msg)
-  DEFAULT_CHAT_FRAME:AddMessage("|cff00ff88ClassHUD|r " .. msg)
+  local text = "|cff00ff88ClassHUD|r " .. (msg or "")
+  if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+    DEFAULT_CHAT_FRAME:AddMessage(text)
+  else
+    print(text)
+  end
 end
 
 local function Clamp(value, minValue, maxValue)
