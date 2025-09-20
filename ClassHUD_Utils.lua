@@ -6,16 +6,6 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 
 ClassHUD._lastSpecID = ClassHUD._lastSpecID or 0
 
-local DEFAULT_TRACKED_BAR_COLOR = { r = 0.25, g = 0.65, b = 1.00, a = 1 }
-
-local function CopyColorTemplate(template)
-  return {
-    r = template.r or 1,
-    g = template.g or 1,
-    b = template.b or 1,
-    a = template.a or 1,
-  }
-end
 
 -- ---------------------------------------------------------------------------
 -- Profile helpers
@@ -118,151 +108,64 @@ function ClassHUD:GetSnapshotEntry(spellID, class, specID)
   return snapshot[spellID]
 end
 
----Returns a fresh copy of the default tracked-bar color settings.
----@return table
-function ClassHUD:GetDefaultTrackedBarColor()
-  return CopyColorTemplate(DEFAULT_TRACKED_BAR_COLOR)
-end
-
-local function NormalizeTrackedConfigTable(config)
-  config.showIcon = not not config.showIcon
-  config.showBar = not not config.showBar
-
-  if config.barShowIcon == nil then
-    config.barShowIcon = true
-  else
-    config.barShowIcon = not not config.barShowIcon
-  end
-
-  if config.barShowTimer == nil then
-    config.barShowTimer = true
-  else
-    config.barShowTimer = not not config.barShowTimer
-  end
-
-  local color = config.barColor
-  if type(color) ~= "table" then
-    config.barColor = CopyColorTemplate(DEFAULT_TRACKED_BAR_COLOR)
-  else
-    config.barColor = {
-      r = color.r or DEFAULT_TRACKED_BAR_COLOR.r,
-      g = color.g or DEFAULT_TRACKED_BAR_COLOR.g,
-      b = color.b or DEFAULT_TRACKED_BAR_COLOR.b,
-      a = color.a or DEFAULT_TRACKED_BAR_COLOR.a,
-    }
-  end
-
-  return config
-end
-
-local function NormalizeTrackedConfig(value)
-  if type(value) == "table" then
-    return NormalizeTrackedConfigTable(value)
-  elseif type(value) == "boolean" then
-    return NormalizeTrackedConfigTable({
-      showIcon = value,
-      showBar = false,
-      barShowIcon = true,
-      barShowTimer = true,
-      barColor = CopyColorTemplate(DEFAULT_TRACKED_BAR_COLOR),
-    })
-  end
-
-  return nil
-end
-
----Returns (and optionally creates) the configuration block for a tracked buff/bar entry.
----@param class string|nil
----@param specID number|nil
----@param buffID number
----@param create boolean|nil
----@return table|nil
-function ClassHUD:GetTrackedEntryConfig(class, specID, buffID, create)
+function ClassHUD:GetHiddenTrackedBuffs(class, specID, create)
   local playerClass, playerSpec = self:GetPlayerClassSpec()
   class = class or playerClass
   specID = specID or playerSpec
-
-  local tracked = self:GetProfileTable(create, "trackedBuffs", class, specID)
-  if not tracked then return nil end
-
-  local value = tracked[buffID]
-  local normalized = NormalizeTrackedConfig(value)
-
-  if normalized then
-    if normalized ~= value then
-      tracked[buffID] = normalized
-    end
-    return normalized
-  end
-
-  if create then
-    local fresh = NormalizeTrackedConfig(false)
-    tracked[buffID] = fresh
-    return fresh
-  end
-
-  return nil
+  return self:GetProfileTable(create, "trackedBuffsHidden", class, specID)
 end
 
----Determines the best spell information to represent a tracked bar entry.
----@param entry table|nil Cooldown snapshot entry.
----@param primaryID number|nil Fallback spellID if no better match is found.
----@param candidates number[]|nil Pre-computed aura candidate list.
----@return number|nil displaySpellID
----@return string displayName
----@return number|nil iconID
----@return number[]|nil candidateList
-function ClassHUD:ResolveTrackedBarDisplay(entry, primaryID, candidates)
-  candidates = candidates or self:GetAuraCandidatesForEntry(entry, primaryID)
-
-  local displaySpellID, displayName, iconID
-
-  if candidates then
-    for _, spellID in ipairs(candidates) do
-      if type(spellID) == "number" and spellID > 0 then
-        local info = C_Spell.GetSpellInfo(spellID)
-        if info and info.name then
-          displaySpellID = spellID
-          displayName = info.name
-          iconID = info.iconID
-          break
-        end
-      end
-    end
-  end
-
-  if not displaySpellID and primaryID then
-    local info = C_Spell.GetSpellInfo(primaryID)
-    if info and info.name then
-      displaySpellID = primaryID
-      displayName = displayName or info.name
-      iconID = iconID or info.iconID
-    end
-  end
-
-  if entry then
-    displayName = displayName or entry.name
-    iconID = iconID or entry.iconID
-  end
-
-  if not displayName then
-    if displaySpellID then
-      displayName = C_Spell.GetSpellName(displaySpellID)
-    elseif primaryID then
-      displayName = C_Spell.GetSpellName(primaryID)
-    end
-  end
-
-  displayName = displayName or (primaryID and ("Spell " .. primaryID)) or "Unknown"
-
-  return displaySpellID, displayName, iconID, candidates
+function ClassHUD:IsTrackedBuffHidden(spellID, class, specID)
+  local tbl = self:GetHiddenTrackedBuffs(class, specID, false)
+  return tbl and tbl[spellID] and true or false
 end
 
----Iterates over snapshot entries for a given category and calls the handler.
----@param category string One of "essential", "utility", "buff", "bar".
----@param handler fun(spellID:number, entry:table, categoryData:table)
----@param class string|nil
----@param specID number|nil
+function ClassHUD:SetTrackedBuffHidden(spellID, hidden, class, specID)
+  local tbl = self:GetHiddenTrackedBuffs(class, specID, hidden)
+  if not tbl then return end
+  if hidden then
+    tbl[spellID] = true
+  else
+    tbl[spellID] = nil
+  end
+end
+
+function ClassHUD:GetCustomTrackedBuffs(class, specID, create)
+  local playerClass, playerSpec = self:GetPlayerClassSpec()
+  class = class or playerClass
+  specID = specID or playerSpec
+  return self:GetProfileTable(create, "trackedBuffsCustom", class, specID)
+end
+
+function ClassHUD:AddCustomTrackedBuff(spellID, class, specID)
+  if not spellID then return end
+  local tbl = self:GetCustomTrackedBuffs(class, specID, true)
+  if tbl then
+    tbl[spellID] = true
+  end
+end
+
+function ClassHUD:RemoveCustomTrackedBuff(spellID, class, specID)
+  if not spellID then return end
+  local tbl = self:GetCustomTrackedBuffs(class, specID, false)
+  if tbl then
+    tbl[spellID] = nil
+  end
+end
+
+function ClassHUD:GetCustomTrackedBuffList(class, specID)
+  local custom = self:GetCustomTrackedBuffs(class, specID, false)
+  local list = {}
+  if not custom then return list end
+  for spellID in pairs(custom) do
+    table.insert(list, spellID)
+  end
+  table.sort(list)
+  return list
+end
+
+---Returns a fresh copy of the default tracked-bar color settings.
+---@return table
 function ClassHUD:ForEachSnapshotEntry(category, handler, class, specID)
   local snapshot = self:GetSnapshotForSpec(class, specID, false)
   if not snapshot then return end
@@ -278,9 +181,32 @@ end
 
 ---Checks if the Blizzard Cooldown Viewer API is currently available.
 ---@return boolean
-function ClassHUD:IsCooldownViewerAvailable()
-  return C_CooldownViewer and C_CooldownViewer.IsCooldownViewerAvailable
-      and C_CooldownViewer.IsCooldownViewerAvailable()
+function ClassHUD:IsCooldownViewerAvailable(categoryID)
+  if not (C_CooldownViewer and C_CooldownViewer.IsCooldownViewerAvailable) then
+    return false
+  end
+
+  if categoryID then
+    return C_CooldownViewer.IsCooldownViewerAvailable(categoryID)
+  end
+
+  local enum = Enum and Enum.CooldownViewerCategory
+  if not enum then return false end
+
+  local categories = {
+    enum.Essential,
+    enum.Utility,
+    enum.TrackedBuffs,
+    enum.TrackedBars,
+  }
+
+  for _, cat in ipairs(categories) do
+    if cat and C_CooldownViewer.IsCooldownViewerAvailable(cat) then
+      return true
+    end
+  end
+
+  return false
 end
 
 -- ---------------------------------------------------------------------------

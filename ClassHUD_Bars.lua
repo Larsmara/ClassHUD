@@ -26,11 +26,11 @@ function ClassHUD:CreateCastBar()
   b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
   b.spell = b:CreateFontString(nil, "OVERLAY")
-  b.spell:SetFont(self:FetchFont(12))
+  b.spell:SetFont(self:FetchFont(self.db.profile.spellFontSize or 12))
   b.spell:SetPoint("LEFT", b.icon, "RIGHT", 4, 0)
 
   b.time = b:CreateFontString(nil, "OVERLAY")
-  b.time:SetFont(self:FetchFont(12))
+  b.time:SetFont(self:FetchFont(self.db.profile.spellFontSize or 12))
   b.time:SetPoint("RIGHT", b, "RIGHT", -3, 0)
 
   UI.cast = b
@@ -73,8 +73,8 @@ function ClassHUD:ApplyBarSkins()
     end
   end
   if UI.cast then
-    UI.cast.spell:SetFont(self:FetchFont(12))
-    UI.cast.time:SetFont(self:FetchFont(12))
+    UI.cast.spell:SetFont(self:FetchFont(self.db.profile.spellFontSize or 12))
+    UI.cast.time:SetFont(self:FetchFont(self.db.profile.spellFontSize or 12))
   end
   if UI.hp then UI.hp.text:SetFont(self:FetchFont(12)) end
   if UI.resource then UI.resource.text:SetFont(self:FetchFont(12)) end

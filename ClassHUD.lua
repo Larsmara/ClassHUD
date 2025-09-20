@@ -93,12 +93,15 @@ local defaults = {
     width            = 250,
     spacing          = 2,
     powerSpacing     = 2,
-    position         = { x = 0, y = -50 },
+    position         = { x = 0, y = -24 },
     borderColor      = { r = 0, g = 0, b = 0, a = 1 },
     textures         = {
       bar  = "Blizzard",
       font = "Friz Quadrata TT",
     },
+
+    spellFontSize    = 12,
+    buffFontSize     = 12,
 
     show             = {
       cast     = true,
@@ -115,48 +118,22 @@ local defaults = {
       power    = 14,
     },
 
-    sideBars         = {
-      size    = 36,
-      spacing = 4,
-      offset  = 6,
-    },
-
-    topBar           = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 0,
-      grow     = "UP", -- "UP" eller "DOWN"
-    },
-    bottomBar        = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 0,
-    },
     trackedBuffBar   = {
       perRow   = 8,
       spacingX = 4,
       spacingY = 4,
-      yOffset  = 4,        -- litt luft over TopBar
       align    = "CENTER", -- "LEFT" | "CENTER" | "RIGHT"
-      height   = 16,
+      offsetX  = 0,
+      offsetY  = 8,
     },
 
     -- =========================
     -- Spell & Buff persistence
     -- =========================
 
-    -- Utility placement per spellID
-    utilityPlacement = {
-      -- [spellID] = "TOP" | "BOTTOM" | "LEFT" | "RIGHT"
-    },
-
-    -- Persistente buff-links (class -> spec -> buffID -> spellID)
-    buffLinks        = {},
-
-    -- Brukervalgte tracked buffs (class -> spec -> buffID -> true/false)
-    trackedBuffs     = {},
+    -- Brukerdata for egne buffs og skjulte Blizzard-buffs
+    trackedBuffsHidden = {}, -- [class][specID][spellID] = true
+    trackedBuffsCustom = {}, -- [class][specID][spellID] = true
 
     -- CDM snapshot (slik at vi ikke trenger å spørre CDM hver gang)
     cdmSnapshot      = {
@@ -200,9 +177,19 @@ end
 function ClassHUD:ApplyAnchorPosition()
   local UI = self.UI
   if not UI.anchor then return end
-  local pos = (self.db and self.db.profile and self.db.profile.position) or { x = 0, y = -350 }
+  local pos = (self.db and self.db.profile and self.db.profile.position) or { x = 0, y = -24 }
+
+  local viewer = _G.EssentialCooldownViewer or _G.EssentialCooldownViewerFrame
+      or (_G.CooldownViewerFrame and _G.CooldownViewerFrame.EssentialCooldownViewer)
+
+  UI.anchor:SetParent(UIParent)
   UI.anchor:ClearAllPoints()
-  UI.anchor:SetPoint("CENTER", UIParent, "CENTER", pos.x or 0, pos.y or 0)
+
+  if viewer then
+    UI.anchor:SetPoint("TOP", viewer, "BOTTOM", pos.x or 0, pos.y or 0)
+  else
+    UI.anchor:SetPoint("CENTER", UIParent, "CENTER", pos.x or 0, pos.y or 0)
+  end
 end
 
 -- Exposed so Classbar can create uniform bars
@@ -257,12 +244,14 @@ function ClassHUD:FullUpdate()
   if self.UpdateHP then self:UpdateHP() end
   if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
   if self.UpdateSpecialPower then self:UpdateSpecialPower() end
+  if self.BuildTrackedBuffFrames then self:BuildTrackedBuffFrames() end
 end
 
 ---Rebuilds the Cooldown Viewer snapshot for the current class/spec.
 ---The snapshot is the authoritative data source for layout, options and UI.
 function ClassHUD:UpdateCDMSnapshot()
   if not self:IsCooldownViewerAvailable() then return end
+  if not (Enum and Enum.CooldownViewerCategory) then return end
 
   local class, specID = self:GetPlayerClassSpec()
   local snapshot = self:GetSnapshotForSpec(class, specID, true)
@@ -274,8 +263,8 @@ function ClassHUD:UpdateCDMSnapshot()
   local categories = {
     [Enum.CooldownViewerCategory.Essential]   = "essential",
     [Enum.CooldownViewerCategory.Utility]     = "utility",
-    [Enum.CooldownViewerCategory.TrackedBuff] = "buff",
-    [Enum.CooldownViewerCategory.TrackedBar]  = "bar",
+    [Enum.CooldownViewerCategory.TrackedBuffs] = "buff",
+    [Enum.CooldownViewerCategory.TrackedBars]  = "bar",
   }
 
   local orderByCategory = {}
@@ -421,6 +410,7 @@ end
 local eventFrame = CreateFrame("Frame")
 
 for _, ev in pairs({
+  "PLAYER_LOGIN",
   -- World/spec
   "PLAYER_ENTERING_WORLD",
   "PLAYER_SPECIALIZATION_CHANGED",
@@ -446,6 +436,14 @@ for _, ev in pairs({
 end
 
 eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
+  if event == "PLAYER_LOGIN" then
+    if SetCVar then
+      pcall(SetCVar, "cooldownViewerEnabled", "1")
+    end
+    ClassHUD:ApplyAnchorPosition()
+    return
+  end
+
   -- Full refresh after world load
   if event == "PLAYER_ENTERING_WORLD" then
     ClassHUD:FullUpdate()
@@ -608,66 +606,3 @@ SlashCmdList.CHUDBUFFDESC = function()
   end
 end
 
--- /chudmap : vis buff -> spell mapping
-SLASH_CHUDMAP1 = "/chudmap"
-SlashCmdList.CHUDMAP = function()
-  if not ClassHUD.trackedBuffToSpell or next(ClassHUD.trackedBuffToSpell) == nil then
-    print("|cff00ff88ClassHUD|r Ingen auto-mapping (buff → spell) er registrert.")
-    return
-  end
-  print("|cff00ff88ClassHUD|r Auto-mapping (buff → spell):")
-  for buffID, spellID in pairs(ClassHUD.trackedBuffToSpell) do
-    local bName = C_Spell.GetSpellName(buffID) or ("buff " .. buffID)
-    local sName = C_Spell.GetSpellName(spellID) or ("spell " .. spellID)
-    print(string.format("  %s (%d)  →  %s (%d)", bName, buffID, sName, spellID))
-  end
-end
-
--- ==================================================
--- Debug command: /chudtracked
--- Viser snapshot vs. aktive buffs
--- ==================================================
-SLASH_CHUDTRACKED1 = "/chudtracked"
-SlashCmdList.CHUDTRACKED = function()
-  local class, specID = ClassHUD:GetPlayerClassSpec()
-
-  print("|cff00ff88ClassHUD|r Debug: Tracked Buffs for", class, specID)
-
-  local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
-
-  local tracked = ClassHUD.db.profile.trackedBuffs
-      and ClassHUD.db.profile.trackedBuffs[class]
-      and ClassHUD.db.profile.trackedBuffs[class][specID]
-
-  if not snapshot then
-    print("  Ingen snapshot lagret for denne spec.")
-    return
-  end
-
-  for buffID, data in pairs(snapshot) do
-    if data.categories and data.categories.buff then
-      local name = data.name or ("Buff " .. buffID)
-      local candidates = ClassHUD:GetAuraCandidatesForEntry(data, buffID)
-      local aura = select(1, ClassHUD:FindAuraFromCandidates(candidates, { "player", "pet" }))
-      local active = aura and true or false
-
-      local config = tracked and ClassHUD.GetTrackedEntryConfig
-          and ClassHUD:GetTrackedEntryConfig(class, specID, buffID, false)
-
-      local enabled
-      if config and (config.showIcon or config.showBar) then
-        local modes = {}
-        if config.showIcon then table.insert(modes, "icon") end
-        if config.showBar then table.insert(modes, "bar") end
-        enabled = string.format("|cff00ff00ON (%s)|r", table.concat(modes, ", "))
-      else
-        enabled = "|cffff0000OFF|r"
-      end
-
-      local status = active and "|cff00ff00ACTIVE|r" or "inactive"
-
-      print(string.format("  [%d] %s → tracked=%s, %s",
-        buffID, name, enabled, status))
-    end
-  end
-end
