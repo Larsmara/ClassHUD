@@ -167,6 +167,7 @@ local function CastOnUpdate(self)
 end
 
 function ClassHUD:StopCast()
+  if self._barsPreviewing then return end
   if not (self.bars and self.bars.cast) then return end
   local cast = self.bars.cast
   cast:SetScript("OnUpdate", nil)
@@ -179,6 +180,7 @@ end
 
 function ClassHUD:StartCast(name, icon, startMS, endMS, isChannel)
   if not self:IsBarEnabled("cast") then return end
+  if self._barsPreviewing then return end
   if not (self.bars and self.bars.cast) then return end
 
   local cast = self.bars.cast
@@ -248,6 +250,26 @@ function ClassHUD:UNIT_SPELLCAST_FAILED(unit)
   end
 end
 
+function ClassHUD:UNIT_SPELLCAST_EMPOWER_START(unit)
+  if unit ~= "player" then return end
+  local name, _, icon, startMS, endMS = UnitChannelInfo("player")
+  if name then
+    self:StartCast(name, icon, startMS, endMS, true)
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_EMPOWER_STOP(unit)
+  if unit == "player" then
+    self:StopCast()
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_EMPOWER_INTERRUPTED(unit)
+  if unit == "player" then
+    self:StopCast()
+  end
+end
+
 -- Health bar ----------------------------------------------------------------
 local function GetClassColor()
   if not UnitClass then
@@ -262,6 +284,7 @@ local function GetClassColor()
 end
 
 function ClassHUD:UpdateHealthBar()
+  if self._barsPreviewing then return end
   if not self:IsBarEnabled("health") then
     if self.bars and self.bars.health then
       self.bars.health:Hide()
@@ -293,6 +316,7 @@ end
 
 -- Primary resource ---------------------------------------------------------
 function ClassHUD:UpdateResourceBar()
+  if self._barsPreviewing then return end
   if not self:IsBarEnabled("resource") then
     if self.bars and self.bars.resource then
       self.bars.resource:Hide()
@@ -529,6 +553,7 @@ local function UpdateEssence(ptype)
 end
 
 function ClassHUD:UpdateClassBar()
+  if self._barsPreviewing then return end
   if not self:IsBarEnabled("class") then
     if self.bars and self.bars.class then
       self.bars.class:Hide()
@@ -561,5 +586,85 @@ function ClassHUD:UpdateClassBar()
   end
 
   UpdateSegments(ptype, max, specID)
+end
+
+local PREVIEW_CAST_ICON = 136150
+
+function ClassHUD:ShowBarsPreview()
+  if not self.bars then return end
+  self._barsPreviewing = true
+
+  local bars = self.bars
+
+  if self:IsBarEnabled("cast") and bars.cast then
+    local cast = bars.cast
+    cast:SetScript("OnUpdate", nil)
+    cast.startTime = nil
+    cast.endTime = nil
+    cast:SetMinMaxValues(0, 2.5)
+    cast:SetValue(1.5)
+    cast.icon:SetTexture(PREVIEW_CAST_ICON)
+    cast.spell:SetText("Preview Cast")
+    cast.time:SetText("1.0")
+    cast:Show()
+  elseif bars.cast then
+    bars.cast:Hide()
+  end
+
+  if self:IsBarEnabled("health") and bars.health then
+    local health = bars.health
+    health:SetMinMaxValues(0, 100)
+    health:SetValue(75)
+    local r, g, b = GetClassColor()
+    health:SetStatusBarColor(r, g, b)
+    health.value:SetText("75 / 100 (75%)")
+    health:Show()
+  elseif bars.health then
+    bars.health:Hide()
+  end
+
+  if self:IsBarEnabled("resource") and bars.resource then
+    local resource = bars.resource
+    resource:SetMinMaxValues(0, 100)
+    resource:SetValue(60)
+    resource:SetStatusBarColor(0.25, 0.6, 1.0)
+    resource.value:SetText("60")
+    resource:Show()
+  elseif bars.resource then
+    bars.resource:Hide()
+  end
+
+  if self:IsBarEnabled("class") and bars.class then
+    local class = bars.class
+    LayoutSegments(class, 5)
+    for i = 1, 5 do
+      local segment = EnsureSegment(class, i)
+      segment:SetMinMaxValues(0, 1)
+      segment:SetStatusBarTexture(GetBarTexture())
+      local value = (i <= 3) and 1 or (i == 4 and 0.5 or 0)
+      segment:SetValue(value)
+      local r, g, b = IndexedColor(i, 5)
+      segment:SetStatusBarColor(r, g, b)
+      segment:Show()
+    end
+    class:Show()
+  elseif bars.class then
+    bars.class:Hide()
+  end
+end
+
+function ClassHUD:HideBarsPreview()
+  if not self.bars then return end
+  if not self._barsPreviewing then
+    self:RefreshBars()
+    return
+  end
+
+  self._barsPreviewing = false
+
+  if self.bars.cast then
+    self:StopCast()
+  end
+  self:RefreshBars()
 end
 

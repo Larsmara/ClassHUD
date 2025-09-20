@@ -97,7 +97,7 @@ function BuffBar:ApplyLayout()
   for _, frame in ipairs(self.icons) do
     frame:SetSize(iconSize, iconSize)
   end
-  if not self:IsEnabled() then
+  if not self:IsEnabled() and not self.previewing then
     self.anchor:Hide()
   else
     self.anchor:Show()
@@ -122,6 +122,8 @@ local function NormalizeAura(spellID, aura)
   return info
 end
 
+local AURA_FILTERS = { "HELPFUL", nil }
+
 local function FindAura(spellID)
   if not spellID then
     return nil
@@ -131,9 +133,11 @@ local function FindAura(spellID)
   for _, unit in ipairs(units) do
     if C_UnitAuras then
       if C_UnitAuras.GetAuraDataBySpellID then
-        local aura = C_UnitAuras.GetAuraDataBySpellID(unit, spellID, "HELPFUL")
-        if aura then
-          return NormalizeAura(spellID, aura)
+        for _, filter in ipairs(AURA_FILTERS) do
+          local aura = C_UnitAuras.GetAuraDataBySpellID(unit, spellID, filter)
+          if aura then
+            return NormalizeAura(spellID, aura)
+          end
         end
       end
       if unit == "player" and C_UnitAuras.GetPlayerAuraBySpellID then
@@ -145,15 +149,37 @@ local function FindAura(spellID)
     end
 
     if AuraUtil and AuraUtil.FindAuraBySpellID then
-      local name, icon, count, _, duration, expirationTime = AuraUtil.FindAuraBySpellID(spellID, unit, "HELPFUL")
-      if name then
-        return NormalizeAura(spellID, {
-          name = name,
-          icon = icon,
-          applications = count,
-          duration = duration,
-          expirationTime = expirationTime,
-        })
+      for _, filter in ipairs(AURA_FILTERS) do
+        local name, icon, count, _, duration, expirationTime = AuraUtil.FindAuraBySpellID(spellID, unit, filter)
+        if name then
+          return NormalizeAura(spellID, {
+            name = name,
+            icon = icon,
+            applications = count,
+            duration = duration,
+            expirationTime = expirationTime,
+          })
+        end
+      end
+    end
+
+    if UnitAura then
+      for _, filter in ipairs(AURA_FILTERS) do
+        local index = 1
+        while true do
+          local name, icon, count, _, duration, expirationTime, _, _, _, id = UnitAura(unit, index, filter)
+          if not name then break end
+          if id == spellID then
+            return NormalizeAura(spellID, {
+              name = name,
+              icon = icon,
+              applications = count,
+              duration = duration,
+              expirationTime = expirationTime,
+            })
+          end
+          index = index + 1
+        end
       end
     end
   end
@@ -209,38 +235,72 @@ local function ExtractFromCooldownInfo(spellID, data)
   }
 end
 
+local function BuildTotemEntry(slot)
+  if not GetTotemInfo then
+    return nil
+  end
+  local haveTotem, name, startTime, duration, icon = GetTotemInfo(slot)
+  if not haveTotem then
+    return nil
+  end
+  local spellID
+  if GetTotemSpell then
+    spellID = GetTotemSpell(slot)
+  end
+  if duration and duration <= 0 then
+    duration = nil
+    startTime = nil
+  end
+  return {
+    spellID = spellID,
+    name = name,
+    icon = icon,
+    startTime = startTime,
+    duration = duration,
+    count = nil,
+  }
+end
+
+local function FindActiveTotemForSpell(bar, spellID)
+  if not spellID or not GetTotemInfo or not GetTotemSpell then
+    return nil
+  end
+  local maxTotems = MAX_TOTEMS or 4
+  for slot = 1, maxTotems do
+    local entry = BuildTotemEntry(slot)
+    if entry and entry.spellID == spellID then
+      if bar.hidden[spellID] then
+        return nil
+      end
+      return entry
+    end
+  end
+end
+
 local function BuildEntry(bar, data)
   if not data then return nil end
 
   if data.source == "totem" then
-    if not GetTotemInfo then
-      return nil
-    end
     local slot = data.totemSlot
     if not slot then return nil end
-    local haveTotem, name, startTime, duration, icon = GetTotemInfo(slot)
-    if not haveTotem then return nil end
-    local spellID = data.spellID
-    if (not spellID) and GetTotemSpell then
-      spellID = GetTotemSpell(slot)
-      data.spellID = spellID
-    end
-    if spellID and bar.hidden[spellID] then
+    local entry = BuildTotemEntry(slot)
+    if not entry then
       return nil
     end
-    return {
-      spellID = spellID,
-      name = name,
-      icon = icon,
-      startTime = startTime,
-      duration = duration,
-      count = nil,
-    }
+    if entry.spellID and bar.hidden[entry.spellID] then
+      return nil
+    end
+    return entry
   end
 
   local spellID = data.spellID
   if not spellID or bar.hidden[spellID] then
     return nil
+  end
+
+  local totemEntry = FindActiveTotemForSpell(bar, spellID)
+  if totemEntry then
+    return totemEntry
   end
 
   local aura = FindAura(spellID)
@@ -315,6 +375,10 @@ function BuffBar:LayoutIcons(count)
 end
 
 function BuffBar:UpdateBuffs()
+  if self.previewing then
+    return
+  end
+
   if not self:IsEnabled() then
     self.anchor:Hide()
     for _, frame in ipairs(self.icons) do
@@ -348,6 +412,60 @@ function BuffBar:UpdateBuffs()
   for i = #built + 1, #self.icons do
     self.icons[i]:Hide()
   end
+end
+
+local PREVIEW_ENTRIES = {
+  { icon = 135953, duration = 24, count = 1 },
+  { icon = 132221, duration = 18, count = 3 },
+  { icon = 458976, duration = 12, count = nil },
+}
+
+function BuffBar:ShowPreview()
+  self.previewing = true
+  self:ApplyLayout()
+  self.anchor:Show()
+
+  local cfg = self.owner:GetBuffConfig()
+  local limit = Clamp((cfg.rows or 1) * (cfg.perRow or 10), 1, 120)
+  local count = math.min(#PREVIEW_ENTRIES, limit)
+  self:LayoutIcons(count)
+
+  local now = GetTime()
+  for i = 1, count do
+    local frame = EnsureIcon(self, i)
+    local entry = PREVIEW_ENTRIES[i]
+    frame.icon:SetTexture(entry.icon or 136243)
+    if entry.duration and entry.duration > 0 then
+      frame.cooldown:SetCooldown(now, entry.duration)
+      frame.cooldown:Show()
+    else
+      if CooldownFrame_Clear then
+        CooldownFrame_Clear(frame.cooldown)
+      else
+        frame.cooldown:SetCooldown(0, 0)
+      end
+      frame.cooldown:Hide()
+    end
+    if entry.count and entry.count > 1 then
+      frame.count:SetText(entry.count)
+      frame.count:Show()
+    else
+      frame.count:SetText("")
+    end
+    frame:Show()
+  end
+
+  for i = count + 1, #self.icons do
+    self.icons[i]:Hide()
+  end
+end
+
+function BuffBar:HidePreview()
+  if not self.previewing then
+    return
+  end
+  self.previewing = false
+  self.owner:UpdateBuffBar()
 end
 
 -- ---------------------------------------------------------------------------
