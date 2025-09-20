@@ -25,6 +25,12 @@ _G.ClassHUD = ClassHUD -- explicit global bridge so split files can always find 
 -- Make shared libs available to submodules
 ClassHUD.LSM = LSM
 
+local function GetEssentialCooldownViewerFrame()
+  return _G.EssentialCooldownViewer
+      or _G.EssentialCooldownViewerFrame
+      or (_G.CooldownViewerFrame and _G.CooldownViewerFrame.EssentialCooldownViewer)
+end
+
 ---@class ClassHUDUI
 ---@field anchor Frame|nil
 ---@field cast StatusBar|nil
@@ -174,13 +180,16 @@ end
 -- ---------------------------------------------------------------------------
 -- Public helpers used by modules
 -- ---------------------------------------------------------------------------
+function ClassHUD:GetEssentialCooldownViewer()
+  return GetEssentialCooldownViewerFrame()
+end
+
 function ClassHUD:ApplyAnchorPosition()
   local UI = self.UI
   if not UI.anchor then return end
   local pos = (self.db and self.db.profile and self.db.profile.position) or { x = 0, y = -24 }
 
-  local viewer = _G.EssentialCooldownViewer or _G.EssentialCooldownViewerFrame
-      or (_G.CooldownViewerFrame and _G.CooldownViewerFrame.EssentialCooldownViewer)
+  local viewer = GetEssentialCooldownViewerFrame()
 
   UI.anchor:SetParent(UIParent)
   UI.anchor:ClearAllPoints()
@@ -189,6 +198,96 @@ function ClassHUD:ApplyAnchorPosition()
     UI.anchor:SetPoint("TOP", viewer, "BOTTOM", pos.x or 0, pos.y or 0)
   else
     UI.anchor:SetPoint("CENTER", UIParent, "CENTER", pos.x or 0, pos.y or 0)
+  end
+
+  if self.AnchorBarsToCooldownViewer then
+    self:AnchorBarsToCooldownViewer()
+  end
+end
+
+local function ApplyBarAnchor(frame, anchorTo, xOffset, yOffset, width, shouldShow)
+  if not frame then return anchorTo end
+  if not anchorTo then return frame end
+
+  frame:ClearAllPoints()
+  frame:SetPoint("TOP", anchorTo, "BOTTOM", xOffset or 0, yOffset or 0)
+  if width then
+    frame:SetWidth(width)
+  end
+
+  if shouldShow == false then
+    frame:Hide()
+    if frame._holder then frame._holder:Hide() end
+    return anchorTo
+  end
+
+  frame:Show()
+  if frame._holder then frame._holder:Show() end
+
+  return frame
+end
+
+function ClassHUD:AnchorBarsToCooldownViewer()
+  local viewer = GetEssentialCooldownViewerFrame()
+  if not viewer then return end
+
+  local db = self.db and self.db.profile
+  if not db then return end
+
+  local show = db.show or {}
+  local spacing = db.spacing or 0
+  local pos = db.position or {}
+  local width = db.width
+
+  local nextAnchor = viewer
+  local xOffset = pos.x or 0
+  local yOffset = pos.y or -24
+
+  nextAnchor = ApplyBarAnchor(self.UI.cast, nextAnchor, xOffset, yOffset, width, show.cast ~= false)
+  xOffset = 0
+  yOffset = -spacing
+
+  nextAnchor = ApplyBarAnchor(self.UI.hp, nextAnchor, xOffset, yOffset, width, show.hp ~= false)
+  nextAnchor = ApplyBarAnchor(self.UI.resource, nextAnchor, xOffset, yOffset, width, show.resource ~= false)
+  nextAnchor = ApplyBarAnchor(self.UI.power, nextAnchor, xOffset, yOffset, width, show.power ~= false)
+  nextAnchor = ApplyBarAnchor(self.UI.class, nextAnchor, xOffset, yOffset, width, show.class ~= false)
+end
+
+function ClassHUD:UpdateFromCooldownViewer()
+  if not (C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCategorySet and C_CooldownViewer.GetCooldownViewerCooldownInfo) then
+    return
+  end
+  if not (Enum and Enum.CooldownViewerCategory) then
+    return
+  end
+
+  self._cooldownViewerData = self._cooldownViewerData or {
+    trackedBuffs = {},
+    trackedBars  = {},
+  }
+
+  local data = self._cooldownViewerData
+  wipe(data.trackedBuffs)
+  wipe(data.trackedBars)
+
+  local trackedBuffs = data.trackedBuffs
+  local trackedBars = data.trackedBars
+
+  local function PopulateCategory(category, target)
+    local ids = C_CooldownViewer.GetCooldownViewerCategorySet(category) or {}
+    for _, cooldownID in ipairs(ids) do
+      local info = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
+      if info and info.spellID then
+        target[#target + 1] = { cooldownID = cooldownID, info = info }
+      end
+    end
+  end
+
+  PopulateCategory(Enum.CooldownViewerCategory.TrackedBuffs, trackedBuffs)
+  PopulateCategory(Enum.CooldownViewerCategory.TrackedBars, trackedBars)
+
+  if self.BuildTrackedBuffFrames and self.UI and self.UI.anchor then
+    self:BuildTrackedBuffFrames()
   end
 end
 
@@ -245,6 +344,7 @@ function ClassHUD:FullUpdate()
   if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
   if self.UpdateSpecialPower then self:UpdateSpecialPower() end
   if self.BuildTrackedBuffFrames then self:BuildTrackedBuffFrames() end
+  if self.AnchorBarsToCooldownViewer then self:AnchorBarsToCooldownViewer() end
 end
 
 ---Rebuilds the Cooldown Viewer snapshot for the current class/spec.
@@ -440,12 +540,14 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if SetCVar then
       pcall(SetCVar, "cooldownViewerEnabled", "1")
     end
+    if ClassHUD.UpdateFromCooldownViewer then ClassHUD:UpdateFromCooldownViewer() end
     ClassHUD:ApplyAnchorPosition()
     return
   end
 
   -- Full refresh after world load
   if event == "PLAYER_ENTERING_WORLD" then
+    if ClassHUD.UpdateFromCooldownViewer then ClassHUD:UpdateFromCooldownViewer() end
     ClassHUD:FullUpdate()
     ClassHUD:ApplyAnchorPosition()
     local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
@@ -457,9 +559,11 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   -- Spec change
   if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
     ClassHUD:UpdateCDMSnapshot()
+    if ClassHUD.UpdateFromCooldownViewer then ClassHUD:UpdateFromCooldownViewer() end
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    ClassHUD:ApplyAnchorPosition()
     ClassHUD:RefreshRegisteredOptions()
     return
   end
