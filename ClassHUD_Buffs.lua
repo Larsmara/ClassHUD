@@ -21,6 +21,111 @@ local function PrintMessage(msg)
   end
 end
 
+local function SpellName(spellID)
+  local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(spellID)
+  if info and info.name then
+    return info.name
+  end
+  if GetSpellInfo then
+    local name = GetSpellInfo(spellID)
+    if name then
+      return name
+    end
+  end
+  return string.format("Spell %s", tostring(spellID or "?"))
+end
+
+function ClassHUD:Print(msg)
+  PrintMessage(msg)
+end
+
+function ClassHUD:GetBuffSpellName(spellID)
+  return SpellName(spellID)
+end
+
+local function EnsureBuffTables()
+  local cfg = ClassHUD:GetBuffConfig()
+  if type(cfg.customSpellIDs) ~= "table" then
+    cfg.customSpellIDs = {}
+  end
+  if type(cfg.hiddenSpellIDs) ~= "table" then
+    cfg.hiddenSpellIDs = {}
+  end
+  return cfg
+end
+
+function ClassHUD:AddCustomBuff(spellID)
+  local id = tonumber(spellID)
+  if not id then
+    PrintMessage("Invalid spell ID.")
+    return false, "Invalid spell ID"
+  end
+  local cfg = EnsureBuffTables()
+  if cfg.customSpellIDs[id] then
+    PrintMessage("Already tracking: " .. SpellName(id))
+    return false, "Already tracking"
+  end
+  cfg.customSpellIDs[id] = true
+  PrintMessage("Tracking custom buff: " .. SpellName(id))
+  self:UpdateFromCooldownViewer()
+  self:NotifyConfigChanged()
+  return true
+end
+
+function ClassHUD:RemoveCustomBuff(spellID)
+  local id = tonumber(spellID)
+  if not id then
+    PrintMessage("Invalid spell ID.")
+    return false, "Invalid spell ID"
+  end
+  local cfg = EnsureBuffTables()
+  if not cfg.customSpellIDs[id] then
+    PrintMessage("Buff not tracked: " .. SpellName(id))
+    return false, "Buff not tracked"
+  end
+  cfg.customSpellIDs[id] = nil
+  PrintMessage("Removed custom buff: " .. SpellName(id))
+  self:UpdateFromCooldownViewer()
+  self:NotifyConfigChanged()
+  return true
+end
+
+function ClassHUD:HideTrackedBuff(spellID)
+  local id = tonumber(spellID)
+  if not id then
+    PrintMessage("Invalid spell ID.")
+    return false, "Invalid spell ID"
+  end
+  local cfg = EnsureBuffTables()
+  if cfg.hiddenSpellIDs[id] then
+    PrintMessage("Spell already hidden: " .. SpellName(id))
+    return false, "Already hidden"
+  end
+  cfg.hiddenSpellIDs[id] = true
+  PrintMessage("Hidden Blizzard tracked spell: " .. SpellName(id))
+  self:UpdateFromCooldownViewer()
+  self:NotifyConfigChanged()
+  return true
+end
+
+function ClassHUD:ShowTrackedBuff(spellID)
+  local id = tonumber(spellID)
+  if not id then
+    PrintMessage("Invalid spell ID.")
+    return false, "Invalid spell ID"
+  end
+  local cfg = EnsureBuffTables()
+  if not cfg.hiddenSpellIDs[id] then
+    PrintMessage("Spell not hidden: " .. SpellName(id))
+    return false, "Spell not hidden"
+  end
+  cfg.hiddenSpellIDs[id] = nil
+  PrintMessage("Restored Blizzard tracked spell: " .. SpellName(id))
+  self:UpdateFromCooldownViewer()
+  self:NotifyConfigChanged()
+  return true
+end
+
 local function Clamp(value, minValue, maxValue)
   if value < minValue then return minValue end
   if value > maxValue then return maxValue end
@@ -425,15 +530,8 @@ local function ParseNumber(token)
   end
 end
 
-local function SpellName(spellID)
-  local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(spellID)
-  return info and info.name or ("Spell " .. spellID)
-end
-
 function ClassHUD:HandleBuffCommand(msg)
-  local cfg = self:GetBuffConfig()
-  cfg.customSpellIDs = cfg.customSpellIDs or {}
-  cfg.hiddenSpellIDs = cfg.hiddenSpellIDs or {}
+  local cfg = EnsureBuffTables()
   local args = {}
   for token in string.gmatch(msg or "", "[^%s]+") do
     table.insert(args, token)
@@ -451,6 +549,14 @@ function ClassHUD:HandleBuffCommand(msg)
     PrintMessage("  /classhud buffs remove <spellID> - stop tracking a custom buff")
     PrintMessage("  /classhud buffs hide <spellID> - hide a Blizzard tracked spell")
     PrintMessage("  /classhud buffs show <spellID> - show a hidden Blizzard spell")
+    PrintMessage("  /classhud options - open the configuration window")
+    return
+  end
+
+  if sub == "options" then
+    if self.OpenOptions then
+      self:OpenOptions()
+    end
     return
   end
 
@@ -517,33 +623,17 @@ function ClassHUD:HandleBuffCommand(msg)
       return
     end
     if action == "add" then
-      cfg.customSpellIDs[spellID] = true
-      PrintMessage("Tracking custom buff: " .. SpellName(spellID))
+      self:AddCustomBuff(spellID)
     elseif action == "remove" then
-      cfg.customSpellIDs[spellID] = nil
-      PrintMessage("Removed custom buff: " .. SpellName(spellID))
+      self:RemoveCustomBuff(spellID)
     elseif action == "hide" then
-      cfg.hiddenSpellIDs[spellID] = true
-      PrintMessage("Hidden Blizzard tracked spell: " .. SpellName(spellID))
+      self:HideTrackedBuff(spellID)
     elseif action == "show" then
-      cfg.hiddenSpellIDs[spellID] = nil
-      PrintMessage("Restored Blizzard tracked spell: " .. SpellName(spellID))
+      self:ShowTrackedBuff(spellID)
     end
-    self:UpdateFromCooldownViewer()
-    self:NotifyConfigChanged()
     return
   end
 
   PrintMessage("Unknown buff command. Use /classhud help for usage.")
-end
-
-function ClassHUD:InitializeBuffOptions()
-  if self._buffSlashRegistered then return end
-  SLASH_CLASSHUDBUFFS1 = "/classhud"
-  SLASH_CLASSHUDBUFFS2 = "/chud"
-  SlashCmdList.CLASSHUDBUFFS = function(msg)
-    self:HandleBuffCommand(msg)
-  end
-  self._buffSlashRegistered = true
 end
 

@@ -15,6 +15,7 @@ local defaults = {
   bars = {
     width = 280,
     spacing = 0,
+    offsetY = 0,
     texture = "Interface\\TargetingFrame\\UI-StatusBar",
     font = "Fonts\\FRIZQT__.TTF",
     cast = { enabled = true, height = 18, textSize = 12 },
@@ -28,6 +29,7 @@ local defaults = {
     spacing = 4,
     rows = 2,
     perRow = 10,
+    offsetY = 0,
     customSpellIDs = {},
     hiddenSpellIDs = {},
   },
@@ -175,6 +177,7 @@ function ClassHUD:AnchorFrames()
   local cfg = self:GetBarsConfig()
   local spacing = cfg.spacing or 0
   local width = cfg.width or 280
+  local offsetY = cfg.offsetY or 0
 
   local anchor = self:GetEssentialFrame() or UIParent
   if not anchor then
@@ -182,14 +185,20 @@ function ClassHUD:AnchorFrames()
   end
 
   local prev = anchor
+  local firstAnchor = true
   local function anchorBar(frame, enabled, height)
     if not frame then return end
     frame:ClearAllPoints()
     frame:SetWidth(width)
     if enabled and height and height > 0 then
       frame:SetHeight(height)
-      frame:SetPoint("BOTTOMLEFT", prev, "TOPLEFT", 0, spacing)
-      frame:SetPoint("BOTTOMRIGHT", prev, "TOPRIGHT", 0, spacing)
+      local yOffset = spacing
+      if firstAnchor then
+        yOffset = yOffset + offsetY
+        firstAnchor = false
+      end
+      frame:SetPoint("BOTTOMLEFT", prev, "TOPLEFT", 0, yOffset)
+      frame:SetPoint("BOTTOMRIGHT", prev, "TOPRIGHT", 0, yOffset)
       frame:Show()
       prev = frame
     else
@@ -197,17 +206,22 @@ function ClassHUD:AnchorFrames()
     end
   end
 
-  anchorBar(bars.cast, self:IsBarEnabled("cast"), cfg.cast and cfg.cast.height)
+  anchorBar(bars.class, self:IsBarEnabled("class"), cfg.class and cfg.class.height)
   anchorBar(bars.health, self:IsBarEnabled("health"), cfg.health and cfg.health.height)
   anchorBar(bars.resource, self:IsBarEnabled("resource"), cfg.resource and cfg.resource.height)
-  anchorBar(bars.class, self:IsBarEnabled("class"), cfg.class and cfg.class.height)
+  anchorBar(bars.cast, self:IsBarEnabled("cast"), cfg.cast and cfg.cast.height)
 
   if buffs and buffs.anchor then
     buffs.anchor:ClearAllPoints()
     buffs.anchor:SetWidth(width)
     if buffs:IsEnabled() then
-      buffs.anchor:SetPoint("BOTTOMLEFT", prev, "TOPLEFT", 0, spacing)
-      buffs.anchor:SetPoint("BOTTOMRIGHT", prev, "TOPRIGHT", 0, spacing)
+      local buffOffset = (self:GetBuffConfig().offsetY or 0) + spacing
+      if firstAnchor then
+        buffOffset = buffOffset + offsetY
+        firstAnchor = false
+      end
+      buffs.anchor:SetPoint("BOTTOMLEFT", prev, "TOPLEFT", 0, buffOffset)
+      buffs.anchor:SetPoint("BOTTOMRIGHT", prev, "TOPRIGHT", 0, buffOffset)
       prev = buffs.anchor
     end
   end
@@ -355,13 +369,13 @@ events:SetScript("OnEvent", function(_, event, arg1, ...)
   if event == "PLAYER_LOGIN" then
     ClassHUD:EnableCooldownViewer()
     ClassHUD:EnsureModules()
+    if ClassHUD.InitializeOptions then
+      ClassHUD:InitializeOptions()
+    end
     ClassHUD:AnchorFrames()
     ClassHUD:UpdateFromCooldownViewer()
     ClassHUD:RefreshBars()
     ClassHUD:UpdateBuffBar()
-    if ClassHUD.InitializeBuffOptions then
-      ClassHUD:InitializeBuffOptions()
-    end
     return
   end
 
@@ -442,4 +456,7 @@ function ClassHUD:NotifyConfigChanged()
   self:AnchorFrames()
   self:RefreshBars()
   self:UpdateBuffBar()
+  if self.RefreshOptionsPanel then
+    self:RefreshOptionsPanel()
+  end
 end

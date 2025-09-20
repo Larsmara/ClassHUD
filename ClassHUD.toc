@@ -8,3 +8,4 @@
 ClassHUD.lua
 ClassHUD_Bars.lua
 ClassHUD_Buffs.lua
+ClassHUD_Options.lua
