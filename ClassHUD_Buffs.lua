@@ -232,64 +232,93 @@ local function NormalizeAura(spellID, aura)
   return info
 end
 
-local AURA_FILTERS = { "HELPFUL", nil }
+local AURA_FILTERS = { "PLAYER|HELPFUL", "HELPFUL" }
+local AURA_UNITS = { "player", "pet" }
+
+local function TryAura(unit, spellID, filter)
+  if C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
+    local aura = C_UnitAuras.GetAuraDataBySpellID(unit, spellID, filter)
+    if aura then
+      return NormalizeAura(spellID, aura)
+    end
+  end
+
+  if AuraUtil and AuraUtil.FindAuraBySpellID then
+    local name, icon, count, _, duration, expirationTime = AuraUtil.FindAuraBySpellID(spellID, unit, filter)
+    if name then
+      return NormalizeAura(spellID, {
+        name = name,
+        icon = icon,
+        applications = count,
+        duration = duration,
+        expirationTime = expirationTime,
+      })
+    end
+  end
+
+  if AuraUtil and AuraUtil.ForEachAura then
+    local found
+    AuraUtil.ForEachAura(unit, filter or "HELPFUL", nil, function(aura)
+      if aura and aura.spellId == spellID then
+        found = NormalizeAura(spellID, aura)
+        return true
+      end
+    end)
+    if found then
+      return found
+    end
+  end
+
+  if UnitAura then
+    local auraFilter = filter or "HELPFUL"
+    local index = 1
+    while true do
+      local name, icon, count, _, duration, expirationTime, _, _, _, id = UnitAura(unit, index, auraFilter)
+      if not name then break end
+      if id == spellID then
+        return NormalizeAura(spellID, {
+          name = name,
+          icon = icon,
+          applications = count,
+          duration = duration,
+          expirationTime = expirationTime,
+        })
+      end
+      index = index + 1
+    end
+  end
+end
 
 local function FindAura(spellID)
   if not spellID then
     return nil
   end
 
-  local units = { "player", "pet" }
-  for _, unit in ipairs(units) do
+  for _, unit in ipairs(AURA_UNITS) do
     if C_UnitAuras then
-      if C_UnitAuras.GetAuraDataBySpellID then
-        for _, filter in ipairs(AURA_FILTERS) do
-          local aura = C_UnitAuras.GetAuraDataBySpellID(unit, spellID, filter)
-          if aura then
-            return NormalizeAura(spellID, aura)
-          end
-        end
-      end
       if unit == "player" and C_UnitAuras.GetPlayerAuraBySpellID then
         local aura = C_UnitAuras.GetPlayerAuraBySpellID(spellID)
         if aura then
           return NormalizeAura(spellID, aura)
         end
       end
-    end
-
-    if AuraUtil and AuraUtil.FindAuraBySpellID then
-      for _, filter in ipairs(AURA_FILTERS) do
-        local name, icon, count, _, duration, expirationTime = AuraUtil.FindAuraBySpellID(spellID, unit, filter)
-        if name then
-          return NormalizeAura(spellID, {
-            name = name,
-            icon = icon,
-            applications = count,
-            duration = duration,
-            expirationTime = expirationTime,
-          })
+      if C_UnitAuras.GetAuraDataBySpellID then
+        local aura = C_UnitAuras.GetAuraDataBySpellID(unit, spellID)
+        if aura then
+          return NormalizeAura(spellID, aura)
         end
       end
     end
 
-    if UnitAura then
-      for _, filter in ipairs(AURA_FILTERS) do
-        local index = 1
-        while true do
-          local name, icon, count, _, duration, expirationTime, _, _, _, id = UnitAura(unit, index, filter)
-          if not name then break end
-          if id == spellID then
-            return NormalizeAura(spellID, {
-              name = name,
-              icon = icon,
-              applications = count,
-              duration = duration,
-              expirationTime = expirationTime,
-            })
-          end
-          index = index + 1
-        end
+    local aura = TryAura(unit, spellID, nil)
+    if aura then
+      return aura
+    end
+
+    for _, filter in ipairs(AURA_FILTERS) do
+      aura = TryAura(unit, spellID, filter)
+      if aura then
+        return aura
       end
     end
   end
@@ -371,17 +400,55 @@ local function BuildTotemEntry(slot)
   }
 end
 
-local function FindActiveTotemForSpell(bar, spellID)
-  if not spellID or not GetTotemInfo or not GetTotemSpell then
+local function NormalizeSpellName(name)
+  if type(name) == "string" then
+    return string.lower(name)
+  end
+end
+
+local function MatchesTotemEntry(entry, spellID, compareName)
+  if not entry then
+    return false
+  end
+
+  if spellID and entry.spellID and entry.spellID == spellID then
+    return true
+  end
+
+  local entryName = entry.name
+  if not entryName and entry.spellID then
+    entryName = SpellName(entry.spellID)
+  end
+
+  if compareName and entryName and NormalizeSpellName(entryName) == NormalizeSpellName(compareName) then
+    return true
+  end
+
+  if spellID and entryName then
+    local abilityName = SpellName(spellID)
+    if abilityName and NormalizeSpellName(entryName) == NormalizeSpellName(abilityName) then
+      return true
+    end
+  end
+
+  return false
+end
+
+local function FindActiveTotemForSpell(bar, spellID, data)
+  if not GetTotemInfo then
     return nil
   end
   local maxTotems = MAX_TOTEMS or 4
+  local compareName
+  if data and data.cooldownInfo and data.cooldownInfo.name then
+    compareName = data.cooldownInfo.name
+  end
+  if not compareName and spellID then
+    compareName = SpellName(spellID)
+  end
   for slot = 1, maxTotems do
     local entry = BuildTotemEntry(slot)
-    if entry and entry.spellID == spellID then
-      if bar.hidden[spellID] then
-        return nil
-      end
+    if entry and MatchesTotemEntry(entry, spellID, compareName) then
       return entry
     end
   end
@@ -408,8 +475,14 @@ local function BuildEntry(bar, data)
     return nil
   end
 
-  local totemEntry = FindActiveTotemForSpell(bar, spellID)
+  local totemEntry = FindActiveTotemForSpell(bar, spellID, data)
   if totemEntry then
+    if not totemEntry.spellID and spellID then
+      totemEntry.spellID = spellID
+    end
+    if totemEntry.spellID and bar.hidden[totemEntry.spellID] then
+      return nil
+    end
     return totemEntry
   end
 

@@ -52,7 +52,7 @@ function ClassHUD:CreateBars()
   cast.spell:SetJustifyH("LEFT")
   cast.time = cast:CreateFontString(nil, "OVERLAY")
   cast.time:SetJustifyH("RIGHT")
-  cast:Hide()
+  cast:SetAlpha(0)
   self.bars.cast = cast
 
   -- Health bar ------------------------------------------------------------
@@ -136,8 +136,7 @@ end
 -- Cast bar updates ---------------------------------------------------------
 local function CastOnUpdate(self)
   if not self.startTime or not self.endTime then
-    self:SetScript("OnUpdate", nil)
-    self:Hide()
+    ClassHUD:StopCast()
     return
   end
 
@@ -146,8 +145,7 @@ local function CastOnUpdate(self)
   if self.isChannel then
     local remaining = self.endTime - now
     if remaining <= 0 then
-      self:SetScript("OnUpdate", nil)
-      self:Hide()
+      ClassHUD:StopCast()
       return
     end
     self:SetMinMaxValues(0, duration)
@@ -156,8 +154,7 @@ local function CastOnUpdate(self)
   else
     local elapsed = now - self.startTime
     if elapsed >= duration then
-      self:SetScript("OnUpdate", nil)
-      self:Hide()
+      ClassHUD:StopCast()
       return
     end
     self:SetMinMaxValues(0, duration)
@@ -170,11 +167,14 @@ function ClassHUD:StopCast()
   if not (self.bars and self.bars.cast) then return end
   local cast = self.bars.cast
   cast:SetScript("OnUpdate", nil)
-  cast:Hide()
   cast.spell:SetText("")
   cast.time:SetText("")
   cast.startTime = nil
   cast.endTime = nil
+  cast.isChannel = nil
+  cast:SetMinMaxValues(0, 1)
+  cast:SetValue(0)
+  cast:SetAlpha(0)
 end
 
 function ClassHUD:StartCast(name, icon, startMS, endMS, isChannel)
@@ -182,6 +182,8 @@ function ClassHUD:StartCast(name, icon, startMS, endMS, isChannel)
   if not (self.bars and self.bars.cast) then return end
 
   local cast = self.bars.cast
+  cast:SetAlpha(1)
+  cast:Show()
   local start = (startMS or 0) / 1000
   local finish = (endMS or 0) / 1000
   if finish <= start then
