@@ -1,18 +1,10 @@
 ## Interface: 110100
 ## Title: ClassHUD
-## Notes: Simple class HUD: cast bar, HP, primary resource, special power (segments/runes)
+## Notes: Simple class HUD with cast, resource, class bars and tracked buffs
 ## Author: Lars-Martin Antonsen
 ## Version: @project-version@
 ## SavedVariables: ClassHUDDB
-## X-Embeds: Ace3, LibSharedMedia-3.0
-## OptionalDeps: Ace3, LibSharedMedia-3.0
-
-embeds.xml
 
 ClassHUD.lua
-ClassHUD_Utils.lua
 ClassHUD_Bars.lua
-ClassHUD_Classbar.lua
-ClassHUD_Spells.lua
-ClassHUD_Options.lua
-ClassHUD_SpellSuggestions.lua
+ClassHUD_Buffs.lua
