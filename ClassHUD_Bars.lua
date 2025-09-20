@@ -55,6 +55,13 @@ function ClassHUD:CreateBars()
   cast:Hide()
   self.bars.cast = cast
 
+  -- Health bar ------------------------------------------------------------
+  local health = CreateStatusBar("ClassHUDHealthBar")
+  health.value = health:CreateFontString(nil, "OVERLAY")
+  health.value:SetJustifyH("CENTER")
+  health.value:SetPoint("CENTER")
+  self.bars.health = health
+
   -- Primary resource ------------------------------------------------------
   local resource = CreateStatusBar("ClassHUDResourceBar")
   resource.value = resource:CreateFontString(nil, "OVERLAY")
@@ -113,6 +120,16 @@ function ClassHUD:ApplyBarVisuals()
     resource.bg:SetAllPoints(resource)
     SetFont(resource.value, resourceCfg.textSize or 12)
     resource.value:SetTextColor(1, 1, 1)
+  end
+
+  local health = self.bars.health
+  if health then
+    health:SetStatusBarTexture(texture)
+    health.bg:ClearAllPoints()
+    health.bg:SetAllPoints(health)
+    local healthCfg = cfg.health or {}
+    SetFont(health.value, healthCfg.textSize or 12)
+    health.value:SetTextColor(1, 1, 1)
   end
 end
 
@@ -231,14 +248,47 @@ function ClassHUD:UNIT_SPELLCAST_FAILED(unit)
   end
 end
 
-function ClassHUD:UNIT_SPELLCAST_SUCCEEDED(unit, spellID)
-  if unit ~= "player" then return end
-  if UnitCastingInfo("player") or UnitChannelInfo("player") then
+-- Health bar ----------------------------------------------------------------
+local function GetClassColor()
+  if not UnitClass then
+    return 0.8, 0.2, 0.2
+  end
+  local _, class = UnitClass("player")
+  local color = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+  if color then
+    return color.r, color.g, color.b
+  end
+  return 0.8, 0.2, 0.2
+end
+
+function ClassHUD:UpdateHealthBar()
+  if not self:IsBarEnabled("health") then
+    if self.bars and self.bars.health then
+      self.bars.health:Hide()
+    end
     return
   end
-  local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(spellID)
-  local now = GetTime()
-  self:StartCast(info and info.name, info and info.iconID, now * 1000, (now + 0.6) * 1000, false)
+
+  if not (self.bars and self.bars.health) then return end
+  local bar = self.bars.health
+  local cur = UnitHealth("player") or 0
+  local max = UnitHealthMax("player") or 0
+  if max <= 0 then max = 1 end
+
+  bar:SetMinMaxValues(0, max)
+  bar:SetValue(cur)
+
+  local r, g, b = GetClassColor()
+  bar:SetStatusBarColor(r, g, b)
+
+  local percent = (cur / max) * 100
+  percent = percent >= 0 and percent or 0
+  if BreakUpLargeNumbers then
+    bar.value:SetFormattedText("%s / %s (%.0f%%)", BreakUpLargeNumbers(cur), BreakUpLargeNumbers(max), percent + 0.5)
+  else
+    bar.value:SetFormattedText("%d / %d (%.0f%%)", cur, max, percent + 0.5)
+  end
+  bar:Show()
 end
 
 -- Primary resource ---------------------------------------------------------

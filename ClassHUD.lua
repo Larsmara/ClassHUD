@@ -14,10 +14,11 @@ ClassHUD.name = ADDON_NAME
 local defaults = {
   bars = {
     width = 280,
-    spacing = 6,
+    spacing = 0,
     texture = "Interface\\TargetingFrame\\UI-StatusBar",
     font = "Fonts\\FRIZQT__.TTF",
     cast = { enabled = true, height = 18, textSize = 12 },
+    health = { enabled = true, height = 18, textSize = 12 },
     resource = { enabled = true, height = 14, textSize = 12 },
     class = { enabled = true, height = 16, segmentSpacing = 2 },
   },
@@ -60,6 +61,9 @@ end
 
 ClassHUDDB = ClassHUDDB or {}
 applyDefaults(ClassHUDDB, defaults)
+if ClassHUDDB.bars and ClassHUDDB.bars.spacing == 6 then
+  ClassHUDDB.bars.spacing = 0
+end
 ClassHUD.db = ClassHUDDB
 
 -- Provide lightweight accessors for modules
@@ -194,6 +198,7 @@ function ClassHUD:AnchorFrames()
   end
 
   anchorBar(bars.cast, self:IsBarEnabled("cast"), cfg.cast and cfg.cast.height)
+  anchorBar(bars.health, self:IsBarEnabled("health"), cfg.health and cfg.health.height)
   anchorBar(bars.resource, self:IsBarEnabled("resource"), cfg.resource and cfg.resource.height)
   anchorBar(bars.class, self:IsBarEnabled("class"), cfg.class and cfg.class.height)
 
@@ -221,21 +226,32 @@ function ClassHUD:UpdateFromCooldownViewer()
     return
   end
 
-  local tracked = {}
-  local order = {}
   local hidden = self:GetBuffConfig().hiddenSpellIDs or {}
+  local entries = {}
+  local order = {}
 
-  local function include(spellID, source, cooldownID, info)
+  local function includeSpell(spellID, source, cooldownID, info)
     if not spellID or hidden[spellID] then
       return
     end
-    if not tracked[spellID] then
-      tracked[spellID] = {
+    local key = tostring(spellID)
+    if not entries[key] then
+      entries[key] = {
+        key = key,
         source = source,
+        spellID = spellID,
         cooldownID = cooldownID,
-        info = info,
+        cooldownInfo = info,
       }
-      table.insert(order, spellID)
+      table.insert(order, key)
+    end
+  end
+
+  local function includeEntry(key, data)
+    if not entries[key] then
+      data.key = key
+      entries[key] = data
+      table.insert(order, key)
     end
   end
 
@@ -246,7 +262,7 @@ function ClassHUD:UpdateFromCooldownViewer()
       if type(ids) == "table" then
         for _, cooldownID in ipairs(ids) do
           local info = safeCooldownInfo(cooldownID)
-          include(extractSpellID(info), "trackedBuff", cooldownID, info)
+          includeSpell(extractSpellID(info), "trackedBuff", cooldownID, info)
         end
       end
     end
@@ -257,7 +273,7 @@ function ClassHUD:UpdateFromCooldownViewer()
       if type(ids) == "table" then
         for _, cooldownID in ipairs(ids) do
           local info = safeCooldownInfo(cooldownID)
-          include(extractSpellID(info), "trackedBar", cooldownID, info)
+          includeSpell(extractSpellID(info), "trackedBar", cooldownID, info)
         end
       end
     end
@@ -267,17 +283,26 @@ function ClassHUD:UpdateFromCooldownViewer()
   if type(custom) == "table" then
     for spellID, enabled in pairs(custom) do
       if enabled and type(spellID) == "number" then
-        include(spellID, "custom", nil, nil)
+        includeSpell(spellID, "custom", nil, nil)
       end
     end
   end
 
-  self.buffBar:SetTrackedSpells(tracked, order)
+  local maxTotems = MAX_TOTEMS or 4
+  for slot = 1, maxTotems do
+    includeEntry("totem" .. slot, {
+      source = "totem",
+      totemSlot = slot,
+    })
+  end
+
+  self.buffBar:SetEntries(entries, order, hidden)
   self:UpdateBuffBar()
 end
 
 function ClassHUD:RefreshBars()
   if not self.bars then return end
+  if self.UpdateHealthBar then self:UpdateHealthBar() end
   if self.UpdateResourceBar then self:UpdateResourceBar() end
   if self.UpdateClassBar then self:UpdateClassBar() end
 end
@@ -308,12 +333,12 @@ local registered = {
   "UNIT_SPELLCAST_CHANNEL_STOP",
   "UNIT_SPELLCAST_INTERRUPTED",
   "UNIT_SPELLCAST_FAILED",
-  "UNIT_SPELLCAST_SUCCEEDED",
   "UNIT_HEALTH",
   "UNIT_MAXHEALTH",
   "UNIT_AURA",
   "SPELL_UPDATE_COOLDOWN",
   "SPELL_UPDATE_CHARGES",
+  "PLAYER_TOTEM_UPDATE",
 }
 
 for _, event in ipairs(registered) do
@@ -378,8 +403,10 @@ events:SetScript("OnEvent", function(_, event, arg1, ...)
   end
 
   if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
+    if arg1 == "player" and ClassHUD.UpdateHealthBar then
+      ClassHUD:UpdateHealthBar()
+    end
     if arg1 == "player" and ClassHUD.UpdateResourceBar then
-      -- Health events keep the resource bar responsive for specs that tie to HP (e.g., Vengeance)
       ClassHUD:UpdateResourceBar()
     end
     return
@@ -397,10 +424,8 @@ events:SetScript("OnEvent", function(_, event, arg1, ...)
     return
   end
 
-  if event == "UNIT_SPELLCAST_SUCCEEDED" then
-    if arg1 == "player" and ClassHUD.UNIT_SPELLCAST_SUCCEEDED then
-      ClassHUD:UNIT_SPELLCAST_SUCCEEDED(arg1, ...)
-    end
+  if event == "PLAYER_TOTEM_UPDATE" then
+    ClassHUD:UpdateBuffBar()
     return
   end
 

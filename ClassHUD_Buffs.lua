@@ -34,8 +34,9 @@ function ClassHUD:CreateBuffBar()
     owner = self,
     anchor = anchor,
     icons = {},
-    tracked = {},
+    entries = {},
     order = {},
+    hidden = {},
   }, BuffBar)
 
   self.buffBar = bar
@@ -48,9 +49,10 @@ function BuffBar:IsEnabled()
   return cfg.enabled ~= false
 end
 
-function BuffBar:SetTrackedSpells(tracked, order)
-  self.tracked = tracked or {}
+function BuffBar:SetEntries(entries, order, hidden)
+  self.entries = entries or {}
   self.order = order or {}
+  self.hidden = hidden or {}
 end
 
 local function EnsureIcon(bar, index)
@@ -125,39 +127,40 @@ local function FindAura(spellID)
     return nil
   end
 
-  if C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
-    local aura = C_UnitAuras.GetPlayerAuraBySpellID(spellID)
-    if aura then
-      return NormalizeAura(spellID, aura)
+  local units = { "player", "pet" }
+  for _, unit in ipairs(units) do
+    if C_UnitAuras then
+      if C_UnitAuras.GetAuraDataBySpellID then
+        local aura = C_UnitAuras.GetAuraDataBySpellID(unit, spellID, "HELPFUL")
+        if aura then
+          return NormalizeAura(spellID, aura)
+        end
+      end
+      if unit == "player" and C_UnitAuras.GetPlayerAuraBySpellID then
+        local aura = C_UnitAuras.GetPlayerAuraBySpellID(spellID)
+        if aura then
+          return NormalizeAura(spellID, aura)
+        end
+      end
     end
-  end
 
-  if AuraUtil and AuraUtil.FindAuraBySpellID then
-    local name, icon, count, _, duration, expirationTime = AuraUtil.FindAuraBySpellID(spellID, "player", "HELPFUL")
-    if name then
-      return NormalizeAura(spellID, {
-        name = name,
-        icon = icon,
-        applications = count,
-        duration = duration,
-        expirationTime = expirationTime,
-      })
-    end
-    name, icon, count, _, duration, expirationTime = AuraUtil.FindAuraBySpellID(spellID, "pet", "HELPFUL")
-    if name then
-      return NormalizeAura(spellID, {
-        name = name,
-        icon = icon,
-        applications = count,
-        duration = duration,
-        expirationTime = expirationTime,
-      })
+    if AuraUtil and AuraUtil.FindAuraBySpellID then
+      local name, icon, count, _, duration, expirationTime = AuraUtil.FindAuraBySpellID(spellID, unit, "HELPFUL")
+      if name then
+        return NormalizeAura(spellID, {
+          name = name,
+          icon = icon,
+          applications = count,
+          duration = duration,
+          expirationTime = expirationTime,
+        })
+      end
     end
   end
 end
 
 local function ExtractFromCooldownInfo(spellID, data)
-  local info = data and data.info
+  local info = data and data.cooldownInfo
   if type(info) ~= "table" then
     return nil
   end
@@ -206,7 +209,40 @@ local function ExtractFromCooldownInfo(spellID, data)
   }
 end
 
-local function BuildEntry(spellID, data)
+local function BuildEntry(bar, data)
+  if not data then return nil end
+
+  if data.source == "totem" then
+    if not GetTotemInfo then
+      return nil
+    end
+    local slot = data.totemSlot
+    if not slot then return nil end
+    local haveTotem, name, startTime, duration, icon = GetTotemInfo(slot)
+    if not haveTotem then return nil end
+    local spellID = data.spellID
+    if (not spellID) and GetTotemSpell then
+      spellID = GetTotemSpell(slot)
+      data.spellID = spellID
+    end
+    if spellID and bar.hidden[spellID] then
+      return nil
+    end
+    return {
+      spellID = spellID,
+      name = name,
+      icon = icon,
+      startTime = startTime,
+      duration = duration,
+      count = nil,
+    }
+  end
+
+  local spellID = data.spellID
+  if not spellID or bar.hidden[spellID] then
+    return nil
+  end
+
   local aura = FindAura(spellID)
   if aura then
     local entry = {
@@ -221,6 +257,7 @@ local function BuildEntry(spellID, data)
     end
     return entry
   end
+
   return ExtractFromCooldownInfo(spellID, data)
 end
 
@@ -252,10 +289,6 @@ function BuffBar:LayoutIcons(count)
   local rows = Clamp(cfg.rows or 1, 1, 6)
   local iconSize = Clamp(cfg.iconSize or 32, 8, 96)
   local spacing = Clamp(cfg.spacing or 4, 0, 30)
-  local anchorWidth = self.anchor:GetWidth()
-  if anchorWidth <= 0 then
-    anchorWidth = perRow * iconSize + (perRow - 1) * spacing
-  end
 
   for i = 1, count do
     local row = math.floor((i - 1) / perRow) + 1
@@ -265,16 +298,11 @@ function BuffBar:LayoutIcons(count)
       local indexInRow = (i - 1) % perRow
       local iconsInRow = math.min(perRow, count - (row - 1) * perRow)
       local rowWidth = iconsInRow * iconSize + (iconsInRow - 1) * spacing
-      local offsetX = 0
-      if row % 2 == 0 then
-        offsetX = (anchorWidth - rowWidth) / 2
-        if offsetX < 0 then offsetX = 0 end
-      end
-      local x = offsetX + indexInRow * (iconSize + spacing)
+      local x = -rowWidth / 2 + indexInRow * (iconSize + spacing) + iconSize / 2
       local y = - (row - 1) * (iconSize + spacing)
       local frame = EnsureIcon(self, i)
       frame:ClearAllPoints()
-      frame:SetPoint("TOPLEFT", self.anchor, "TOPLEFT", x, y)
+      frame:SetPoint("TOP", self.anchor, "TOP", x, y)
       frame:SetSize(iconSize, iconSize)
       frame.cooldown:Show()
       frame:Show()
@@ -300,24 +328,24 @@ function BuffBar:UpdateBuffs()
 
   local cfg = self.owner:GetBuffConfig()
   local limit = Clamp((cfg.rows or 1) * (cfg.perRow or 10), 1, 120)
-  local entries = {}
+  local built = {}
 
-  for _, spellID in ipairs(self.order) do
-    local entry = BuildEntry(spellID, self.tracked and self.tracked[spellID])
+  for _, key in ipairs(self.order) do
+    local entry = BuildEntry(self, self.entries and self.entries[key])
     if entry then
-      table.insert(entries, entry)
-      if #entries >= limit then break end
+      table.insert(built, entry)
+      if #built >= limit then break end
     end
   end
 
-  self:LayoutIcons(#entries)
+  self:LayoutIcons(#built)
 
-  for i = 1, #entries do
+  for i = 1, #built do
     local frame = EnsureIcon(self, i)
-    ApplyEntry(frame, entries[i])
+    ApplyEntry(frame, built[i])
   end
 
-  for i = #entries + 1, #self.icons do
+  for i = #built + 1, #self.icons do
     self.icons[i]:Hide()
   end
 end
