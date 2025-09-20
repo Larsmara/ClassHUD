@@ -102,7 +102,7 @@ function BuffBar:ApplyLayout()
   for _, frame in ipairs(self.icons) do
     frame:SetSize(iconSize, iconSize)
   end
-  if not self:IsEnabled() and not self.previewing then
+  if not self:IsEnabled() then
     self.anchor:Hide()
   else
     self.anchor:Show()
@@ -380,10 +380,6 @@ function BuffBar:LayoutIcons(count)
 end
 
 function BuffBar:UpdateBuffs()
-  if self.previewing then
-    return
-  end
-
   if not self:IsEnabled() then
     self.anchor:Hide()
     for _, frame in ipairs(self.icons) do
@@ -417,60 +413,6 @@ function BuffBar:UpdateBuffs()
   for i = #built + 1, #self.icons do
     self.icons[i]:Hide()
   end
-end
-
-local PREVIEW_ENTRIES = {
-  { icon = 135953, duration = 24, count = 1 },
-  { icon = 132221, duration = 18, count = 3 },
-  { icon = 458976, duration = 12, count = nil },
-}
-
-function BuffBar:ShowPreview()
-  self.previewing = true
-  self:ApplyLayout()
-  self.anchor:Show()
-
-  local cfg = self.owner:GetBuffConfig()
-  local limit = Clamp((cfg.rows or 1) * (cfg.perRow or 10), 1, 120)
-  local count = math.min(#PREVIEW_ENTRIES, limit)
-  self:LayoutIcons(count)
-
-  local now = GetTime()
-  for i = 1, count do
-    local frame = EnsureIcon(self, i)
-    local entry = PREVIEW_ENTRIES[i]
-    frame.icon:SetTexture(entry.icon or 136243)
-    if entry.duration and entry.duration > 0 then
-      frame.cooldown:SetCooldown(now, entry.duration)
-      frame.cooldown:Show()
-    else
-      if CooldownFrame_Clear then
-        CooldownFrame_Clear(frame.cooldown)
-      else
-        frame.cooldown:SetCooldown(0, 0)
-      end
-      frame.cooldown:Hide()
-    end
-    if entry.count and entry.count > 1 then
-      frame.count:SetText(entry.count)
-      frame.count:Show()
-    else
-      frame.count:SetText("")
-    end
-    frame:Show()
-  end
-
-  for i = count + 1, #self.icons do
-    self.icons[i]:Hide()
-  end
-end
-
-function BuffBar:HidePreview()
-  if not self.previewing then
-    return
-  end
-  self.previewing = false
-  self.owner:UpdateBuffBar()
 end
 
 -- ---------------------------------------------------------------------------

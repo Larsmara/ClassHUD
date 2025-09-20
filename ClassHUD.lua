@@ -257,10 +257,12 @@ function ClassHUD:AnchorFrames()
   if buffs and buffs.anchor then
     buffs.anchor:ClearAllPoints()
     buffs.anchor:SetWidth(width)
-    if buffs.previewing or buffs:IsEnabled() then
+    if buffs:IsEnabled() then
       buffs.anchor:SetPoint("BOTTOMLEFT", prev, "TOPLEFT", 0, spacing)
       buffs.anchor:SetPoint("BOTTOMRIGHT", prev, "TOPRIGHT", 0, spacing)
       prev = buffs.anchor
+    else
+      buffs.anchor:Hide()
     end
   end
 
@@ -269,62 +271,6 @@ function ClassHUD:AnchorFrames()
   end
   if buffs and buffs.ApplyLayout then
     buffs:ApplyLayout()
-  end
-end
-
-function ClassHUD:ShowEditModePreview()
-  if self._inEditModePreview then
-    return
-  end
-  self:EnsureModules()
-  self._inEditModePreview = true
-
-  if self.buffBar and self.buffBar.ShowPreview then
-    self.buffBar:ShowPreview()
-  end
-  self:AnchorFrames()
-  if self.ShowBarsPreview then
-    self:ShowBarsPreview()
-  end
-end
-
-function ClassHUD:HideEditModePreview()
-  if not self._inEditModePreview then
-    return
-  end
-  self._inEditModePreview = false
-
-  if self.HideBarsPreview then
-    self:HideBarsPreview()
-  end
-  if self.buffBar and self.buffBar.HidePreview then
-    self.buffBar:HidePreview()
-  end
-
-  self:AnchorFrames()
-  self:RefreshBars()
-  self:UpdateBuffBar()
-end
-
-function ClassHUD:SetupEditModeIntegration()
-  if self._editModeSetup then
-    return
-  end
-  if not EditModeManagerFrame or not hooksecurefunc then
-    return
-  end
-
-  self._editModeSetup = true
-  local addon = self
-  hooksecurefunc(EditModeManagerFrame, "EnterEditMode", function()
-    addon:ShowEditModePreview()
-  end)
-  hooksecurefunc(EditModeManagerFrame, "ExitEditMode", function()
-    addon:HideEditModePreview()
-  end)
-
-  if EditModeManagerFrame:IsEditModeActive() then
-    self:ShowEditModePreview()
   end
 end
 
@@ -470,7 +416,6 @@ events:SetScript("OnEvent", function(_, event, arg1, ...)
     ClassHUD:UpdateFromCooldownViewer()
     ClassHUD:RefreshBars()
     ClassHUD:UpdateBuffBar()
-    ClassHUD:SetupEditModeIntegration()
     if ClassHUD.InitializeBuffOptions then
       ClassHUD:InitializeBuffOptions()
     end
@@ -478,7 +423,6 @@ events:SetScript("OnEvent", function(_, event, arg1, ...)
   end
 
   if event == "PLAYER_ENTERING_WORLD" then
-    ClassHUD:SetupEditModeIntegration()
     ClassHUD:AnchorFrames()
     ClassHUD:UpdateFromCooldownViewer()
     ClassHUD:RefreshBars()
