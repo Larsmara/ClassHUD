@@ -1,359 +1,515 @@
 -- ClassHUD_Bars.lua
----@type ClassHUD
-local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
-local UI = ClassHUD.UI
+-- Cast, primary resource and class resource bars.
 
--- Anchor
-function ClassHUD:CreateAnchor()
-  local f = CreateFrame("Frame", "ClassHUDAnchor", UIParent, "BackdropTemplate")
-  f:SetSize(250, 1)
-  f:SetMovable(false) -- position controlled via options
-  UI.anchor = f
+---@type ClassHUDAddon
+local ClassHUD = _G.ClassHUD
+
+local barsDefaults = {
+  texture = "Interface\\TargetingFrame\\UI-StatusBar",
+  font = "Fonts\\FRIZQT__.TTF",
+}
+
+local function GetBarTexture()
+  local cfg = ClassHUD:GetBarsConfig()
+  return cfg.texture or barsDefaults.texture
 end
 
--- Bars
-function ClassHUD:CreateCastBar()
-  local h = self.db.profile.height.cast
-  local b = self:CreateStatusBar(UI.anchor, h, false) -- castbar starter uten border
-
-  b:Hide()
-  b._holder:Hide() -- 👈 skjul holder også
-  b.bg:Hide()
-
-  b.icon = b:CreateTexture(nil, "ARTWORK")
-  b.icon:SetSize(h, h)
-  b.icon:SetPoint("LEFT", b, "LEFT", 0, 0)
-  b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-
-  b.spell = b:CreateFontString(nil, "OVERLAY")
-  b.spell:SetFont(self:FetchFont(12))
-  b.spell:SetPoint("LEFT", b.icon, "RIGHT", 4, 0)
-
-  b.time = b:CreateFontString(nil, "OVERLAY")
-  b.time:SetFont(self:FetchFont(12))
-  b.time:SetPoint("RIGHT", b, "RIGHT", -3, 0)
-
-  UI.cast = b
+local function GetFontPath()
+  local cfg = ClassHUD:GetBarsConfig()
+  return cfg.font or barsDefaults.font
 end
 
-function ClassHUD:CreateHPBar()
-  local b = self:CreateStatusBar(UI.anchor, self.db.profile.height.hp, true) -- 👈 withBorder = true
-  local r, g, bCol = self:GetClassColor()
-  b:SetStatusBarColor(r, g, bCol)
-  UI.hp = b
+local function CreateStatusBar(name)
+  local bar = CreateFrame("StatusBar", name, UIParent, "BackdropTemplate")
+  bar:SetMinMaxValues(0, 1)
+  bar:SetValue(0)
+  bar.bg = bar:CreateTexture(nil, "BACKGROUND")
+  bar.bg:SetAllPoints()
+  bar.bg:SetColorTexture(0, 0, 0, 0.6)
+  bar:SetStatusBarTexture(GetBarTexture())
+  return bar
 end
 
-function ClassHUD:CreateResourceBar()
-  local b = self:CreateStatusBar(UI.anchor, self.db.profile.height.resource, true) -- 👈 withBorder = true
-  if self.db.profile.colors.resourceClass then
-    b:SetStatusBarColor(self:GetClassColor())
+local function SetFont(fs, size)
+  if not fs then return end
+  fs:SetFont(GetFontPath(), size or 12, "OUTLINE")
+  fs:SetShadowOffset(0, 0)
+end
+
+function ClassHUD:CreateBars()
+  if self.bars then
+    return
+  end
+
+  self.bars = {}
+  local cfg = self:GetBarsConfig()
+
+  -- Cast bar ---------------------------------------------------------------
+  local cast = CreateStatusBar("ClassHUDCastBar")
+  cast.icon = cast:CreateTexture(nil, "OVERLAY")
+  cast.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  cast.spell = cast:CreateFontString(nil, "OVERLAY")
+  cast.spell:SetJustifyH("LEFT")
+  cast.time = cast:CreateFontString(nil, "OVERLAY")
+  cast.time:SetJustifyH("RIGHT")
+  cast:Hide()
+  self.bars.cast = cast
+
+  -- Primary resource ------------------------------------------------------
+  local resource = CreateStatusBar("ClassHUDResourceBar")
+  resource.value = resource:CreateFontString(nil, "OVERLAY")
+  resource.value:SetJustifyH("CENTER")
+  resource.value:SetPoint("CENTER")
+  self.bars.resource = resource
+
+  -- Class resource --------------------------------------------------------
+  local class = CreateFrame("Frame", "ClassHUDClassBar", UIParent, "BackdropTemplate")
+  class:SetClipsChildren(true)
+  class.segments = {}
+  class.cooldowns = {}
+  self.bars.class = class
+
+  self:ApplyBarVisuals()
+end
+
+function ClassHUD:ApplyBarVisuals()
+  if not self.bars then return end
+  local cfg = self:GetBarsConfig()
+  local castCfg = cfg.cast or {}
+  local resourceCfg = cfg.resource or {}
+
+  local texture = GetBarTexture()
+
+  local cast = self.bars.cast
+  if cast then
+    cast:SetStatusBarTexture(texture)
+    local tex = cast:GetStatusBarTexture()
+    if tex then
+      tex:ClearAllPoints()
+      tex:SetPoint("TOPLEFT", cast, "TOPLEFT", castCfg.height or 0, 0)
+      tex:SetPoint("BOTTOMRIGHT", cast, "BOTTOMRIGHT", 0, 0)
+    end
+    cast.bg:ClearAllPoints()
+    cast.bg:SetPoint("TOPLEFT", cast, "TOPLEFT", castCfg.height or 0, 0)
+    cast.bg:SetPoint("BOTTOMRIGHT", cast, "BOTTOMRIGHT", 0, 0)
+    cast.icon:SetSize(castCfg.height or 16, castCfg.height or 16)
+    cast.icon:ClearAllPoints()
+    cast.icon:SetPoint("LEFT", cast, "LEFT", 0, 0)
+    cast.spell:ClearAllPoints()
+    cast.spell:SetPoint("LEFT", cast.icon, "RIGHT", 4, 0)
+    cast.spell:SetPoint("RIGHT", cast.time, "LEFT", -4, 0)
+    cast.spell:SetTextColor(1, 1, 1)
+    cast.time:ClearAllPoints()
+    cast.time:SetPoint("RIGHT", cast, "RIGHT", -4, 0)
+    cast.time:SetTextColor(1, 1, 1)
+    SetFont(cast.spell, castCfg.textSize or 12)
+    SetFont(cast.time, castCfg.textSize or 12)
+  end
+
+  local resource = self.bars.resource
+  if resource then
+    resource:SetStatusBarTexture(texture)
+    resource.bg:ClearAllPoints()
+    resource.bg:SetAllPoints(resource)
+    SetFont(resource.value, resourceCfg.textSize or 12)
+    resource.value:SetTextColor(1, 1, 1)
+  end
+end
+
+-- Cast bar updates ---------------------------------------------------------
+local function CastOnUpdate(self)
+  if not self.startTime or not self.endTime then
+    self:SetScript("OnUpdate", nil)
+    self:Hide()
+    return
+  end
+
+  local now = GetTime()
+  local duration = self.endTime - self.startTime
+  if self.isChannel then
+    local remaining = self.endTime - now
+    if remaining <= 0 then
+      self:SetScript("OnUpdate", nil)
+      self:Hide()
+      return
+    end
+    self:SetMinMaxValues(0, duration)
+    self:SetValue(remaining)
+    self.time:SetFormattedText("%.1f", math.max(0, remaining))
   else
-    local c = self.db.profile.colors.resource
-    b:SetStatusBarColor(c.r, c.g, c.b)
-  end
-  UI.resource = b
-end
-
-function ClassHUD:CreatePowerContainer()
-  local f = CreateFrame("Frame", nil, UI.anchor, "BackdropTemplate")
-  f:SetSize(250, 16)
-  UI.power = f
-end
-
--- Layout (top→bottom): tracked buffs → cast → hp → resource → power
-function ClassHUD:ApplyBarSkins()
-  local tex = self:FetchStatusbar()
-  local c   = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
-  for _, sb in pairs({ UI.cast, UI.hp, UI.resource }) do
-    if sb and sb.SetStatusBarTexture then
-      sb:SetStatusBarTexture(tex)
+    local elapsed = now - self.startTime
+    if elapsed >= duration then
+      self:SetScript("OnUpdate", nil)
+      self:Hide()
+      return
     end
-    if sb and sb.SetBackdropBorderColor then
-      sb:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
-    end
-  end
-  if UI.cast then
-    UI.cast.spell:SetFont(self:FetchFont(12))
-    UI.cast.time:SetFont(self:FetchFont(12))
-  end
-  if UI.hp then UI.hp.text:SetFont(self:FetchFont(12)) end
-  if UI.resource then UI.resource.text:SetFont(self:FetchFont(12)) end
-
-  local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
-  for _, sb in pairs({ UI.cast, UI.hp, UI.resource }) do
-    if sb and sb.SetBackdropBorderColor then
-      sb:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
-    end
+    self:SetMinMaxValues(0, duration)
+    self:SetValue(elapsed)
+    self.time:SetFormattedText("%.1f", math.max(0, duration - elapsed))
   end
 end
 
-function ClassHUD:Layout()
-  local w   = self.db.profile.width
-  local gap = self.db.profile.spacing or 0
-  local db  = self.db.profile
-
-  if UI.anchor then UI.anchor:SetWidth(w) end
-  UI.attachments = UI.attachments or {}
-
-  local function ensure(name)
-    if not UI.attachments[name] then
-      UI.attachments[name] = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
-      UI.attachments[name]._height = 0
-    end
-    local f = UI.attachments[name]
-    f:SetParent(UI.anchor)
-    f:SetWidth(w)
-    f._height = f._height or 0
-    f:SetHeight(f._height)
-    f:Show()
-    return f
-  end
-
-  -- Opprett/finn containere (ALLTID – kjeden må bestå)
-  local containers = {
-    TOP      = ensure("TOP"),
-    CAST     = ensure("CAST"),
-    HP       = ensure("HP"),
-    RESOURCE = ensure("RESOURCE"),
-    CLASS    = ensure("CLASS"),
-    BOTTOM   = ensure("BOTTOM"),
-  }
-
-  local function layoutStatusBar(frame, containerName, enabled, height)
-    local container = containers[containerName]
-    if not container then return end
-
-    -- behold containeren i layouten: minst 1px høyde
-    local h = (enabled and height) or 0
-    container._height = h
-    container:SetHeight(math.max(h, 1))
-
-    if frame then
-      frame:SetParent(container)
-      frame:ClearAllPoints()
-      frame:SetWidth(w)
-      frame:SetHeight(h)
-
-      if enabled and h > 0 then
-        frame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
-        frame:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
-        frame:Show()
-      else
-        frame:Hide()
-      end
-    end
-  end
-
-
-  -- Viktig: bruk samme layoutfunksjon også for CAST og sørg for at den får 0-høyde når av
-  layoutStatusBar(UI.cast, "CAST", db.show.cast, db.height.cast)
-  layoutStatusBar(UI.hp, "HP", db.show.hp, db.height.hp)
-  layoutStatusBar(UI.resource, "RESOURCE", db.show.resource, db.height.resource)
-
-  -- CLASS (special power) container
-  do
-    local container = containers.CLASS
-    if container then
-      local showPower = db.show.power
-      local h = (showPower and db.height.power) or 0
-      container._height = h
-      container:SetHeight(math.max(h, 1)) -- 👈 alltid minst 1px høy
-
-      if UI.power then
-        UI.power:SetParent(container)
-        UI.power:ClearAllPoints()
-        UI.power:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
-        UI.power:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
-        UI.power:SetWidth(w)
-        UI.power:SetHeight(h)
-        if showPower and h > 0 then
-          UI.power:Show()
-        else
-          UI.power:Hide()
-        end
-      end
-    end
-  end
-
-  -- BOTTOM container (always keep at least 1px so it doesn't collapse)
-  do
-    local container = containers.BOTTOM
-    if container then
-      local h = container._height or 0
-      container:SetHeight(math.max(h, 1))
-    end
-  end
-
-  -- Kjederekkefølge – ALDRI hopp over containere selv om høyden er 0
-  local order      = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
-
-  local previous   = UI.anchor
-  local prevHeight = 0
-  for _, name in ipairs(order) do
-    local container = containers[name]
-    container:SetWidth(w)
-    container:ClearAllPoints()
-
-    if previous == UI.anchor then
-      container:SetPoint("TOPLEFT", previous, "TOPLEFT", 0, 0)
-      container:SetPoint("TOPRIGHT", previous, "TOPRIGHT", 0, 0)
-    else
-      -- kun legg inn gap hvis forrige faktisk hadde høyde
-      local offset = (prevHeight > 0) and gap or 0
-      if previous._afterGap ~= nil then
-        offset = previous._afterGap
-        previous._afterGap = nil
-      end
-      container:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -offset)
-      container:SetPoint("TOPRIGHT", previous, "BOTTOMRIGHT", 0, -offset)
-    end
-
-    previous   = container
-    prevHeight = container._height or 0
-  end
-
-  -- Side-ankere (for ikonkolonner). Må alltid eksistere.
-  local left = UI.attachments.LEFT
-  if not left then
-    UI.attachments.LEFT = CreateFrame("Frame", "ClassHUDAttachLEFT", UI.anchor)
-    left = UI.attachments.LEFT
-  end
-  left:ClearAllPoints()
-  left:SetPoint("RIGHT", UI.anchor, "LEFT", -4, 0)
-  left:SetSize(1, 1)
-
-  local right = UI.attachments.RIGHT
-  if not right then
-    UI.attachments.RIGHT = CreateFrame("Frame", "ClassHUDAttachRIGHT", UI.anchor)
-    right = UI.attachments.RIGHT
-  end
-  right:ClearAllPoints()
-  right:SetPoint("LEFT", UI.anchor, "RIGHT", 4, 0)
-  right:SetSize(1, 1)
-
-  self:ApplyBarSkins()
-end
-
--- Updates
 function ClassHUD:StopCast()
-  local casting = UnitCastingInfo("player")
-  local channeling = UnitChannelInfo("player")
-  if casting or channeling then return end
-
-  if UI.cast then
-    local holder = UI.cast._holder
-    holder:SetBackdrop(nil) -- 👈 fjern backdrop
-    holder:Hide()           -- skjul helt
-    UI.cast:Hide()          -- skjul bar
-    UI.cast.bg:Hide()
-
-    UI.cast:SetScript("OnUpdate", nil)
-    UI.cast:SetValue(0)
-    UI.cast.time:SetText("")
-    UI.cast.spell:SetText("")
-    UI.cast.icon:SetTexture(nil)
-  end
+  if not (self.bars and self.bars.cast) then return end
+  local cast = self.bars.cast
+  cast:SetScript("OnUpdate", nil)
+  cast:Hide()
+  cast.spell:SetText("")
+  cast.time:SetText("")
+  cast.startTime = nil
+  cast.endTime = nil
 end
 
 function ClassHUD:StartCast(name, icon, startMS, endMS, isChannel)
-  if not self.db.profile.show.cast then return end
-  -- Aktiver border på holder
-  local edge   = UI.cast._edge or 1
-  local holder = UI.cast._holder
+  if not self:IsBarEnabled("cast") then return end
+  if not (self.bars and self.bars.cast) then return end
 
-  UI.cast:Show()
-  holder:Show()
-  UI.cast.bg:Show()
+  local cast = self.bars.cast
+  local start = (startMS or 0) / 1000
+  local finish = (endMS or 0) / 1000
+  if finish <= start then
+    finish = start + 0.1
+  end
 
-  -- sett border dynamisk
-  holder:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8", -- 👈 nå med bakgrunn
-    edgeFile = "Interface\\Buttons\\WHITE8x8",
-    edgeSize = edge,
-    insets   = { left = 1, right = 1, top = 1, bottom = 1 },
-  })
-  local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
-  holder:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
-  holder:SetBackdropColor(0, 0, 0, 0.4) -- 👈 mørk bakplate (juster alpha som du liker)
+  cast.startTime = start
+  cast.endTime = finish
+  cast.isChannel = isChannel and true or false
+  cast.spell:SetText(name or "")
+  cast.icon:SetTexture(icon or 136243)
+  cast.time:SetText("")
 
-  local total = (endMS - startMS) / 1000
-  local start = startMS / 1000
+  if cast.isChannel then
+    local remaining = finish - GetTime()
+    cast:SetMinMaxValues(0, finish - start)
+    cast:SetValue(math.max(0, remaining))
+  else
+    cast:SetMinMaxValues(0, finish - start)
+    cast:SetValue(0)
+  end
 
-  UI.cast:Show()
-  UI.cast.spell:SetText(name or "")
-  UI.cast.icon:SetTexture(icon or 136243) -- generic
-  UI.cast:SetStatusBarColor(isChannel and 0.3 or 1, isChannel and 0.7 or .7, isChannel and 1 or 0)
-
-  UI.cast:SetScript("OnUpdate", function(selfBar)
-    local now = GetTime()
-    local elapsed = now - start
-    selfBar:SetMinMaxValues(0, total)
-    selfBar:SetValue(elapsed)
-    selfBar.time:SetFormattedText("%.1f / %.1f", math.max(0, elapsed), total)
-
-    if elapsed >= total then
-      selfBar:SetScript("OnUpdate", nil)
-      selfBar:Hide()
-    end
-  end)
+  cast:SetScript("OnUpdate", CastOnUpdate)
+  cast:Show()
 end
 
--- Cast event methods
 function ClassHUD:UNIT_SPELLCAST_START(unit)
   if unit ~= "player" then return end
   local name, _, icon, startMS, endMS = UnitCastingInfo("player")
-  if name then self:StartCast(name, icon, startMS, endMS, false) end
+  if name then
+    self:StartCast(name, icon, startMS, endMS, false)
+  end
 end
 
 function ClassHUD:UNIT_SPELLCAST_CHANNEL_START(unit)
   if unit ~= "player" then return end
   local name, _, icon, startMS, endMS = UnitChannelInfo("player")
-  if name then self:StartCast(name, icon, startMS, endMS, true) end
+  if name then
+    self:StartCast(name, icon, startMS, endMS, true)
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_STOP(unit)
+  if unit == "player" then
+    self:StopCast()
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_CHANNEL_STOP(unit)
+  if unit == "player" then
+    self:StopCast()
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_INTERRUPTED(unit)
+  if unit == "player" then
+    self:StopCast()
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_FAILED(unit)
+  if unit == "player" then
+    self:StopCast()
+  end
 end
 
 function ClassHUD:UNIT_SPELLCAST_SUCCEEDED(unit, spellID)
   if unit ~= "player" then return end
-  local name, _, icon = C_Spell.GetSpellInfo(spellID)
-  if name and not UnitCastingInfo("player") and not UnitChannelInfo("player") then
-    self:StartCast(name, icon, GetTime() * 1000, (GetTime() + 1) * 1000, false)
+  if UnitCastingInfo("player") or UnitChannelInfo("player") then
+    return
   end
+  local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(spellID)
+  local now = GetTime()
+  self:StartCast(info and info.name, info and info.iconID, now * 1000, (now + 0.6) * 1000, false)
 end
 
-function ClassHUD:UNIT_SPELLCAST_STOP(unit) if unit == "player" then self:StopCast() end end
+-- Primary resource ---------------------------------------------------------
+function ClassHUD:UpdateResourceBar()
+  if not self:IsBarEnabled("resource") then
+    if self.bars and self.bars.resource then
+      self.bars.resource:Hide()
+    end
+    return
+  end
 
-function ClassHUD:UNIT_SPELLCAST_CHANNEL_STOP(unit) if unit == "player" then self:StopCast() end end
-
-function ClassHUD:UNIT_SPELLCAST_INTERRUPTED(unit) if unit == "player" then self:StopCast() end end
-
-function ClassHUD:UNIT_SPELLCAST_FAILED(unit) if unit == "player" then self:StopCast() end end
-
--- HP/Primary updates
-function ClassHUD:UpdateHP()
-  if not self.db.profile.show.hp then return end
-  local cur, max = UnitHealth("player"), UnitHealthMax("player")
-  UI.hp:SetMinMaxValues(0, max)
-  UI.hp:SetValue(cur)
-  local pct = (max > 0) and (cur / max * 100) or 0
-  UI.hp.text:SetFormattedText("%d%%", pct + 0.5)
-  UI.hp:Show()
-end
-
-function ClassHUD:UpdatePrimaryResource()
-  if not self.db.profile.show.resource then return end
-
+  if not (self.bars and self.bars.resource) then return end
+  local resource = self.bars.resource
   local id, token = UnitPowerType("player")
-  local cur, max = UnitPower("player", id), UnitPowerMax("player", id)
-  UI.resource:SetMinMaxValues(0, max > 0 and max or 1)
-  UI.resource:SetValue(cur)
+  local cur = UnitPower("player", id)
+  local max = UnitPowerMax("player", id)
+  max = max > 0 and max or 1
+  resource:SetMinMaxValues(0, max)
+  resource:SetValue(cur)
 
-  local r, g, b = self:PowerColorBy(id, token)
-  UI.resource:SetStatusBarColor(r, g, b)
-
-  if id == Enum.PowerType.Mana then
-    local pct = (max > 0) and (cur / max * 100) or 0
-    UI.resource.text:SetFormattedText("%d%%", pct + 0.5)
-  else
-    UI.resource.text:SetText(cur)
+  local color = (token and PowerBarColor[token]) or PowerBarColor[id]
+  if color then
+    resource:SetStatusBarColor(color.r, color.g, color.b)
   end
-  UI.resource:Show()
+
+  if token == "MANA" then
+    local pct = (cur / max) * 100
+    resource.value:SetFormattedText("%d%%", pct + 0.5)
+  else
+    resource.value:SetText(cur)
+  end
+  resource:Show()
 end
+
+-- Class resource -----------------------------------------------------------
+local CLASS_POWER_ID = {
+  MONK        = Enum.PowerType.Chi,
+  PALADIN     = Enum.PowerType.HolyPower,
+  WARLOCK     = Enum.PowerType.SoulShards,
+  ROGUE       = Enum.PowerType.ComboPoints,
+  DRUID       = Enum.PowerType.ComboPoints,
+  MAGE        = Enum.PowerType.ArcaneCharges,
+  EVOKER      = Enum.PowerType.Essence,
+  DEATHKNIGHT = Enum.PowerType.Runes,
+}
+
+local REQUIRED_SPEC = {
+  MONK = 269, -- Windwalker
+  MAGE = 62,  -- Arcane
+}
+
+local USES_PARTIAL_BY_SPEC = {
+  [267] = true, -- Destruction Warlock shards
+}
+
+local function GetChargedPoints()
+  if GetUnitChargedPowerPoints then
+    return GetUnitChargedPowerPoints("player")
+  end
+end
+
+local function ResolveSpecialPower()
+  local _, class = UnitClass("player")
+  local specIndex = GetSpecialization()
+  local specID = specIndex and GetSpecializationInfo(specIndex) or 0
+  local ptype = CLASS_POWER_ID[class]
+  if REQUIRED_SPEC[class] and specID ~= REQUIRED_SPEC[class] then
+    return nil
+  end
+  if class == "DRUID" then
+    local current = select(1, UnitPowerType("player"))
+    if current ~= Enum.PowerType.Energy then
+      return nil
+    end
+  end
+  return ptype, specID
+end
+
+local function EnsureSegment(bar, index)
+  if not bar.segments[index] then
+    local segment = CreateStatusBar(nil)
+    segment:SetParent(bar)
+    segment:SetMinMaxValues(0, 1)
+    segment.bg:SetColorTexture(0, 0, 0, 0.7)
+    bar.segments[index] = segment
+  end
+  local segment = bar.segments[index]
+  segment:SetStatusBarTexture(GetBarTexture())
+  return segment
+end
+
+local function HideSegments(bar, from)
+  if not bar.segments then return end
+  for i = from, #bar.segments do
+    if bar.segments[i] then
+      bar.segments[i]:Hide()
+    end
+  end
+end
+
+local function LayoutSegments(bar, count)
+  local cfg = ClassHUD:GetBarsConfig()
+  local spacing = (cfg.class and cfg.class.segmentSpacing) or 0
+  local width = bar:GetWidth()
+  if width <= 0 then width = cfg.width or 250 end
+  local height = (cfg.class and cfg.class.height) or 16
+  if count <= 0 then return end
+  local segWidth = (width - spacing * (count - 1)) / count
+  for i = 1, count do
+    local segment = EnsureSegment(bar, i)
+    segment:ClearAllPoints()
+    segment:SetSize(segWidth, height)
+    if i == 1 then
+      segment:SetPoint("LEFT", bar, "LEFT", 0, 0)
+    else
+      segment:SetPoint("LEFT", bar.segments[i - 1], "RIGHT", spacing, 0)
+    end
+    segment:Show()
+  end
+  HideSegments(bar, count + 1)
+end
+
+local function IndexedColor(i, max)
+  if max <= 1 then return 1, 1, 1 end
+  local t = (i - 1) / (max - 1)
+  local r = 1.0
+  local g = math.min(1, 0.2 + 0.8 * t)
+  local b = math.max(0.1, 0.3 - 0.2 * t)
+  return r, g, b
+end
+
+local function RuneSpecColor(specID)
+  if specID == 250 then return 0.75, 0.10, 0.10 end -- Blood
+  if specID == 251 then return 0.35, 0.70, 1.00 end -- Frost
+  if specID == 252 then return 0.20, 0.95, 0.35 end -- Unholy
+  return 0.7, 0.7, 0.7
+end
+
+local function UpdateSegments(ptype, max, specID)
+  local bar = ClassHUD.bars.class
+  if not bar then return end
+  if max <= 0 then
+    bar:Hide()
+    return
+  end
+  LayoutSegments(bar, max)
+  local charged = (ptype == Enum.PowerType.ComboPoints) and GetChargedPoints()
+  local chargedLookup
+  if charged then
+    chargedLookup = {}
+    for _, index in ipairs(charged) do
+      chargedLookup[index] = true
+    end
+  end
+  local current = UnitPower("player", ptype, USES_PARTIAL_BY_SPEC[specID] and true or false)
+  local mod = UnitPowerDisplayMod and UnitPowerDisplayMod(ptype) or 1
+  local exact = USES_PARTIAL_BY_SPEC[specID] and (current / mod) or current
+  for i = 1, max do
+    local segment = EnsureSegment(bar, i)
+    segment:SetMinMaxValues(0, 1)
+    local r, g, b
+    if ptype == Enum.PowerType.HolyPower then
+      r, g, b = 1.0, 0.9, 0.3
+    elseif ptype == Enum.PowerType.SoulShards then
+      r, g, b = 0.6, 0.2, 1.0
+    elseif ptype == Enum.PowerType.ArcaneCharges then
+      r, g, b = 0.25, 0.6, 1.0
+    else
+      r, g, b = IndexedColor(i, max)
+    end
+    if chargedLookup and chargedLookup[i] then
+      r, g, b = 1.0, 0.95, 0.35
+    end
+    segment:SetStatusBarColor(r, g, b)
+    if USES_PARTIAL_BY_SPEC[specID] then
+      if i <= math.floor(exact) then
+        segment:SetValue(1)
+      elseif i == math.floor(exact) + 1 then
+        segment:SetValue(exact % 1)
+      else
+        segment:SetValue(0)
+      end
+    else
+      segment:SetValue(exact >= i and 1 or 0)
+    end
+    segment:Show()
+  end
+  bar:Show()
+end
+
+local function UpdateRunes(specID)
+  local bar = ClassHUD.bars.class
+  if not bar then return end
+  local max = 6
+  LayoutSegments(bar, max)
+  local r, g, b = RuneSpecColor(specID)
+  for i = 1, max do
+    local segment = EnsureSegment(bar, i)
+    local start, duration, ready = GetRuneCooldown(i)
+    if ready or not start or duration == 0 then
+      segment:SetValue(1)
+      segment:SetStatusBarColor(r, g, b)
+    else
+      local progress = (GetTime() - start) / duration
+      segment:SetValue(math.min(progress, 1))
+      segment:SetStatusBarColor(r * 0.6, g * 0.6, b * 0.6)
+    end
+    segment:Show()
+  end
+  bar:Show()
+end
+
+local function UpdateEssence(ptype)
+  local bar = ClassHUD.bars.class
+  if not bar then return end
+  local max = UnitPowerMax("player", ptype)
+  if not max or max <= 0 then
+    bar:Hide()
+    return
+  end
+  LayoutSegments(bar, max)
+  local current = UnitPower("player", ptype)
+  local partial = UnitPartialPower and UnitPartialPower("player", ptype) or 0
+  local nextFrac = partial / 1000
+  for i = 1, max do
+    local segment = EnsureSegment(bar, i)
+    segment:SetStatusBarColor(0.5, 1.0, 0.9)
+    if i <= current then
+      segment:SetValue(1)
+    elseif i == current + 1 then
+      segment:SetValue(math.min(nextFrac, 1))
+    else
+      segment:SetValue(0)
+    end
+    segment:Show()
+  end
+  bar:Show()
+end
+
+function ClassHUD:UpdateClassBar()
+  if not self:IsBarEnabled("class") then
+    if self.bars and self.bars.class then
+      self.bars.class:Hide()
+    end
+    return
+  end
+
+  if not self.bars or not self.bars.class then return end
+
+  local ptype, specID = ResolveSpecialPower()
+  if not ptype then
+    self.bars.class:Hide()
+    return
+  end
+
+  if ptype == Enum.PowerType.Runes then
+    UpdateRunes(specID)
+    return
+  end
+
+  if ptype == Enum.PowerType.Essence then
+    UpdateEssence(ptype)
+    return
+  end
+
+  local max = UnitPowerMax("player", ptype) or 0
+  if max <= 0 then
+    self.bars.class:Hide()
+    return
+  end
+
+  UpdateSegments(ptype, max, specID)
+end
+

@@ -1,673 +1,421 @@
 -- ClassHUD.lua
+-- Minimal bootstrap + Cooldown Viewer integration.
+
 local ADDON_NAME = ...
-local AceAddon   = LibStub("AceAddon-3.0")
-local AceEvent   = LibStub("AceEvent-3.0")
-local AceConsole = LibStub("AceConsole-3.0")
-local AceDB      = LibStub("AceDB-3.0")
-local LSM        = LibStub("LibSharedMedia-3.0")
 
----@class ClassHUD : AceAddon, AceEvent, AceConsole
----@field BuildFramesForSpec fun(self:ClassHUD)  -- defined in Spells.lua
----@field UpdateAllFrames fun(self:ClassHUD)     -- defined in Spells.lua
----@field Layout fun(self:ClassHUD)              -- defined in Bars.lua
----@field ApplyBarSkins fun(self:ClassHUD)       -- defined in Bars.lua
----@field UpdateHP fun(self:ClassHUD)            -- defined in Bars.lua
----@field UpdatePrimaryResource fun(self:ClassHUD) -- defined in Bars.lua
----@field UpdateSpecialPower fun(self:ClassHUD)  -- defined in Classbar.lua
----@field UpdateSegmentsAdvanced fun(self:ClassHUD, ptype:number, max:number, partial:boolean)|nil
----@field UpdateEssenceSegments fun(self:ClassHUD, ptype:number)|nil
----@field UpdateRunes fun(self:ClassHUD)|nil
+---@class ClassHUDAddon
+local ClassHUD = _G.ClassHUD or {}
+_G.ClassHUD = ClassHUD
+ClassHUD.name = ADDON_NAME
 
-local ClassHUD   = AceAddon:NewAddon("ClassHUD", "AceEvent-3.0", "AceConsole-3.0")
-ClassHUD:SetDefaultModuleState(true)
-_G.ClassHUD = ClassHUD -- explicit global bridge so split files can always find it
-
--- Make shared libs available to submodules
-ClassHUD.LSM = LSM
-
----@class ClassHUDUI
----@field anchor Frame|nil
----@field cast StatusBar|nil
----@field hp StatusBar|nil
----@field resource StatusBar|nil
----@field power Frame|nil
----@field powerSegments StatusBar[]
----@field runeBars StatusBar[]
----@field icons Frame|nil
----@field iconFrames Frame[]
----@field attachments table<string, Frame>
-ClassHUD.UI = {
-  anchor        = nil,
-  cast          = nil,
-  hp            = nil,
-  resource      = nil,
-  power         = nil,
-  powerSegments = {},
-  runeBars      = {},
-  icons         = nil,
-  iconFrames    = {},
-  attachments   = {},
-}
-
--- Class color (for HP)
-function ClassHUD:GetClassColor()
-  local _, class = UnitClass("player")
-  local c = RAID_CLASS_COLORS[class] or { r = 1, g = 1, b = 1 }
-  return c.r, c.g, c.b
-end
-
--- Blizzard power colors
-local TOKEN_BY_ID = {
-  [Enum.PowerType.Mana]          = "MANA",
-  [Enum.PowerType.Rage]          = "RAGE",
-  [Enum.PowerType.Focus]         = "FOCUS",
-  [Enum.PowerType.Energy]        = "ENERGY",
-  [Enum.PowerType.ComboPoints]   = "COMBO_POINTS",
-  [Enum.PowerType.Runes]         = "RUNES",
-  [Enum.PowerType.RunicPower]    = "RUNIC_POWER",
-  [Enum.PowerType.SoulShards]    = "SOUL_SHARDS",
-  [Enum.PowerType.LunarPower]    = "LUNAR_POWER",
-  [Enum.PowerType.HolyPower]     = "HOLY_POWER",
-  [Enum.PowerType.Maelstrom]     = "MAELSTROM",
-  [Enum.PowerType.Chi]           = "CHI",
-  [Enum.PowerType.Insanity]      = "INSANITY",
-  [Enum.PowerType.ArcaneCharges] = "ARCANE_CHARGES",
-  [Enum.PowerType.Fury]          = "FURY",
-  [Enum.PowerType.Pain]          = "PAIN",
-  [Enum.PowerType.Essence]       = "ESSENCE",
-}
-
-function ClassHUD:PowerColorBy(id, token)
-  token = token or TOKEN_BY_ID[id]
-  local c = (token and PowerBarColor[token]) or PowerBarColor[id]
-  if c then return c.r, c.g, c.b end
-  return 0.2, 0.6, 1.0 -- sensible fallback
-end
-
--- ---------------------------------------------------------------------------
--- Defaults & DB
--- ---------------------------------------------------------------------------
+-- -----------------------------------------------------------------------------
+-- Saved variables & defaults
+-- -----------------------------------------------------------------------------
 local defaults = {
-  profile = {
-    locked           = false,
-    width            = 250,
-    spacing          = 2,
-    powerSpacing     = 2,
-    position         = { x = 0, y = -50 },
-    borderColor      = { r = 0, g = 0, b = 0, a = 1 },
-    textures         = {
-      bar  = "Blizzard",
-      font = "Friz Quadrata TT",
-    },
-
-    show             = {
-      cast     = true,
-      hp       = true,
-      resource = true, -- primary (mana/rage/energy/etc.)
-      power    = true, -- special (combo/chi/shards/etc.)
-      buffs    = true,
-    },
-
-    height           = {
-      cast     = 18,
-      hp       = 14,
-      resource = 14,
-      power    = 14,
-    },
-
-    sideBars         = {
-      size    = 36,
-      spacing = 4,
-      offset  = 6,
-    },
-
-    topBar           = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 0,
-      grow     = "UP", -- "UP" eller "DOWN"
-    },
-    bottomBar        = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 0,
-    },
-    trackedBuffBar   = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 4,        -- litt luft over TopBar
-      align    = "CENTER", -- "LEFT" | "CENTER" | "RIGHT"
-      height   = 16,
-    },
-
-    -- =========================
-    -- Spell & Buff persistence
-    -- =========================
-
-    -- Utility placement per spellID
-    utilityPlacement = {
-      -- [spellID] = "TOP" | "BOTTOM" | "LEFT" | "RIGHT"
-    },
-
-    -- Persistente buff-links (class -> spec -> buffID -> spellID)
-    buffLinks        = {},
-
-    -- Brukervalgte tracked buffs (class -> spec -> buffID -> true/false)
-    trackedBuffs     = {},
-
-    -- CDM snapshot (slik at vi ikke trenger å spørre CDM hver gang)
-    cdmSnapshot      = {
-      -- [class] = {
-      --   [specID] = {
-      --     [category] = {
-      --       [spellID] = {
-      --         spellID = ...,
-      --         iconID  = ...,
-      --         name    = ...,
-      --         desc    = ...,
-      --       }
-      --     }
-      --   }
-      -- }
-    },
-
-    colors           = {
-      hp            = { r = 0.10, g = 0.80, b = 0.10 },
-      resourceClass = true,
-      resource      = { r = 0.00, g = 0.55, b = 1.00 },
-      power         = { r = 1.00, g = 0.85, b = 0.10 },
-    },
-  }
+  bars = {
+    width = 280,
+    spacing = 6,
+    texture = "Interface\\TargetingFrame\\UI-StatusBar",
+    font = "Fonts\\FRIZQT__.TTF",
+    cast = { enabled = true, height = 18, textSize = 12 },
+    resource = { enabled = true, height = 14, textSize = 12 },
+    class = { enabled = true, height = 16, segmentSpacing = 2 },
+  },
+  buffs = {
+    enabled = true,
+    iconSize = 32,
+    spacing = 4,
+    rows = 2,
+    perRow = 10,
+    customSpellIDs = {},
+    hiddenSpellIDs = {},
+  },
 }
 
-
-function ClassHUD:FetchStatusbar()
-  return self.LSM:Fetch("statusbar", self.db.profile.textures.bar)
-      or "Interface\\TargetingFrame\\UI-StatusBar"
+local function copyTable(src)
+  local tbl = {}
+  for k, v in pairs(src) do
+    if type(v) == "table" then
+      tbl[k] = copyTable(v)
+    else
+      tbl[k] = v
+    end
+  end
+  return tbl
 end
 
-function ClassHUD:FetchFont(size, flags)
-  local path = self.LSM:Fetch("font", self.db.profile.textures.font) or STANDARD_TEXT_FONT
-  return path, size, flags or "OUTLINE"
+local function applyDefaults(target, template)
+  for key, value in pairs(template) do
+    if type(value) == "table" then
+      if type(target[key]) ~= "table" then
+        target[key] = copyTable(value)
+      else
+        applyDefaults(target[key], value)
+      end
+    elseif target[key] == nil then
+      target[key] = value
+    end
+  end
 end
 
--- ---------------------------------------------------------------------------
--- Public helpers used by modules
--- ---------------------------------------------------------------------------
-function ClassHUD:ApplyAnchorPosition()
-  local UI = self.UI
-  if not UI.anchor then return end
-  local pos = (self.db and self.db.profile and self.db.profile.position) or { x = 0, y = -350 }
-  UI.anchor:ClearAllPoints()
-  UI.anchor:SetPoint("CENTER", UIParent, "CENTER", pos.x or 0, pos.y or 0)
+ClassHUDDB = ClassHUDDB or {}
+applyDefaults(ClassHUDDB, defaults)
+ClassHUD.db = ClassHUDDB
+
+-- Provide lightweight accessors for modules
+function ClassHUD:GetBarsConfig()
+  return self.db and self.db.bars or defaults.bars
 end
 
--- Exposed so Classbar can create uniform bars
-function ClassHUD:CreateStatusBar(parent, height, withBorder)
-  local holder = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-  holder:SetSize(self.db.profile.width or 250, height or 16)
+function ClassHUD:GetBuffConfig()
+  return self.db and self.db.buffs or defaults.buffs
+end
 
-  local edge = (self.db.profile.borderSize and math.max(1, self.db.profile.borderSize)) or 1
+function ClassHUD:IsBarEnabled(name)
+  local cfg = self:GetBarsConfig()
+  local block = cfg and cfg[name]
+  return block and block.enabled
+end
 
-  if withBorder then
-    holder:SetBackdrop({
-      edgeFile = "Interface\\Buttons\\WHITE8x8",
-      edgeSize = edge,
-      insets   = { left = 0, right = 0, top = 0, bottom = 0 },
-    })
-    local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
-    holder:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
-    holder:SetBackdropColor(0, 0, 0, 0.40)
+-- -----------------------------------------------------------------------------
+-- Cooldown Viewer safety helpers
+-- -----------------------------------------------------------------------------
+local FALLBACK_COOLDOWN_ENUM = {
+  Essential = 0,
+  Utility = 1,
+  TrackedBuff = 2,
+  TrackedBar = 3,
+}
+
+function ClassHUD:GetCooldownCategory(category)
+  local enum = Enum and Enum.CooldownViewerCategory
+  if enum and enum[category] then
+    return enum[category]
+  end
+  return FALLBACK_COOLDOWN_ENUM[category]
+end
+
+local function safeCategorySet(category)
+  if not (C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCategorySet) then
+    return nil
+  end
+  local ok, result = pcall(C_CooldownViewer.GetCooldownViewerCategorySet, category)
+  if ok then
+    return result
+  end
+end
+
+local function safeCooldownInfo(cooldownID)
+  if not (C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCooldownInfo) then
+    return nil
+  end
+  local ok, result = pcall(C_CooldownViewer.GetCooldownViewerCooldownInfo, cooldownID)
+  if ok then
+    return result
+  end
+end
+
+local function extractSpellID(info)
+  if type(info) ~= "table" then
+    return nil
+  end
+  if type(info.spellID) == "number" then
+    return info.spellID
+  end
+  if type(info.overrideSpellID) == "number" then
+    return info.overrideSpellID
+  end
+  if type(info.auraSpellID) == "number" then
+    return info.auraSpellID
+  end
+  if type(info.linkedSpellIDs) == "table" then
+    for _, linked in ipairs(info.linkedSpellIDs) do
+      if type(linked) == "number" then
+        return linked
+      end
+    end
+  end
+end
+
+-- -----------------------------------------------------------------------------
+-- Core helpers
+-- -----------------------------------------------------------------------------
+function ClassHUD:EnableCooldownViewer()
+  if type(SetCVar) == "function" then
+    SetCVar("cooldownViewerEnabled", "1")
+  end
+end
+
+function ClassHUD:GetEssentialFrame()
+  return _G.EssentialCooldownViewer
+end
+
+function ClassHUD:EnsureModules()
+  if not self.bars then
+    self:CreateBars()
+  end
+  if not self.buffBar then
+    self:CreateBuffBar()
+  end
+end
+
+function ClassHUD:AnchorFrames()
+  self:EnsureModules()
+
+  local bars = self.bars
+  local buffs = self.buffBar
+  if not bars then
+    return
   end
 
-  local bar = CreateFrame("StatusBar", nil, holder)
-  bar:SetPoint("TOPLEFT", holder, "TOPLEFT", edge, -edge)
-  bar:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", -edge, edge)
-  bar:SetStatusBarTexture(self:FetchStatusbar())
-  bar:SetMinMaxValues(0, 1)
-  bar:SetValue(0)
+  local cfg = self:GetBarsConfig()
+  local spacing = cfg.spacing or 0
+  local width = cfg.width or 280
 
-  bar.bg = bar:CreateTexture(nil, "BACKGROUND")
-  bar.bg:SetAllPoints(bar)
-  bar.bg:SetColorTexture(0, 0, 0, 0.55)
+  local anchor = self:GetEssentialFrame() or UIParent
+  if not anchor then
+    return
+  end
 
-  bar.text = bar:CreateFontString(nil, "OVERLAY")
-  bar.text:SetPoint("CENTER")
-  bar.text:SetFont(self:FetchFont(12))
+  local prev = anchor
+  local function anchorBar(frame, enabled, height)
+    if not frame then return end
+    frame:ClearAllPoints()
+    frame:SetWidth(width)
+    if enabled and height and height > 0 then
+      frame:SetHeight(height)
+      frame:SetPoint("BOTTOMLEFT", prev, "TOPLEFT", 0, spacing)
+      frame:SetPoint("BOTTOMRIGHT", prev, "TOPRIGHT", 0, spacing)
+      frame:Show()
+      prev = frame
+    else
+      frame:Hide()
+    end
+  end
 
-  bar._holder = holder
-  bar._edge   = edge
-  return bar
+  anchorBar(bars.cast, self:IsBarEnabled("cast"), cfg.cast and cfg.cast.height)
+  anchorBar(bars.resource, self:IsBarEnabled("resource"), cfg.resource and cfg.resource.height)
+  anchorBar(bars.class, self:IsBarEnabled("class"), cfg.class and cfg.class.height)
+
+  if buffs and buffs.anchor then
+    buffs.anchor:ClearAllPoints()
+    buffs.anchor:SetWidth(width)
+    if buffs:IsEnabled() then
+      buffs.anchor:SetPoint("BOTTOMLEFT", prev, "TOPLEFT", 0, spacing)
+      buffs.anchor:SetPoint("BOTTOMRIGHT", prev, "TOPRIGHT", 0, spacing)
+      prev = buffs.anchor
+    end
+  end
+
+  if self.ApplyBarVisuals then
+    self:ApplyBarVisuals()
+  end
+  if buffs and buffs.ApplyLayout then
+    buffs:ApplyLayout()
+  end
 end
 
--- ---------------------------------------------------------------------------
--- Lifecycle
--- ---------------------------------------------------------------------------
-function ClassHUD:OnInitialize()
-  -- IMPORTANT: Ensure your TOC has "## SavedVariables: ClassHUDDB"
-  self.db = AceDB:New("ClassHUDDB", defaults, true)
-end
+function ClassHUD:UpdateFromCooldownViewer()
+  self:EnsureModules()
+  if not self.buffBar then
+    return
+  end
 
--- Called by PLAYER_ENTERING_WORLD or when user changes options
-function ClassHUD:FullUpdate()
-  if self.Layout then self:Layout() end
-  if self.UpdateHP then self:UpdateHP() end
-  if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
-  if self.UpdateSpecialPower then self:UpdateSpecialPower() end
-end
+  local tracked = {}
+  local order = {}
+  local hidden = self:GetBuffConfig().hiddenSpellIDs or {}
 
----Rebuilds the Cooldown Viewer snapshot for the current class/spec.
----The snapshot is the authoritative data source for layout, options and UI.
-function ClassHUD:UpdateCDMSnapshot()
-  if not self:IsCooldownViewerAvailable() then return end
+  local function include(spellID, source, cooldownID, info)
+    if not spellID or hidden[spellID] then
+      return
+    end
+    if not tracked[spellID] then
+      tracked[spellID] = {
+        source = source,
+        cooldownID = cooldownID,
+        info = info,
+      }
+      table.insert(order, spellID)
+    end
+  end
 
-  local class, specID = self:GetPlayerClassSpec()
-  local snapshot = self:GetSnapshotForSpec(class, specID, true)
-  if not snapshot then return end
+  if Enum and Enum.CooldownViewerCategory then
+    local trackedBuffCat = self:GetCooldownCategory("TrackedBuff")
+    if trackedBuffCat then
+      local ids = safeCategorySet(trackedBuffCat)
+      if type(ids) == "table" then
+        for _, cooldownID in ipairs(ids) do
+          local info = safeCooldownInfo(cooldownID)
+          include(extractSpellID(info), "trackedBuff", cooldownID, info)
+        end
+      end
+    end
 
-  -- clear old
-  for key in pairs(snapshot) do snapshot[key] = nil end
-
-  local categories = {
-    [Enum.CooldownViewerCategory.Essential]   = "essential",
-    [Enum.CooldownViewerCategory.Utility]     = "utility",
-    [Enum.CooldownViewerCategory.TrackedBuff] = "buff",
-    [Enum.CooldownViewerCategory.TrackedBar]  = "bar",
-  }
-
-  local orderByCategory = {}
-
-  for cat, catName in pairs(categories) do
-    local ids = C_CooldownViewer.GetCooldownViewerCategorySet(cat)
-    if type(ids) == "table" then
-      for _, cooldownID in ipairs(ids) do
-        local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
-        local sid = raw and (raw.spellID or raw.overrideSpellID or (raw.linkedSpellIDs and raw.linkedSpellIDs[1]))
-        if sid then
-          local info = C_Spell.GetSpellInfo(sid)
-          local desc = C_Spell.GetSpellDescription(sid)
-
-          local entry = snapshot[sid]
-          if not entry then
-            entry = {
-              spellID     = sid,
-              name        = info and info.name or ("Spell " .. sid),
-              iconID      = info and info.iconID,
-              desc        = desc,
-              categories  = {},
-              category    = catName,
-              lastUpdated = GetServerTime and GetServerTime() or time(),
-            }
-            snapshot[sid] = entry
-          else
-            entry.name        = info and info.name or entry.name
-            entry.iconID      = info and info.iconID or entry.iconID
-            entry.desc        = desc or entry.desc
-            entry.category    = entry.category or catName
-            entry.lastUpdated = GetServerTime and GetServerTime() or time()
-          end
-
-          orderByCategory[catName] = (orderByCategory[catName] or 0) + 1
-          entry.categories[catName] = {
-            cooldownID      = cooldownID,
-            overrideSpellID = raw.overrideSpellID,
-            linkedSpellIDs  = raw.linkedSpellIDs and { unpack(raw.linkedSpellIDs) } or nil,
-            hasAura         = raw.hasAura,
-            order           = orderByCategory[catName],
-          }
+    local trackedBarCat = self:GetCooldownCategory("TrackedBar")
+    if trackedBarCat then
+      local ids = safeCategorySet(trackedBarCat)
+      if type(ids) == "table" then
+        for _, cooldownID in ipairs(ids) do
+          local info = safeCooldownInfo(cooldownID)
+          include(extractSpellID(info), "trackedBar", cooldownID, info)
         end
       end
     end
   end
-end
 
--- ===== Options bootstrap (registers with AceConfigRegistry directly) =====
-function ClassHUD:RegisterOptions()
-  local ACR = LibStub("AceConfigRegistry-3.0", true)
-  local ACD = LibStub("AceConfigDialog-3.0", true)
-  if not (ACR and ACD) then
-    return false
-  end
-
-  -- Try to use the real builder from ClassHUD_Options.lua
-  local builder = _G.ClassHUD_BuildOptions
-  local opts
-
-  if type(builder) == "function" then
-    local ok, res = pcall(builder, self)
-    if ok then
-      opts = res
+  local custom = self:GetBuffConfig().customSpellIDs
+  if type(custom) == "table" then
+    for spellID, enabled in pairs(custom) do
+      if enabled and type(spellID) == "number" then
+        include(spellID, "custom", nil, nil)
+      end
     end
   end
 
-  -- If still missing, warn ONCE and install a tiny fallback so /chud works
-  if not opts then
-    opts = {
-      type = "group",
-      name = "ClassHUD (fallback)",
-      args = {
-        note = {
-          type = "description",
-          order = 1,
-          name =
-          "Options file not loaded.\nCheck TOC path/name and that ClassHUD_Options.lua defines:\n\nfunction ClassHUD_BuildOptions(addon) ... return opts end\n"
-        },
-      },
-    }
-  end
-
-  self._opts = opts
-  ACR:RegisterOptionsTable("ClassHUD", opts)
-  ACD:AddToBlizOptions("ClassHUD", "ClassHUD")
-
-  self._opts_registered = true
-  return true
+  self.buffBar:SetTrackedSpells(tracked, order)
+  self:UpdateBuffBar()
 end
 
-function ClassHUD:RefreshRegisteredOptions()
-  local builder = _G.ClassHUD_BuildOptions
-  if type(builder) ~= "function" then return end
+function ClassHUD:RefreshBars()
+  if not self.bars then return end
+  if self.UpdateResourceBar then self:UpdateResourceBar() end
+  if self.UpdateClassBar then self:UpdateClassBar() end
+end
 
-  local ok, opts = pcall(builder, self)
-  if not ok or not opts then return end
-
-  self._opts = opts
-
-  if self._opts_registered then
-    local ACR = LibStub("AceConfigRegistry-3.0", true)
-    if ACR then
-      ACR:RegisterOptionsTable("ClassHUD", opts)
-      ACR:NotifyChange("ClassHUD")
-    end
+function ClassHUD:UpdateBuffBar()
+  if self.buffBar and self.buffBar.UpdateBuffs then
+    self.buffBar:UpdateBuffs()
   end
 end
 
-function ClassHUD:OpenOptions()
-  local ACR = LibStub("AceConfigRegistry-3.0", true)
-  local ACD = LibStub("AceConfigDialog-3.0", true)
-  if not (ACR and ACD) then
-    return
-  end
-  if not ACR:GetOptionsTable("ClassHUD") then
-    if not self:RegisterOptions() then return end
-  end
-  ACR:NotifyChange("ClassHUD")
-  ACD:Open("ClassHUD")
-end
+-- -----------------------------------------------------------------------------
+-- Event handling
+-- -----------------------------------------------------------------------------
+local events = CreateFrame("Frame")
 
--- ========= Bars/Spells bootstrap on enable =========
-function ClassHUD:OnEnable()
-  local UI = self.UI
-  -- Create base frames
-  if not UI.anchor and self.CreateAnchor then self:CreateAnchor() end
-  if not UI.cast and self.CreateCastBar then self:CreateCastBar() end
-  if not UI.hp and self.CreateHPBar then self:CreateHPBar() end
-  if not UI.resource and self.CreateResourceBar then self:CreateResourceBar() end
-  if not UI.power and self.CreatePowerContainer then self:CreatePowerContainer() end
-
-  if self.Layout then self:Layout() end
-  if self.ApplyBarSkins then self:ApplyBarSkins() end
-
-  -- Rebuild spells after DB exists & layout is ready
-  if self.BuildFramesForSpec then
-    self:BuildFramesForSpec()
-  end
-end
-
--- ========= Event wiring =========
-local eventFrame = CreateFrame("Frame")
-
-for _, ev in pairs({
-  -- World/spec
+local registered = {
+  "PLAYER_LOGIN",
   "PLAYER_ENTERING_WORLD",
   "PLAYER_SPECIALIZATION_CHANGED",
+  "UNIT_POWER_FREQUENT",
+  "UNIT_DISPLAYPOWER",
+  "UNIT_POWER_POINT_CHARGE",
+  "RUNE_POWER_UPDATE",
+  "RUNE_TYPE_UPDATE",
+  "UNIT_SPELLCAST_START",
+  "UNIT_SPELLCAST_STOP",
+  "UNIT_SPELLCAST_CHANNEL_START",
+  "UNIT_SPELLCAST_CHANNEL_STOP",
+  "UNIT_SPELLCAST_INTERRUPTED",
+  "UNIT_SPELLCAST_FAILED",
+  "UNIT_SPELLCAST_SUCCEEDED",
+  "UNIT_HEALTH",
+  "UNIT_MAXHEALTH",
+  "UNIT_AURA",
+  "SPELL_UPDATE_COOLDOWN",
+  "SPELL_UPDATE_CHARGES",
+}
 
-  -- Health
-  "UNIT_HEALTH", "UNIT_MAXHEALTH",
-
-  -- Resource
-  "UNIT_POWER_FREQUENT", "UNIT_DISPLAYPOWER", "UPDATE_SHAPESHIFT_FORM", "UNIT_POWER_POINT_CHARGE",
-
-  -- DK runes
-  "RUNE_POWER_UPDATE", "RUNE_TYPE_UPDATE",
-
-  -- Castbar
-  "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP",
-  "UNIT_SPELLCAST_CHANNEL_START", "UNIT_SPELLCAST_CHANNEL_STOP",
-  "UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_FAILED",
-
-  -- Spells
-  "UNIT_AURA", "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_CHARGES", "UNIT_SPELLCAST_SUCCEEDED",
-}) do
-  eventFrame:RegisterEvent(ev)
+for _, event in ipairs(registered) do
+  events:RegisterEvent(event)
 end
 
-eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
-  -- Full refresh after world load
+local function handleCast(event, unit, ...)
+  if unit ~= "player" then return end
+  if not ClassHUD[event] then return end
+  ClassHUD[event](ClassHUD, unit, ...)
+end
+
+events:SetScript("OnEvent", function(_, event, arg1, ...)
+  if event == "PLAYER_LOGIN" then
+    ClassHUD:EnableCooldownViewer()
+    ClassHUD:EnsureModules()
+    ClassHUD:AnchorFrames()
+    ClassHUD:UpdateFromCooldownViewer()
+    ClassHUD:RefreshBars()
+    ClassHUD:UpdateBuffBar()
+    if ClassHUD.InitializeBuffOptions then
+      ClassHUD:InitializeBuffOptions()
+    end
+    return
+  end
+
   if event == "PLAYER_ENTERING_WORLD" then
-    ClassHUD:FullUpdate()
-    ClassHUD:ApplyAnchorPosition()
-    local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
-    if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
-    if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
+    ClassHUD:AnchorFrames()
+    ClassHUD:UpdateFromCooldownViewer()
+    ClassHUD:RefreshBars()
+    ClassHUD:UpdateBuffBar()
     return
   end
 
-  -- Spec change
-  if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
-    ClassHUD:UpdateCDMSnapshot()
-    if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
-    if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
-    ClassHUD:RefreshRegisteredOptions()
+  if event == "PLAYER_SPECIALIZATION_CHANGED" and arg1 == "player" then
+    ClassHUD:UpdateFromCooldownViewer()
+    ClassHUD:RefreshBars()
+    ClassHUD:UpdateBuffBar()
     return
   end
 
-  -- Health
-  if (event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH") and unit == "player" then
-    if ClassHUD.UpdateHP then ClassHUD:UpdateHP() end
-    return
-  end
-
-  -- Resources
   if event == "UNIT_POWER_FREQUENT" or event == "UNIT_DISPLAYPOWER" then
-    if unit == "player" then
-      if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-      if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if arg1 == "player" and ClassHUD.UpdateResourceBar then
+      ClassHUD:UpdateResourceBar()
+    end
+    if arg1 == "player" and ClassHUD.UpdateClassBar then
+      ClassHUD:UpdateClassBar()
     end
     return
   end
 
-  if event == "UPDATE_SHAPESHIFT_FORM" then
-    if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
-    return
-  end
-
-  if event == "UNIT_POWER_POINT_CHARGE" and unit == "player" then
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
-    return
-  end
-
-  if event == "RUNE_POWER_UPDATE" or event == "RUNE_TYPE_UPDATE" then
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
-    return
-  end
-
-  -- Castbar events are handled as methods on ClassHUD (in Bars module)
-  if event == "UNIT_SPELLCAST_START" and ClassHUD.UNIT_SPELLCAST_START then
-    ClassHUD:UNIT_SPELLCAST_START(unit, ...); return
-  end
-  if event == "UNIT_SPELLCAST_STOP" and ClassHUD.UNIT_SPELLCAST_STOP then
-    ClassHUD:UNIT_SPELLCAST_STOP(unit, ...); return
-  end
-  if event == "UNIT_SPELLCAST_CHANNEL_START" and ClassHUD.UNIT_SPELLCAST_CHANNEL_START then
-    ClassHUD:UNIT_SPELLCAST_CHANNEL_START(unit, ...); return
-  end
-  if event == "UNIT_SPELLCAST_CHANNEL_STOP" and ClassHUD.UNIT_SPELLCAST_CHANNEL_STOP then
-    ClassHUD:UNIT_SPELLCAST_CHANNEL_STOP(unit, ...); return
-  end
-  if event == "UNIT_SPELLCAST_INTERRUPTED" and ClassHUD.UNIT_SPELLCAST_INTERRUPTED then
-    ClassHUD:UNIT_SPELLCAST_INTERRUPTED(unit, ...); return
-  end
-  if event == "UNIT_SPELLCAST_FAILED" and ClassHUD.UNIT_SPELLCAST_FAILED then
-    ClassHUD:UNIT_SPELLCAST_FAILED(unit, ...); return
-  end
-
-  -- Spells (auras + cooldowns)
-  if (event == "UNIT_AURA" and (unit == "player" or unit == "pet")) or
-      event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES" or event == "UNIT_SPELLCAST_SUCCEEDED" then
-    if ClassHUD.UpdateAllFrames then ClassHUD:UpdateAllFrames() end
-    -- Also show instant-cast fake bar if bars module hooked SUCCEEDED
-    if event == "UNIT_SPELLCAST_SUCCEEDED" and ClassHUD.UNIT_SPELLCAST_SUCCEEDED then
-      ClassHUD:UNIT_SPELLCAST_SUCCEEDED(unit, ...)
+  if event == "UNIT_POWER_POINT_CHARGE" and arg1 == "player" then
+    if ClassHUD.UpdateClassBar then
+      ClassHUD:UpdateClassBar()
     end
+    return
+  end
+
+  if (event == "RUNE_POWER_UPDATE" or event == "RUNE_TYPE_UPDATE") and ClassHUD.UpdateClassBar then
+    ClassHUD:UpdateClassBar()
+    return
+  end
+
+  if event == "UNIT_HEALTH" or event == "UNIT_MAXHEALTH" then
+    if arg1 == "player" and ClassHUD.UpdateResourceBar then
+      -- Health events keep the resource bar responsive for specs that tie to HP (e.g., Vengeance)
+      ClassHUD:UpdateResourceBar()
+    end
+    return
+  end
+
+  if event == "UNIT_AURA" then
+    if arg1 == "player" or arg1 == "pet" then
+      ClassHUD:UpdateBuffBar()
+    end
+    return
+  end
+
+  if event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES" then
+    ClassHUD:UpdateBuffBar()
+    return
+  end
+
+  if event == "UNIT_SPELLCAST_SUCCEEDED" then
+    if arg1 == "player" and ClassHUD.UNIT_SPELLCAST_SUCCEEDED then
+      ClassHUD:UNIT_SPELLCAST_SUCCEEDED(arg1, ...)
+    end
+    return
+  end
+
+  if event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_STOP" or
+     event == "UNIT_SPELLCAST_CHANNEL_START" or event == "UNIT_SPELLCAST_CHANNEL_STOP" or
+     event == "UNIT_SPELLCAST_INTERRUPTED" or event == "UNIT_SPELLCAST_FAILED" then
+    handleCast(event, arg1, ...)
     return
   end
 end)
 
--- Replace your slash handler with this
-SLASH_CLASSHUD1 = "/chud"
-SlashCmdList["CLASSHUD"] = function(msg)
-  if msg == "debug" then
-    local ACR = LibStub("AceConfigRegistry-3.0", true)
-    local ACD = LibStub("AceConfigDialog-3.0", true)
-    print("|cff00ff88ClassHUD Debug|r",
-      "ACR=", ACR and "ok" or "nil",
-      "ACD=", ACD and "ok" or "nil",
-      "registered=", (ACR and ACR:GetOptionsTable("ClassHUD")) and "yes" or "no")
-    return
-  end
-  ClassHUD:OpenOptions()
+-- Convenience hook for modules to trigger a full refresh when options change
+function ClassHUD:NotifyConfigChanged()
+  self:AnchorFrames()
+  self:RefreshBars()
+  self:UpdateBuffBar()
 end
 
-SLASH_CLASSHUDRESET1 = "/classhudreset"
-SlashCmdList.CLASSHUDRESET = function()
-  if ClassHUD and ClassHUD.db then
-    ClassHUD.db:ResetProfile()
-    ClassHUD:BuildFramesForSpec()
-    local ACR = LibStub("AceConfigRegistry-3.0", true)
-    if ACR and ClassHUD._opts then ACR:NotifyChange("ClassHUD") end
-    print("|cff00ff00ClassHUD: profile reset.|r")
-  end
-end
-
--- ==================================================
--- Debug command: /chudlistbuffs
--- ==================================================
-SLASH_CHUDLISTBUFFS1 = "/chudlistbuffs"
-SlashCmdList.CHUDLISTBUFFS = function()
-  local enum = Enum and Enum.CooldownViewerCategory
-  if not enum then
-    print("|cff00ff88ClassHUD|r Enum.CooldownViewerCategory ikke tilgjengelig.")
-    return
-  end
-
-  local class, specID = ClassHUD:GetPlayerClassSpec()
-  local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
-  if not snapshot then
-    print("|cff00ff88ClassHUD|r Ingen snapshot tilgjengelig. Bruk /classhudreset eller relogg.")
-    return
-  end
-
-  print("|cff00ff88ClassHUD|r Liste over Tracked Buffs fra snapshot:")
-  for spellID, data in pairs(snapshot) do
-    if data.categories and data.categories.buff then
-      print(string.format("  SpellID=%d, Name=%s", spellID, data.name or "Unknown"))
-    end
-  end
-end
-
--- ==================================================
--- Debug command: /chudbuffdesc
--- ==================================================
-SLASH_CHUDBUFFDESC1 = "/chudbuffdesc"
-SlashCmdList.CHUDBUFFDESC = function()
-  local enum = Enum and Enum.CooldownViewerCategory
-  if not enum then
-    print("|cff00ff88ClassHUD|r Enum.CooldownViewerCategory ikke tilgjengelig.")
-    return
-  end
-
-  local class, specID = ClassHUD:GetPlayerClassSpec()
-  local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
-  if not snapshot then
-    print("|cff00ff88ClassHUD|r Ingen snapshot tilgjengelig.")
-    return
-  end
-
-  print("|cff00ff88ClassHUD|r Tracked Buff descriptions:")
-  for spellID, entry in pairs(snapshot) do
-    if entry.categories and entry.categories.buff then
-      local desc = entry.desc or C_Spell.GetSpellDescription(spellID) or "No description"
-      print(string.format("  [%d] %s → %s", spellID, entry.name or "Unknown", desc:gsub("\n", " ")))
-    end
-  end
-end
-
--- /chudmap : vis buff -> spell mapping
-SLASH_CHUDMAP1 = "/chudmap"
-SlashCmdList.CHUDMAP = function()
-  if not ClassHUD.trackedBuffToSpell or next(ClassHUD.trackedBuffToSpell) == nil then
-    print("|cff00ff88ClassHUD|r Ingen auto-mapping (buff → spell) er registrert.")
-    return
-  end
-  print("|cff00ff88ClassHUD|r Auto-mapping (buff → spell):")
-  for buffID, spellID in pairs(ClassHUD.trackedBuffToSpell) do
-    local bName = C_Spell.GetSpellName(buffID) or ("buff " .. buffID)
-    local sName = C_Spell.GetSpellName(spellID) or ("spell " .. spellID)
-    print(string.format("  %s (%d)  →  %s (%d)", bName, buffID, sName, spellID))
-  end
-end
-
--- ==================================================
--- Debug command: /chudtracked
--- Viser snapshot vs. aktive buffs
--- ==================================================
-SLASH_CHUDTRACKED1 = "/chudtracked"
-SlashCmdList.CHUDTRACKED = function()
-  local class, specID = ClassHUD:GetPlayerClassSpec()
-
-  print("|cff00ff88ClassHUD|r Debug: Tracked Buffs for", class, specID)
-
-  local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
-
-  local tracked = ClassHUD.db.profile.trackedBuffs
-      and ClassHUD.db.profile.trackedBuffs[class]
-      and ClassHUD.db.profile.trackedBuffs[class][specID]
-
-  if not snapshot then
-    print("  Ingen snapshot lagret for denne spec.")
-    return
-  end
-
-  for buffID, data in pairs(snapshot) do
-    if data.categories and data.categories.buff then
-      local name = data.name or ("Buff " .. buffID)
-      local candidates = ClassHUD:GetAuraCandidatesForEntry(data, buffID)
-      local aura = select(1, ClassHUD:FindAuraFromCandidates(candidates, { "player", "pet" }))
-      local active = aura and true or false
-
-      local config = tracked and ClassHUD.GetTrackedEntryConfig
-          and ClassHUD:GetTrackedEntryConfig(class, specID, buffID, false)
-
-      local enabled
-      if config and (config.showIcon or config.showBar) then
-        local modes = {}
-        if config.showIcon then table.insert(modes, "icon") end
-        if config.showBar then table.insert(modes, "bar") end
-        enabled = string.format("|cff00ff00ON (%s)|r", table.concat(modes, ", "))
-      else
-        enabled = "|cffff0000OFF|r"
-      end
-
-      local status = active and "|cff00ff00ACTIVE|r" or "inactive"
-
-      print(string.format("  [%d] %s → tracked=%s, %s",
-        buffID, name, enabled, status))
-    end
-  end
-end
