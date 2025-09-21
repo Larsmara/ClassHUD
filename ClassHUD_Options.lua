@@ -561,6 +561,61 @@ local function BuildBuffLinkArgs(addon, container)
   end
 end
 
+local function BuildBarOrderEditor(addon, container)
+  for k in pairs(container) do container[k] = nil end
+
+  local db = addon.db
+  db.profile.barOrder = db.profile.barOrder or { "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+
+  local LABELS = {
+    CAST     = "Cast Bar",
+    HP       = "Health Bar",
+    RESOURCE = "Primary Resource",
+    CLASS    = "Class/Special Power",
+    BOTTOM   = "Bottom Bar",
+  }
+
+  for index, key in ipairs(db.profile.barOrder) do
+    local label = LABELS[key] or key
+
+    container["row" .. index] = {
+      type   = "group",
+      name   = label,
+      inline = true,
+      order  = index,
+      args   = {
+        up = {
+          type     = "execute",
+          name     = "↑",
+          width    = "half",
+          disabled = (index == 1),
+          func     = function()
+            local list = db.profile.barOrder
+            list[index], list[index - 1] = list[index - 1], list[index]
+            addon:FullUpdate()
+            BuildBarOrderEditor(addon, container)
+            NotifyOptionsChanged()
+          end,
+        },
+        down = {
+          type     = "execute",
+          name     = "↓",
+          width    = "half",
+          disabled = (index == #db.profile.barOrder),
+          func     = function()
+            local list = db.profile.barOrder
+            list[index], list[index + 1] = list[index + 1], list[index]
+            addon:FullUpdate()
+            BuildBarOrderEditor(addon, container)
+            NotifyOptionsChanged()
+          end,
+        },
+      },
+    }
+  end
+end
+
+
 function ClassHUD_BuildOptions(addon)
   local db = addon.db
 
@@ -607,6 +662,7 @@ function ClassHUD_BuildOptions(addon)
   local utilityContainer = {}
   local trackedContainer = {}
   local linkContainer = {}
+  local barOrderContainer = {}
 
   local opts = {
     type = "group",
@@ -705,6 +761,21 @@ function ClassHUD_BuildOptions(addon)
               addon:FullUpdate()
               addon:BuildFramesForSpec()
             end,
+          },
+          bars = {
+            type = "group",
+            name = "Bars",
+            order = 2,
+            inline = true,
+            args = {
+              order = {
+                type   = "group",
+                name   = "Bar Order",
+                inline = true,
+                order  = 30,
+                args   = barOrderContainer,
+              },
+            },
           },
         },
       },
@@ -1397,6 +1468,7 @@ function ClassHUD_BuildOptions(addon)
     "No utility cooldowns reported by the snapshot for this spec.")
   BuildTrackedBuffArgs(addon, trackedContainer)
   BuildBuffLinkArgs(addon, linkContainer)
+  BuildBarOrderEditor(addon, barOrderContainer)
 
   return opts
 end

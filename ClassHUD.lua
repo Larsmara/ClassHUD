@@ -99,7 +99,7 @@ local defaults = {
       bar  = "Blizzard",
       font = "Friz Quadrata TT",
     },
-
+    barOrder         = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" },
     show             = {
       cast     = true,
       hp       = true,
@@ -463,6 +463,8 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     ClassHUD:RefreshRegisteredOptions()
+    ClassHUD:RebuildSpellTree()
+    ClassHUD:UpdateAllFrames()
     return
   end
 

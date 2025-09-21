@@ -1,17 +1,17 @@
 # ClassHUD
 
-A customizable World of Warcraft HUD addon with bars and spell tracking.  
-Built with [Ace3](https://www.wowace.com/projects/ace3) and LibSharedMedia.
+**ClassHUD** is a minimalist and customizable _class HUD_ for World of Warcraft. It brings your most important resources and cooldowns to the center of the screen, giving you better combat awareness without having to look down at your action bars.
 
----
+✨ **Main Features:**
 
-## ✨ Features
+- **Resource bars** – HP, primary resource (mana/energy/rage), and class-specific power (e.g. combo points).
+- **Castbar** – compact castbar with icon and timer placed directly in the HUD.
+- **Top/Bottom bars for spells & buffs** – track cooldowns and buffs in a clean layout, with the option to link spells to buffs (e.g. “show buff on this cooldown”).
+- **Buff tracking** – always see uptime for your most important buffs/debuffs.
+- **Full configuration** via options – adjust fonts, textures, spacing, borders, and which spells/buffs to show.
+- **No external dependencies** – Ace3 and LibSharedMedia are embedded, so you don’t need to install anything extra.
 
-- Cast, HP, primary resource, and special power bars that adapt per class/spec.
-- Snapshot-driven spell layout sourced from Blizzard's Cooldown Viewer API.
-- Automatic glow, cooldown, and aura stack handling for tracked spells and buffs.
-- Configurable utility placement (top/bottom/left/right) with per-spec persistence.
-- Simplified Ace3 options panel (`/chud`) with snapshot refresh, tracked buff toggles, and buff→spell link editing.
+🎯 **Goal:** Provide a clean and functional HUD that helps you focus on gameplay and reactions, instead of staring at action bars.
 
 ---
 
@@ -36,15 +36,15 @@ Built with [Ace3](https://www.wowace.com/projects/ace3) and LibSharedMedia.
 
 The addon is organised into lightweight modules:
 
-| File | Responsibility |
-| ---- | -------------- |
-| `ClassHUD.lua` | Core addon lifecycle, events, saved variables, snapshot management. |
-| `ClassHUD_Utils.lua` | Shared helpers for profile access, snapshot lookup, formatting, and aura search. |
-| `ClassHUD_Bars.lua` | Anchor frame creation, cast/resource/health bar layout and updates. |
-| `ClassHUD_Classbar.lua` | Class-specific special power/segment handling. |
-| `ClassHUD_Spells.lua` | Snapshot-driven spell frame creation, cooldown/aura updates, tracked buff bar. |
-| `ClassHUD_Options.lua` | Ace3 configuration rebuilt around the snapshot cache. |
-| `ClassHUD_SpellSuggestions.lua` | Optional pre-filled spell suggestions (data only). |
+| File                            | Responsibility                                                                   |
+| ------------------------------- | -------------------------------------------------------------------------------- |
+| `ClassHUD.lua`                  | Core addon lifecycle, events, saved variables, snapshot management.              |
+| `ClassHUD_Utils.lua`            | Shared helpers for profile access, snapshot lookup, formatting, and aura search. |
+| `ClassHUD_Bars.lua`             | Anchor frame creation, cast/resource/health bar layout and updates.              |
+| `ClassHUD_Classbar.lua`         | Class-specific special power/segment handling.                                   |
+| `ClassHUD_Spells.lua`           | Snapshot-driven spell frame creation, cooldown/aura updates, tracked buff bar.   |
+| `ClassHUD_Options.lua`          | Ace3 configuration rebuilt around the snapshot cache.                            |
+| `ClassHUD_SpellSuggestions.lua` | Optional pre-filled spell suggestions (data only).                               |
 
 ### Suggested future structure
 

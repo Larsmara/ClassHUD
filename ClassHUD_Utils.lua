@@ -292,12 +292,13 @@ end
 ---@return string
 function ClassHUD.FormatSeconds(seconds)
   if seconds >= 60 then
-    local minutes = math.max(1, math.floor(seconds / 60 + 0.5))
-    return string.format("%dm", minutes)
+    local mins = math.floor(seconds / 60)
+    local secs = math.floor(seconds % 60)
+    return string.format("%d:%02d", mins, secs)
   elseif seconds >= 10 then
-    return string.format("%d", math.floor(seconds))
+    return tostring(math.floor(seconds + 0.5))
   else
-    return string.format("%.1f", seconds)
+    return tostring(math.floor(seconds)) -- alltid heltall, ingen desimal
   end
 end
 
@@ -387,4 +388,3 @@ function ClassHUD:FindAuraFromCandidates(candidates, units)
 
   return nil
 end
-

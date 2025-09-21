@@ -20,45 +20,25 @@ local function EnsureAttachment(name)
   if not UI.anchor then return nil end
   UI.attachments = UI.attachments or {}
   if not UI.attachments[name] then
-    UI.attachments[name] = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
-    UI.attachments[name]._height = 0
+    local f = CreateFrame("Frame", "ClassHUDAttach" .. name, UI.anchor)
+    UI.attachments[name] = f
+    f._height = 0
+
+    local baseLvl = UI.anchor:GetFrameLevel() or 0
+    if name == "TRACKED_ICONS" then
+      f:SetFrameStrata("HIGH")
+      f:SetFrameLevel(baseLvl + 40)
+    elseif name == "TRACKED_BARS" then
+      f:SetFrameStrata("MEDIUM")
+      f:SetFrameLevel(baseLvl + 30)
+    else
+      f:SetFrameStrata("LOW")
+      f:SetFrameLevel(baseLvl + 10)
+    end
   end
   return UI.attachments[name]
 end
 
--- Overlay-glow helper: dedup + fallback til SpellAlertManager hvis Show/HideOverlayGlow ikke finnes
-local function SetOverlayGlow(frame, enable)
-  if enable then
-    if not frame.isGlowing then
-      if ActionButton_ShowOverlayGlow then
-        ActionButton_ShowOverlayGlow(frame)
-      else
-        ActionButtonSpellAlertManager:ShowAlert(frame)
-      end
-      frame.isGlowing = true
-    end
-  else
-    if frame.isGlowing then
-      if ActionButton_HideOverlayGlow then
-        ActionButton_HideOverlayGlow(frame)
-      else
-        ActionButtonSpellAlertManager:HideAlert(frame)
-      end
-      frame.isGlowing = false
-    end
-  end
-end
-
-
-local function CopyColor(tbl)
-  if type(tbl) ~= "table" then return nil end
-  return {
-    r = tbl.r or 1,
-    g = tbl.g or 1,
-    b = tbl.b or 1,
-    a = tbl.a or 1,
-  }
-end
 
 local function CollectAuraSpellIDs(entry, primaryID)
   return ClassHUD:GetAuraCandidatesForEntry(entry, primaryID)
@@ -220,7 +200,6 @@ end
 
 
 local function UpdateCooldownText(frame, gcdActive)
-  -- Kortslutt: aldri tekst for GCD
   if gcdActive then
     frame.cooldownText:SetText("")
     frame.cooldownText:Hide()
@@ -229,24 +208,20 @@ local function UpdateCooldownText(frame, gcdActive)
 
   if frame._cooldownEnd then
     local remain = frame._cooldownEnd - GetTime()
-    if remain <= 0 then
+    if remain > 0 then
+      local secs = ClassHUD.FormatSeconds(remain)
+      frame.cooldownText:SetText(secs or "")
+      frame.cooldownText:Show()
+    else
       frame.cooldownText:SetText("")
       frame.cooldownText:Hide()
-    else
-      local secs = math.floor(remain + 0.5)
-      if secs > 0 then
-        frame.cooldownText:SetText(secs)
-        frame.cooldownText:Show()
-      else
-        frame.cooldownText:SetText("")
-        frame.cooldownText:Hide()
-      end
     end
   else
     frame.cooldownText:SetText("")
     frame.cooldownText:Hide()
   end
 end
+
 
 
 
@@ -300,28 +275,24 @@ local function CreateSpellFrame(spellID)
   frame:SetScript("OnUpdate", function(selfFrame)
     if selfFrame._cooldownEnd then
       local remain = selfFrame._cooldownEnd - GetTime()
-      if remain <= 0 then
-        selfFrame._cooldownEnd = nil
-        selfFrame.cooldownText:SetText("")
-        selfFrame.cooldownText:Hide()
-        selfFrame.icon:SetDesaturated(false)
-      else
-        if not selfFrame._gcdActive then -- 👈 aldri vis tekst på GCD
-          local secs = math.floor(remain + 0.5)
-          if secs > 0 then
-            selfFrame.cooldownText:SetText(secs)
-            selfFrame.cooldownText:Show()
-          else
-            selfFrame.cooldownText:SetText("")
-            selfFrame.cooldownText:Hide()
-          end
+      if remain > 0 then
+        if not selfFrame._gcdActive then
+          local secs = ClassHUD.FormatSeconds(remain)
+          selfFrame.cooldownText:SetText(secs or "")
+          selfFrame.cooldownText:Show()
         else
           selfFrame.cooldownText:SetText("")
           selfFrame.cooldownText:Hide()
         end
+      else
+        selfFrame._cooldownEnd = nil
+        selfFrame.cooldownText:SetText("")
+        selfFrame.cooldownText:Hide()
+        selfFrame.icon:SetDesaturated(false)
       end
     end
   end)
+
 
 
   return frame
@@ -350,18 +321,69 @@ local function CreateBuffFrame(buffID)
 
   f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
   f.cooldown:SetAllPoints(true)
+  f.cooldown:SetHideCountdownNumbers(true) -- vi viser vår egen tekst
+  f.cooldown.noCooldownCount = true
 
-  f.count = f:CreateFontString(nil, "OVERLAY")
-  f.count:SetPoint("BOTTOMRIGHT", -2, 2)
-  f.count:SetFont(ClassHUD:FetchFont(12))
+  -- overlay så tekst havner over cooldown swipe/edge
+  f.overlay = CreateFrame("Frame", nil, f)
+  f.overlay:SetAllPoints(true)
+  f.overlay:SetFrameLevel(f.cooldown:GetFrameLevel() + 1)
+
+  local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.spellFontSize or 12)
+
+  -- CHARGES / STACKS: øverst (samme som spells)
+  f.count = f.overlay:CreateFontString(nil, "OVERLAY")
+  f.count:ClearAllPoints()
+  f.count:SetPoint("TOP", f, "TOP", 0, -2)
+  f.count:SetFont(fontPath, fontSize, "OUTLINE")
+  f.count:SetJustifyH("CENTER")
   f.count:SetText("")
   f.stacks = f.count
 
-  f.buffID = buffID
-  trackedBuffPool[buffID] = f
+  -- COOLDOWN-TEKST: nederst (samme som spells)
+  f.cooldownText = f.overlay:CreateFontString(nil, "OVERLAY")
+  f.cooldownText:ClearAllPoints()
+  f.cooldownText:SetPoint("BOTTOM", f, "BOTTOM", 0, 2)
+  f.cooldownText:SetFont(fontPath, fontSize, "OUTLINE")
+  f.cooldownText:SetJustifyH("CENTER")
+  f.cooldownText:SetJustifyV("MIDDLE")
+  f.cooldownText:Hide()
 
+  f.buffID = buffID
+  f._cooldownEnd = nil
+
+  -- Live oppdatering av vår egen cooldown-tekst
+  f:SetScript("OnUpdate", function(self)
+    local t = self._cooldownEnd
+    if not t then
+      if self.cooldownText:IsShown() then
+        self.cooldownText:SetText("")
+        self.cooldownText:Hide()
+      end
+      return
+    end
+    local remain = t - GetTime()
+    if remain > 0 then
+      local secs = math.floor(remain + 0.5)
+      if secs > 0 then
+        self.cooldownText:SetText(secs)
+        self.cooldownText:Show()
+      else
+        self.cooldownText:SetText("")
+        self.cooldownText:Hide()
+      end
+    else
+      self._cooldownEnd = nil
+      self.cooldownText:SetText("")
+      self.cooldownText:Hide()
+    end
+  end)
+
+  trackedBuffPool[buffID] = f
   return f
 end
+
+
 
 local function OnTrackedBarUpdate(self)
   if not self._duration or not self._expiration then
@@ -491,73 +513,54 @@ local function LayoutTrackedIcons(iconFrames, opts)
   local container = EnsureAttachment("TRACKED_ICONS")
   if not container then return end
 
-  container:ClearAllPoints()
-  container:SetPoint("BOTTOM", UI.attachments.TOP, "TOP", 0, 4) -- 4 px over Top bar
-  container:SetWidth(ClassHUD.db.profile.width or 250)
-
-  local settings   = ClassHUD.db.profile.trackedBuffBar or {}
-  local width      = ClassHUD.db.profile.width or 250
-  local perRow     = math.max(settings.perRow or 8, 1)
-  local spacingX   = settings.spacingX or 4
-  local spacingY   = settings.spacingY or 4
-  local align      = settings.align or "CENTER"
-  local topPadding = 0
-
-  if #iconFrames > 0 then
-    topPadding = (opts and opts.topPadding) or 0
-  end
+  local db       = ClassHUD.db.profile
+  local settings = db.trackedBuffBar or {}
+  local width    = db.width or 250
+  local perRow   = math.max(settings.perRow or 8, 1)
+  local spacingX = settings.spacingX or 4
+  local spacingY = settings.spacingY or 4
+  local align    = settings.align or "CENTER"
 
   container:SetWidth(width)
 
-  local totalHeight = 0
+  local size = (width - (perRow - 1) * spacingX) / perRow
+  if size < 1 then size = 1 end
 
-  if #iconFrames > 0 then
-    local size = (width - (perRow - 1) * spacingX) / perRow
-    if size < 1 then size = 1 end
+  -- alltid minst én rad høyde
+  local rowsUsed = math.max(1, math.ceil(#iconFrames / perRow))
+  local totalHeight = rowsUsed * size + (rowsUsed - 1) * spacingY
 
-    local count = #iconFrames
-    local rowsUsed = math.ceil(count / perRow)
+  for index, frame in ipairs(iconFrames) do
+    frame:SetParent(container)
+    frame:SetSize(size, size)
+    frame:ClearAllPoints()
 
-    for index, frame in ipairs(iconFrames) do
-      frame:SetParent(container)
-      frame:SetSize(size, size)
-      frame:ClearAllPoints()
+    local row       = math.floor((index - 1) / perRow)
+    local col       = (index - 1) % perRow
 
-      local row = math.floor((index - 1) / perRow)
-      local col = (index - 1) % perRow
+    local remaining = #iconFrames - row * perRow
+    local rowCount  = math.max(1, math.min(perRow, remaining))
+    local rowWidth  = rowCount * size + math.max(0, rowCount - 1) * spacingX
 
-      local remaining = count - row * perRow
-      local rowCount = math.min(perRow, remaining)
-      local rowWidth = rowCount * size + math.max(0, rowCount - 1) * spacingX
-
-      local startX
-      if align == "LEFT" then
-        startX = 0
-      elseif align == "RIGHT" then
-        startX = width - rowWidth
-      else
-        startX = (width - rowWidth) / 2
-      end
-
-      frame:SetPoint("TOPLEFT", container, "TOPLEFT",
-        startX + col * (size + spacingX),
-        -(topPadding + row * (size + spacingY)))
-      frame:Show()
+    local startX
+    if align == "LEFT" then
+      startX = 0
+    elseif align == "RIGHT" then
+      startX = width - rowWidth
+    else
+      startX = (width - rowWidth) / 2 -- sentrert
     end
 
-    local iconsHeight = rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY
-    totalHeight = topPadding + iconsHeight
-  else
-    -- ingen aktive buffs → hold containeren i live med 1 px høyde
-    totalHeight = 1
+    frame:SetPoint("TOPLEFT", container, "TOPLEFT",
+      startX + col * (size + spacingX),
+      -(row * (size + spacingY)))
   end
 
-  container._height = totalHeight
   container:SetHeight(totalHeight)
-  container._afterGap = nil
+  container._height   = totalHeight
+  container._afterGap = db.spacing or 2
   container:Show()
 end
-
 
 
 
@@ -697,19 +700,28 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
     local info = C_Spell.GetSpellInfo(buffID)
     iconID = info and info.iconID
   end
-
   frame.icon:SetTexture(iconID or C_Spell.GetSpellTexture(buffID) or 134400)
 
   if aura and aura.expirationTime and aura.duration and aura.duration > 0 then
     CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
+
+    -- sørg for at overlay er over cooldown
     if frame.overlay and frame.cooldown then
       local need = frame.cooldown:GetFrameLevel() + 1
       if frame.overlay:GetFrameLevel() <= need then
         frame.overlay:SetFrameLevel(need)
       end
     end
+
+    -- >>> legg til disse to linjene:
+    frame._cooldownEnd = aura.expirationTime
+    frame.cooldownText:Show()
   else
     CooldownFrame_Clear(frame.cooldown)
+    -- >>> og disse to linjene:
+    frame._cooldownEnd = nil
+    frame.cooldownText:SetText("")
+    frame.cooldownText:Hide()
   end
 
   local stacks = aura and (aura.applications or aura.stackCount or aura.charges)
@@ -724,68 +736,7 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
   frame:Show()
 end
 
-local function ConfigureTrackedBarFrame(frame, entry, config)
-  frame:SetParent(EnsureAttachment("TRACKED_BARS") or UI.anchor)
 
-  frame.snapshotEntry = entry
-  frame.config = config
-
-  local candidates = CollectAuraSpellIDs(entry, frame.buffID)
-  local displaySpellID, displayName, displayIcon = ClassHUD:ResolveTrackedBarDisplay(entry, frame.buffID, candidates)
-
-  frame.auraSpellIDs = candidates
-  frame.displaySpellID = displaySpellID
-  frame.cooldownSpellID = (entry and entry.spellID) or frame.buffID
-
-  local color = CopyColor(config.barColor) or CopyColor(ClassHUD:GetDefaultTrackedBarColor())
-  frame._activeColor = color
-  frame._inactiveColor = frame._inactiveColor or CopyColor(INACTIVE_BAR_COLOR)
-
-  frame:SetStatusBarColor(color.r, color.g, color.b, color.a)
-
-  frame.label:SetFont(ClassHUD:FetchFont(12))
-  frame.timer:SetFont(ClassHUD:FetchFont(12))
-  if frame.stacks then
-    frame.stacks:SetFont(ClassHUD:FetchFont(12))
-    frame.stacks:Hide()
-  end
-
-  frame.defaultLabel = displayName
-  frame.label:SetText(displayName)
-
-  local iconID = displayIcon or (displaySpellID and C_Spell.GetSpellTexture(displaySpellID))
-  if not iconID then
-    iconID = entry and entry.iconID
-  end
-  if not iconID and frame.buffID then
-    iconID = C_Spell.GetSpellTexture(frame.buffID)
-  end
-
-  local height = ClassHUD.db.profile.trackedBuffBar.height or 16
-
-  if config.barShowIcon ~= false then
-    frame.icon:SetTexture(iconID or 134400)
-    frame.icon:SetSize(height, height)
-    frame.icon:Show()
-    frame.icon:ClearAllPoints()
-    frame.icon:SetPoint("LEFT", frame, "LEFT", 0, 0)
-    frame.label:ClearAllPoints()
-    frame.label:SetPoint("LEFT", frame.icon, "RIGHT", 4, 0)
-  else
-    frame.icon:Hide()
-    frame.label:ClearAllPoints()
-    frame.label:SetPoint("LEFT", frame, "LEFT", 4, 0)
-  end
-
-  frame._showTimer = config.barShowTimer ~= false
-  if not frame._showTimer and frame.timer then
-    frame.timer:Hide()
-  end
-  if frame.timer then
-    frame.timer:ClearAllPoints()
-    frame.timer:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -2)
-  end
-end
 
 local function UpdateTrackedBarFrame(frame)
   local buffID = frame.buffID
@@ -866,6 +817,7 @@ local function UpdateTrackedBarFrame(frame)
 end
 
 function ClassHUD:BuildTrackedBuffFrames()
+  -- Skjul gamle frames
   if self.trackedBuffFrames then
     for _, frame in ipairs(self.trackedBuffFrames) do
       frame:Hide()
@@ -881,6 +833,7 @@ function ClassHUD:BuildTrackedBuffFrames()
   wipe(self.trackedBuffFrames)
   wipe(self.trackedBarFrames)
 
+  -- Sørg for containere
   EnsureAttachment("TRACKED_ICONS")
   EnsureAttachment("TRACKED_BARS")
 
@@ -927,9 +880,9 @@ function ClassHUD:BuildTrackedBuffFrames()
       table.insert(ordered, {
         buffID = buffID,
         config = config,
-        entry = entry,
-        order = order,
-        name = name,
+        entry  = entry,
+        order  = order,
+        name   = name,
       })
     end
   end
@@ -942,31 +895,35 @@ function ClassHUD:BuildTrackedBuffFrames()
   end)
 
   local iconFrames = {}
-  local barFrames = {}
+  local barFrames  = {}
 
   for _, info in ipairs(ordered) do
-    local buffID = info.buffID
-    local config = info.config
-    local entry = info.entry
+    local buffID         = info.buffID
+    local entry          = info.entry
     local auraCandidates = CollectAuraSpellIDs(entry, buffID)
+    local aura           = FindAuraFromCandidates(auraCandidates)
 
-    if config.showIcon then
-      local aura = FindAuraFromCandidates(auraCandidates)
-      if aura then
-        local iconFrame = CreateBuffFrame(buffID)
-        PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
-        table.insert(iconFrames, iconFrame)
-      end
+    local iconFrame      = CreateBuffFrame(buffID)
+    PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
+
+    if aura then
+      iconFrame:Show()
+    else
+      iconFrame:Hide()
     end
+
+    table.insert(iconFrames, iconFrame)
   end
 
   self.trackedBuffFrames = iconFrames
-  self.trackedBarFrames = barFrames
-  local settings = self.db.profile.trackedBuffBar or {}
-  local yOffset = settings.yOffset or 0
+  self.trackedBarFrames  = barFrames
 
-  local barTopPadding = (#barFrames > 0) and yOffset or 0
-  local iconTopPadding = (#barFrames == 0 and #iconFrames > 0) and yOffset or 0
+  local settings         = self.db.profile.trackedBuffBar or {}
+  local yOffset          = settings.yOffset or 0
+
+  local barTopPadding    = (#barFrames > 0) and yOffset or 0
+  local iconTopPadding   = (#barFrames == 0 and #iconFrames > 0) and yOffset or 0
+
   LayoutTrackedBars(barFrames, { topPadding = barTopPadding })
   LayoutTrackedIcons(iconFrames, { topPadding = iconTopPadding })
 
@@ -1009,6 +966,35 @@ local function UpdateSpellFrame(frame)
   local chargesShown, gcdActive = UpdateCooldown(frame, sid, false)
 
   UpdateAuraOverlay(frame, aura, chargesShown)
+
+  -- Gråing logikk: kombiner cooldown-status og usability-status
+  do
+    local desaturate = false
+
+    -- 1. Fra cooldown/charges (UpdateCooldown returnerer allerede shouldDesaturate, men vi kan beregne her også)
+    local charges = C_Spell.GetSpellCharges(sid)
+    if charges and charges.maxCharges and charges.maxCharges > 0 then
+      if (charges.currentCharges or 0) <= 0 then
+        desaturate = true
+      end
+    else
+      local cd = C_Spell.GetSpellCooldown(sid)
+      if cd and cd.startTime and cd.duration and cd.duration > 1.5 then
+        desaturate = true
+      end
+    end
+
+    -- 2. Fra usability (condition spells)
+    local usable, noMana = C_Spell.IsSpellUsable(sid)
+    if not usable and not noMana then
+      desaturate = true
+    end
+
+    -- Apply combined result
+    frame.icon:SetDesaturated(desaturate)
+  end
+
+
 
   -- Glow
   UpdateGlow(frame, aura, sid, data)
@@ -1106,6 +1092,12 @@ function ClassHUD:BuildFramesForSpec()
   self.db.profile.utilityPlacement[class][specID] = self.db.profile.utilityPlacement[class][specID] or {}
 
   local placements = self.db.profile.utilityPlacement[class][specID]
+  local order = self.db.profile.barOrder or {}
+  if order[1] ~= "TOP" then
+    self.db.profile.topBar.grow = "DOWN"
+  else
+    self.db.profile.topBar.grow = "UP"
+  end
 
 
   local topFrames, bottomFrames = {}, {}
@@ -1149,6 +1141,24 @@ function ClassHUD:BuildFramesForSpec()
       placeSpell(spellID, placement)
     end
   end
+
+  -- Auto-grow for Top-bar basert på plassering
+  do
+    local order = self.db.profile.barOrder or {}
+    local topIndex
+    for i, key in ipairs(order) do
+      if key == "TOP" then
+        topIndex = i
+        break
+      end
+    end
+    if topIndex and topIndex > 1 then
+      self.db.profile.topBar.grow = "DOWN"
+    else
+      self.db.profile.topBar.grow = "UP"
+    end
+  end
+
 
   LayoutTopBar(topFrames)
   LayoutBottomBar(bottomFrames)
