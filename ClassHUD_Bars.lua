@@ -3,21 +3,44 @@
 local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local UI = ClassHUD.UI
 
-local DEFAULT_BAR_ORDER = { "cast", "health", "resource", "class" }
+local DEFAULT_BAR_ORDER = { "top", "cast", "health", "resource", "class", "bottom" }
 
 local ORDER_KEY_MAP = {
-  cast     = "cast",
-  CAST     = "cast",
-  health   = "health",
-  HEALTH   = "health",
-  hp       = "health",
-  HP       = "health",
-  resource = "resource",
-  RESOURCE = "resource",
-  power    = "class",
-  POWER    = "class",
-  class    = "class",
-  CLASS    = "class",
+  cast        = "cast",
+  CAST        = "cast",
+  health      = "health",
+  HEALTH      = "health",
+  hp          = "health",
+  HP          = "health",
+  resource    = "resource",
+  RESOURCE    = "resource",
+  power       = "class",
+  POWER       = "class",
+  class       = "class",
+  CLASS       = "class",
+  top         = "top",
+  TOP         = "top",
+  topbar      = "top",
+  TOPBAR      = "top",
+  ["top-bar"]    = "top",
+  ["TOP_BAR"]    = "top",
+  bottom      = "bottom",
+  BOTTOM      = "bottom",
+  bottombar   = "bottom",
+  BOTTOMBAR   = "bottom",
+  ["bottom-bar"] = "bottom",
+  ["BOTTOM_BAR"] = "bottom",
+}
+
+local ZERO_PADDING = { left = 0, right = 0, top = 0, bottom = 0 }
+
+local RESOURCE_BACKDROP = {
+  bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+  edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+  tile     = true,
+  tileSize = 16,
+  edgeSize = 8,
+  insets   = { left = 2, right = 2, top = 2, bottom = 2 },
 }
 
 local HEIGHT_KEY_MAP = {
@@ -96,7 +119,11 @@ function ClassHUD:SanitizeBarProfile()
 
   for _, key in ipairs(DEFAULT_BAR_ORDER) do
     if not contains(normalized, key) then
-      table.insert(normalized, key)
+      if key == "top" then
+        table.insert(normalized, 1, key)
+      else
+        table.insert(normalized, key)
+      end
     end
   end
 
@@ -154,32 +181,40 @@ local function ensureBarContainer(key)
     container:SetParent(UI.anchor)
   end
   if not container then
-    container = CreateFrame("Frame", "ClassHUDBarContainer_" .. key, UI.anchor)
+    container = CreateFrame("Frame", "ClassHUDBarContainer_" .. key, UI.anchor, "BackdropTemplate")
     container:SetClipsChildren(false)
     container._height = 0
     container._afterGap = 0
+    container._padding = { left = 0, right = 0, top = 0, bottom = 0 }
     ClassHUD.barContainers[key] = container
+  elseif not container._padding then
+    container._padding = { left = 0, right = 0, top = 0, bottom = 0 }
   end
   return container
 end
 
-local function positionCastBar(addon, bar, height, width)
+local function positionCastBar(addon, bar, height)
   if not bar then return end
   local container = bar._container
   local spacing = addon.db and addon.db.profile and addon.db.profile.spacing or 0
-  local iconSize = height
-  if iconSize < 1 then iconSize = height end
+  local pad = container and container._padding or ZERO_PADDING
+  local leftPad = pad.left or 0
+  local rightPad = pad.right or 0
+  local topPad = pad.top or 0
+  local bottomPad = pad.bottom or 0
+  local iconSize = math.max(1, height - topPad - bottomPad)
 
   if bar.icon then
     bar.icon:ClearAllPoints()
-    bar.icon:SetSize(iconSize, iconSize)
-    bar.icon:SetPoint("LEFT", container, "LEFT", 0, 0)
+    bar.icon:SetPoint("TOPLEFT", container, "TOPLEFT", leftPad, -topPad)
+    bar.icon:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", leftPad, bottomPad)
+    bar.icon:SetWidth(iconSize)
     bar.icon:Show()
   end
 
   bar:ClearAllPoints()
-  bar:SetPoint("TOPLEFT", container, "TOPLEFT", iconSize + spacing, 0)
-  bar:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
+  bar:SetPoint("TOPLEFT", container, "TOPLEFT", leftPad + iconSize + spacing, -topPad)
+  bar:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", -rightPad, bottomPad)
 
   if bar.bg then
     bar.bg:ClearAllPoints()
@@ -189,7 +224,7 @@ local function positionCastBar(addon, bar, height, width)
 
   if bar.spell then
     bar.spell:ClearAllPoints()
-    bar.spell:SetPoint("LEFT", container, "LEFT", iconSize + spacing + 4, 0)
+    bar.spell:SetPoint("LEFT", container, "LEFT", leftPad + iconSize + spacing + 4, 0)
     if bar.time then
       bar.spell:SetPoint("RIGHT", bar.time, "LEFT", -4, 0)
     else
@@ -203,6 +238,19 @@ local function positionCastBar(addon, bar, height, width)
   end
 end
 
+local function anchorBarToContainer(bar, container)
+  if not (bar and container) then return end
+  local pad = container._padding or ZERO_PADDING
+  local left = pad.left or 0
+  local right = pad.right or 0
+  local top = pad.top or 0
+  local bottom = pad.bottom or 0
+
+  bar:ClearAllPoints()
+  bar:SetPoint("TOPLEFT", container, "TOPLEFT", left, -top)
+  bar:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", -right, bottom)
+end
+
 function ClassHUD:EnsureBars()
   self:SanitizeBarProfile()
   local anchor = self:CreateAnchor()
@@ -210,89 +258,106 @@ function ClassHUD:EnsureBars()
 
   self.bars = self.bars or {}
 
-  -- Cast bar
-  if not self.bars.cast then
+  -- Cast bar -------------------------------------------------------------
+  do
     local container = ensureBarContainer("cast")
     container:SetParent(anchor)
     container:SetWidth(width)
 
-    local bar = CreateFrame("StatusBar", "ClassHUDCastBar", container, "BackdropTemplate")
-    bar:SetMinMaxValues(0, 1)
-    bar:SetValue(0)
-    bar:SetStatusBarTexture(self:FetchStatusbar())
-    bar.bg = bar:CreateTexture(nil, "BACKGROUND")
-    bar.bg:SetColorTexture(0, 0, 0, 0.6)
-    bar.spell = bar:CreateFontString(nil, "OVERLAY")
-    bar.spell:SetJustifyH("LEFT")
-    bar.spell:SetTextColor(1, 1, 1)
-    bar.time = bar:CreateFontString(nil, "OVERLAY")
-    bar.time:SetJustifyH("RIGHT")
-    bar.time:SetTextColor(1, 1, 1)
-    bar.icon = container:CreateTexture(nil, "ARTWORK")
-    bar.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    bar:SetAlpha(0)
+    if not self.bars.cast then
+      local bar = CreateFrame("StatusBar", "ClassHUDCastBar", container, "BackdropTemplate")
+      bar:SetMinMaxValues(0, 1)
+      bar:SetValue(0)
+      bar:SetStatusBarTexture(self:FetchStatusbar())
+      bar.bg = bar:CreateTexture(nil, "BACKGROUND")
+      bar.bg:SetColorTexture(0, 0, 0, 0.6)
+      bar.spell = bar:CreateFontString(nil, "OVERLAY")
+      bar.spell:SetJustifyH("LEFT")
+      bar.spell:SetTextColor(1, 1, 1)
+      bar.time = bar:CreateFontString(nil, "OVERLAY")
+      bar.time:SetJustifyH("RIGHT")
+      bar.time:SetTextColor(1, 1, 1)
+      bar.icon = container:CreateTexture(nil, "ARTWORK")
+      bar.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+      bar:SetAlpha(0)
 
-    bar._container = container
-    self.bars.cast = bar
-    UI.cast = bar
+      bar._container = container
+      self.bars.cast = bar
+      UI.cast = bar
+    end
   end
 
-  -- Health bar
-  if not self.bars.health then
+  -- Health bar -----------------------------------------------------------
+  do
     local container = ensureBarContainer("health")
     container:SetParent(anchor)
     container:SetWidth(width)
 
-    local bar = CreateFrame("StatusBar", "ClassHUDHealthBar", container, "BackdropTemplate")
-    bar:SetMinMaxValues(0, 1)
-    bar:SetValue(0)
-    bar:SetStatusBarTexture(self:FetchStatusbar())
-    bar.bg = bar:CreateTexture(nil, "BACKGROUND")
-    bar.bg:SetColorTexture(0, 0, 0, 0.55)
-    bar.value = bar:CreateFontString(nil, "OVERLAY")
-    bar.value:SetJustifyH("CENTER")
-    bar.value:SetPoint("CENTER")
+    if not self.bars.health then
+      local bar = CreateFrame("StatusBar", "ClassHUDHealthBar", container, "BackdropTemplate")
+      bar:SetMinMaxValues(0, 1)
+      bar:SetValue(0)
+      bar:SetStatusBarTexture(self:FetchStatusbar())
+      bar.bg = bar:CreateTexture(nil, "BACKGROUND")
+      bar.bg:SetColorTexture(0, 0, 0, 0.55)
+      bar.value = bar:CreateFontString(nil, "OVERLAY")
+      bar.value:SetJustifyH("CENTER")
+      bar.value:SetPoint("CENTER")
 
-    bar._container = container
-    self.bars.health = bar
-    UI.hp = bar
+      bar._container = container
+      self.bars.health = bar
+      UI.hp = bar
+    end
   end
 
-  -- Primary resource bar
-  if not self.bars.resource then
+  -- Primary resource bar -------------------------------------------------
+  do
     local container = ensureBarContainer("resource")
     container:SetParent(anchor)
     container:SetWidth(width)
+    local insets = RESOURCE_BACKDROP.insets
+    container._padding = container._padding or {}
+    container._padding.left = insets.left
+    container._padding.right = insets.right
+    container._padding.top = insets.top
+    container._padding.bottom = insets.bottom
+    if container.SetBackdrop then
+      container:SetBackdrop(RESOURCE_BACKDROP)
+    end
 
-    local bar = CreateFrame("StatusBar", "ClassHUDResourceBar", container, "BackdropTemplate")
-    bar:SetMinMaxValues(0, 1)
-    bar:SetValue(0)
-    bar:SetStatusBarTexture(self:FetchStatusbar())
-    bar.bg = bar:CreateTexture(nil, "BACKGROUND")
-    bar.bg:SetColorTexture(0, 0, 0, 0.55)
-    bar.value = bar:CreateFontString(nil, "OVERLAY")
-    bar.value:SetJustifyH("CENTER")
-    bar.value:SetPoint("CENTER")
+    if not self.bars.resource then
+      local bar = CreateFrame("StatusBar", "ClassHUDResourceBar", container, "BackdropTemplate")
+      bar:SetMinMaxValues(0, 1)
+      bar:SetValue(0)
+      bar:SetStatusBarTexture(self:FetchStatusbar())
+      bar.bg = bar:CreateTexture(nil, "BACKGROUND")
+      bar.bg:SetColorTexture(0, 0, 0, 0.55)
+      bar.value = bar:CreateFontString(nil, "OVERLAY")
+      bar.value:SetJustifyH("CENTER")
+      bar.value:SetPoint("CENTER")
 
-    bar._container = container
-    self.bars.resource = bar
-    UI.resource = bar
+      bar._container = container
+      self.bars.resource = bar
+      UI.resource = bar
+    end
   end
 
-  -- Class resource bar container
-  if not self.bars.class then
+  -- Class resource bar container ----------------------------------------
+  do
     local container = ensureBarContainer("class")
     container:SetParent(anchor)
     container:SetWidth(width)
 
-    local frame = CreateFrame("Frame", "ClassHUDClassBar", container, "BackdropTemplate")
-    frame:SetClipsChildren(true)
-    frame.segments = frame.segments or {}
-    frame.cooldowns = frame.cooldowns or {}
+    if not self.bars.class then
+      local frame = CreateFrame("Frame", "ClassHUDClassBar", container, "BackdropTemplate")
+      frame:SetClipsChildren(true)
+      frame.segments = frame.segments or {}
+      frame.cooldowns = frame.cooldowns or {}
 
-    frame._container = container
-    self.bars.class = frame
-    UI.power = frame
+      frame._container = container
+      self.bars.class = frame
+      UI.power = frame
+    end
   end
 
   self:ApplyBarSkins()
@@ -325,23 +390,30 @@ function ClassHUD:ApplyBarSkins()
     resource:SetStatusBarTexture(texture)
     if resource.bg then resource.bg:SetColorTexture(0, 0, 0, 0.55) end
     applyFont(self, resource.value, textSizeFromHeight(getBarHeight(profile, "resource")))
+    local container = resource._container
+    if container and container.SetBackdrop then
+      container:SetBackdrop(RESOURCE_BACKDROP)
+      local border = profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+      container:SetBackdropBorderColor(border.r or 0, border.g or 0, border.b or 0, border.a or 1)
+      container:SetBackdropColor(0, 0, 0, 0.7)
+    end
   end
 end
 
-local function addEntry(entries, frame, height, gap)
+local function addEntry(entries, frame, key, height, gap)
   if not frame then return end
   height = height or frame._height or frame:GetHeight() or 0
   if height <= 0 then
     return
   end
-  table.insert(entries, { frame = frame, height = height, gap = gap })
+  table.insert(entries, { key = key, frame = frame, height = height, gap = gap })
 end
 
-function ClassHUD:LayoutBars()
+function ClassHUD:LayoutBars(order)
   if not (self.bars and self.db and self.db.profile) then return {} end
 
   local entries = {}
-  local order = self:GetBarOrder()
+  order = order or self:GetBarOrder()
   local profile = self.db.profile
   local width = profile.width or 250
   local spacing = profile.spacing or 0
@@ -363,19 +435,13 @@ function ClassHUD:LayoutBars()
         container:Show()
 
         if key == "cast" then
-          positionCastBar(self, bar, height, width)
-          bar:Show()
-        elseif key == "class" then
-          bar:ClearAllPoints()
-          bar:SetAllPoints(container)
-          bar:Show()
+          positionCastBar(self, bar, height)
         else
-          bar:ClearAllPoints()
-          bar:SetAllPoints(container)
-          bar:Show()
+          anchorBarToContainer(bar, container)
         end
+        bar:Show()
 
-        addEntry(entries, container, height, spacing)
+        addEntry(entries, container, key, height, spacing)
       else
         container._height = 0
         container:SetHeight(0)
@@ -427,32 +493,63 @@ function ClassHUD:Layout()
 
   UI.attachments = UI.attachments or {}
 
-  local entries = {}
-
-  local function queueAttachment(name)
-    local frame = UI.attachments[name]
-    if not frame then return end
-    frame:SetParent(anchor)
-    frame:SetWidth(width)
-    local height = frame._height or frame:GetHeight() or 0
-    if height > 0 then
-      table.insert(entries, { frame = frame, height = height, gap = frame._afterGap })
+  local order = self:GetBarOrder()
+  local barEntries = self:LayoutBars(order)
+  local entriesByKey = {}
+  for _, entry in ipairs(barEntries) do
+    if entry.key then
+      entriesByKey[entry.key] = entry
     end
   end
 
-  queueAttachment("TRACKED_ICONS")
-  queueAttachment("TRACKED_BARS")
-  queueAttachment("TOP")
+  local entries = {}
 
-  for _, entry in ipairs(self:LayoutBars()) do
+  local function appendEntry(entry)
+    if not entry then return end
+    local frame = entry.frame
+    if not frame then return end
+    frame:SetParent(anchor)
+    frame:SetWidth(width)
+    entry.height = entry.height or frame._height or frame:GetHeight() or 0
     table.insert(entries, entry)
   end
 
-  queueAttachment("BOTTOM")
+  local function buildAttachmentEntry(name)
+    local frame = UI.attachments[name]
+    if not frame then return nil end
+    frame:SetParent(anchor)
+    frame:SetWidth(width)
+    local height = frame._height or frame:GetHeight() or 0
+    if height <= 0 then
+      frame:SetHeight(height)
+      frame:Hide()
+      return nil
+    end
+    local gap = frame._afterGap
+    if gap == nil then gap = spacing end
+    return { key = name, frame = frame, height = height, gap = gap }
+  end
+
+  appendEntry(buildAttachmentEntry("TRACKED_ICONS"))
+  appendEntry(buildAttachmentEntry("TRACKED_BARS"))
+
+  for _, key in ipairs(order) do
+    if key == "top" then
+      appendEntry(buildAttachmentEntry("TOP"))
+    elseif key == "bottom" then
+      appendEntry(buildAttachmentEntry("BOTTOM"))
+    else
+      local entry = entriesByKey[key]
+      appendEntry(entry)
+      entriesByKey[key] = nil
+    end
+  end
 
   local offset = 0
   for index, entry in ipairs(entries) do
-    local frame, height = entry.frame, entry.height
+    local frame = entry.frame
+    local height = entry.height or frame._height or frame:GetHeight() or 0
+    if height < 0 then height = 0 end
     local gap = entry.gap
     if gap == nil then gap = spacing end
 

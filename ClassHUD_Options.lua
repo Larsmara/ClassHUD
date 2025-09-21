@@ -565,14 +565,16 @@ local function BuildBarOrderEditor(addon, container)
   for k in pairs(container) do container[k] = nil end
 
   local db = addon.db
-  local order = addon.GetBarOrder and addon:GetBarOrder() or { "cast", "health", "resource", "class" }
+  local order = addon.GetBarOrder and addon:GetBarOrder() or { "top", "cast", "health", "resource", "class", "bottom" }
   db.profile.barOrder = { unpack(order) }
 
   local LABELS = {
-    cast    = "Cast Bar",
-    health  = "Health Bar",
+    top      = "Top Bar",
+    cast     = "Cast Bar",
+    health   = "Health Bar",
     resource = "Primary Resource",
-    class   = "Class Resource",
+    class    = "Class Resource",
+    bottom   = "Bottom Bar",
   }
 
   for index, key in ipairs(db.profile.barOrder) do

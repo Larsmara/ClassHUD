@@ -96,7 +96,7 @@ local defaults = {
       bar  = "Blizzard",
       font = "Friz Quadrata TT",
     },
-    barOrder         = { "cast", "health", "resource", "class" },
+    barOrder         = { "top", "cast", "health", "resource", "class", "bottom" },
     show             = {
       cast     = true,
       hp       = true,
