@@ -165,6 +165,14 @@ local function UpdateGlow(frame, aura, sid, data)
   -- 1) Samme semantikk som original: aura tilstede → glow
   local shouldGlow = (aura ~= nil)
 
+  if aura and aura.isHarmful then
+    if frame.isGlowing then
+      ActionButtonSpellAlertManager:HideAlert(frame)
+      frame.isGlowing = false
+    end
+    return
+  end
+
   -- 2) Manuelle buffLinks kan holde glow (som originalt "keepGlow")
   if not shouldGlow then
     local class, specID = ClassHUD:GetPlayerClassSpec()
@@ -962,16 +970,19 @@ local function UpdateSpellFrame(frame)
   auraID = auraID or sid
 
   local aura = ClassHUD:GetAuraForSpell(auraID)
+  if not aura then
+    aura = ClassHUD:FindAuraByName(sid, { "target", "focus" })
+  end
+
   -- Cooldown & charges
   local chargesShown, gcdActive = UpdateCooldown(frame, sid, false)
 
   UpdateAuraOverlay(frame, aura, chargesShown)
 
-  -- Gråing logikk: kombiner cooldown-status og usability-status
   do
     local desaturate = false
 
-    -- 1. Fra cooldown/charges (UpdateCooldown returnerer allerede shouldDesaturate, men vi kan beregne her også)
+    -- 1) Charges/cooldown
     local charges = C_Spell.GetSpellCharges(sid)
     if charges and charges.maxCharges and charges.maxCharges > 0 then
       if (charges.currentCharges or 0) <= 0 then
@@ -984,13 +995,17 @@ local function UpdateSpellFrame(frame)
       end
     end
 
-    -- 2. Fra usability (condition spells)
+    -- 2) Usability (kan mangle mange andre betingelser)
     local usable, noMana = C_Spell.IsSpellUsable(sid)
     if not usable and not noMana then
       desaturate = true
     end
 
-    -- Apply combined result
+    -- 3) Eksplicit ressurs-sjekk (fanger f.eks. Astral Power for Starsurge/Starfall)
+    if ClassHUD:LacksResources(sid) then
+      desaturate = true
+    end
+
     frame.icon:SetDesaturated(desaturate)
   end
 

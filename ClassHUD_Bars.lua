@@ -17,17 +17,32 @@ function ClassHUD:CreateCastBar()
   local b = self:CreateStatusBar(UI.anchor, h, false) -- castbar starter uten border
 
   b:Hide()
-  b._holder:Hide() -- 👈 skjul holder også
+  b._holder:Hide()
   b.bg:Hide()
 
-  b.icon = b:CreateTexture(nil, "ARTWORK")
+  local holder = b._holder
+  local edge   = b._edge or 1
+  local pad    = 4
+
+  -- IKON PÅ HOLDER (fast lomme til venstre)
+  b.icon       = holder:CreateTexture(nil, "ARTWORK")
   b.icon:SetSize(h, h)
-  b.icon:SetPoint("LEFT", b, "LEFT", 0, 0)
+  b.icon:SetPoint("LEFT", holder, "LEFT", 0, 0)
   b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
+  -- SELVE STATUSBAREN STARTER ETTER IKON + PADDING
+  b:ClearAllPoints()
+  b:SetPoint("TOPLEFT", holder, "TOPLEFT", edge + h + pad, -edge)
+  b:SetPoint("BOTTOMRIGHT", holder, "BOTTOMRIGHT", -edge, edge)
+
+  -- Bakgrunn følger baren (dekker ikke ikon-lommen)
+  b.bg:ClearAllPoints()
+  b.bg:SetAllPoints(b)
+
+  -- Tekster på selve baren
   b.spell = b:CreateFontString(nil, "OVERLAY")
   b.spell:SetFont(self:FetchFont(12))
-  b.spell:SetPoint("LEFT", b.icon, "RIGHT", 4, 0)
+  b.spell:SetPoint("LEFT", b, "LEFT", 4, 0)
 
   b.time = b:CreateFontString(nil, "OVERLAY")
   b.time:SetFont(self:FetchFont(12))
@@ -35,6 +50,80 @@ function ClassHUD:CreateCastBar()
 
   UI.cast = b
 end
+
+-- Lettvekts OnUpdate som støtter både cast og channel
+-- Lett og throttle'a OnUpdate for cast/channel
+local function CastOnUpdate(self, elapsed)
+  local isChan = self._isChannel or false
+  local dur    = self._duration or 0
+  if dur <= 0 then
+    self:SetScript("OnUpdate", nil)
+    self:Hide()
+    return
+  end
+
+  -- Oppdater tidsakkumulatorer
+  if isChan then
+    self._remaining = (self._remaining or dur) - elapsed
+    if self._remaining <= 0 then
+      self:SetScript("OnUpdate", nil)
+      self:Hide()
+      return
+    end
+  else
+    self._t = (self._t or 0) + elapsed
+    if self._t >= dur then
+      self:SetScript("OnUpdate", nil)
+      self:Hide()
+      return
+    end
+  end
+
+  -- Throttle: barverdi (60 Hz)
+  self._accum = (self._accum or 0) + elapsed
+  local barTick = self._barTick or (1 / 60)
+  if self._accum >= barTick then
+    self._accum = 0
+    if isChan then
+      -- teller ned (verdi = gjenstående)
+      local v = self._remaining
+      if v ~= self._lastBarValue then
+        self:SetValue(v)
+        self._lastBarValue = v
+      end
+    else
+      -- teller opp (verdi = brukt tid)
+      local v = self._t
+      if v ~= self._lastBarValue then
+        self:SetValue(v)
+        self._lastBarValue = v
+      end
+    end
+  end
+
+  -- Throttle: tekst (10 Hz)
+  self._textAccum = (self._textAccum or 0) + elapsed
+  local txtTick = self._txtTick or 0.10
+  if self._textAccum >= txtTick then
+    self._textAccum = 0
+    local remaining = isChan and (self._remaining or 0) or (dur - (self._t or 0))
+    if remaining < 0 then remaining = 0 end
+
+    -- Kompakt format uten unødige string-builds
+    local shown
+    if remaining >= 10 then
+      shown = tostring(math.floor(remaining + 0.5))
+    else
+      shown = string.format("%.1f", math.floor(remaining * 10 + 0.5) / 10)
+    end
+
+    if shown ~= self._lastText then
+      self.time:SetText(shown)
+      self._lastText = shown
+    end
+  end
+end
+
 
 function ClassHUD:CreateHPBar()
   local b = self:CreateStatusBar(UI.anchor, self.db.profile.height.hp, true) -- 👈 withBorder = true
@@ -121,28 +210,37 @@ function ClassHUD:Layout()
   }
 
   -- Helper for statusbars
+  -- Helper for statusbars: ankrer og størrelsesetter HOLDER hvis den finnes
   local function layoutStatusBar(frame, containerName, enabled, height)
     local container = containers[containerName]
     if not container then return end
+
+    -- Viktig: bruk holder hvis den finnes (for å beholde ikon-lommen)
+    local anchorFrame = frame and (frame._holder or frame)
 
     local h = (enabled and height) or 0
     container._height = h
     container:SetHeight(math.max(h, 1))
 
-    if frame then
-      frame:SetParent(container)
-      frame:ClearAllPoints()
-      frame:SetWidth(w)
-      frame:SetHeight(h)
-      if enabled and h > 0 then
-        frame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
-        frame:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
-        frame:Show()
-      else
-        frame:Hide()
-      end
+    if not frame then return end
+
+    -- Forankre og størrelse HOLDEREN (ikke selve statusbaren)
+    anchorFrame:SetParent(container)
+    anchorFrame:ClearAllPoints()
+    anchorFrame:SetWidth(w)
+    anchorFrame:SetHeight(h)
+
+    if enabled and h > 0 then
+      anchorFrame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, 0)
+      anchorFrame:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, 0)
+      anchorFrame:Show()
+      frame:Show() -- selve baren vises når aktiv, men det er OK å la den være synlig her
+    else
+      frame:Hide()
+      anchorFrame:Hide()
     end
   end
+
 
   -- Bygg standard bars
   layoutStatusBar(UI.cast, "CAST", db.show.cast, db.height.cast)
@@ -249,66 +347,85 @@ end
 
 -- Updates
 function ClassHUD:StopCast()
-  local casting = UnitCastingInfo("player")
-  local channeling = UnitChannelInfo("player")
-  if casting or channeling then return end
+  if UnitCastingInfo("player") or UnitChannelInfo("player") then return end
+  if not UI.cast then return end
 
-  if UI.cast then
-    local holder = UI.cast._holder
-    holder:SetBackdrop(nil) -- 👈 fjern backdrop
-    holder:Hide()           -- skjul helt
-    UI.cast:Hide()          -- skjul bar
-    UI.cast.bg:Hide()
+  UI.cast:SetScript("OnUpdate", nil)
 
-    UI.cast:SetScript("OnUpdate", nil)
-    UI.cast:SetValue(0)
-    UI.cast.time:SetText("")
-    UI.cast.spell:SetText("")
-    UI.cast.icon:SetTexture(nil)
+  UI.cast._duration, UI.cast._isChannel = nil, nil
+  UI.cast._t, UI.cast._remaining = nil, nil
+  UI.cast._accum, UI.cast._textAccum = nil, nil
+  UI.cast._lastText, UI.cast._lastBarValue = nil, nil
+
+  UI.cast:SetMinMaxValues(0, 1)
+  UI.cast:SetValue(0)
+  UI.cast.time:SetText("")
+  UI.cast.spell:SetText("")
+  UI.cast.icon:SetTexture(nil)
+
+  if UI.cast._holder then
+    UI.cast._holder:SetBackdrop(nil)
+    UI.cast._holder:Hide()
   end
+  UI.cast.bg:Hide()
+  UI.cast:Hide()
 end
 
 function ClassHUD:StartCast(name, icon, startMS, endMS, isChannel)
-  if not self.db.profile.show.cast then return end
-  -- Aktiver border på holder
-  local edge   = UI.cast._edge or 1
-  local holder = UI.cast._holder
+  if not self.db.profile.show.cast or not UI.cast then return end
 
+  local holder = UI.cast._holder
+  local edge   = UI.cast._edge or 1
+
+  local start  = (startMS or 0) / 1000
+  local finish = (endMS or 0) / 1000
+  if finish <= start then finish = start + 0.10 end
+  local duration = finish - start
+
+  -- Vis + border/plate
   UI.cast:Show()
   holder:Show()
   UI.cast.bg:Show()
-
-  -- sett border dynamisk
   holder:SetBackdrop({
-    bgFile   = "Interface\\Buttons\\WHITE8x8", -- 👈 nå med bakgrunn
+    bgFile   = "Interface\\Buttons\\WHITE8x8",
     edgeFile = "Interface\\Buttons\\WHITE8x8",
     edgeSize = edge,
     insets   = { left = 1, right = 1, top = 1, bottom = 1 },
   })
   local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
   holder:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
-  holder:SetBackdropColor(0, 0, 0, 0.4) -- 👈 mørk bakplate (juster alpha som du liker)
+  holder:SetBackdropColor(0, 0, 0, 0.40)
 
-  local total = (endMS - startMS) / 1000
-  local start = startMS / 1000
-
-  UI.cast:Show()
+  -- Tekst/ikon
   UI.cast.spell:SetText(name or "")
-  UI.cast.icon:SetTexture(icon or 136243) -- generic
-  UI.cast:SetStatusBarColor(isChannel and 0.3 or 1, isChannel and 0.7 or .7, isChannel and 1 or 0)
+  UI.cast.icon:SetTexture(icon or 136243)
 
-  UI.cast:SetScript("OnUpdate", function(selfBar)
-    local now = GetTime()
-    local elapsed = now - start
-    selfBar:SetMinMaxValues(0, total)
-    selfBar:SetValue(elapsed)
-    selfBar.time:SetFormattedText("%.1f / %.1f", math.max(0, elapsed), total)
+  -- Sett statiske grenser én gang
+  UI.cast:SetMinMaxValues(0, duration)
 
-    if elapsed >= total then
-      selfBar:SetScript("OnUpdate", nil)
-      selfBar:Hide()
-    end
-  end)
+  -- Init interne felter (brukes av OnUpdate)
+  UI.cast._duration     = duration
+  UI.cast._isChannel    = isChannel and true or false
+  UI.cast._t            = 0
+  UI.cast._remaining    = duration
+  UI.cast._accum        = 0
+  UI.cast._textAccum    = 0
+  UI.cast._lastText     = nil
+  UI.cast._lastBarValue = nil
+
+  -- Farge + startverdi
+  if UI.cast._isChannel then
+    UI.cast:SetStatusBarColor(0.30, 0.70, 1.00)
+    UI.cast:SetValue(duration) -- start på gjenstående tid
+    UI.cast._lastBarValue = duration
+  else
+    UI.cast:SetStatusBarColor(1.00, 0.70, 0.00)
+    UI.cast:SetValue(0) -- start på 0 (teller opp)
+    UI.cast._lastBarValue = 0
+  end
+
+  -- Lettvektsoppdaterer (bruker elapsed)
+  UI.cast:SetScript("OnUpdate", CastOnUpdate)
 end
 
 -- Cast event methods
@@ -322,14 +439,6 @@ function ClassHUD:UNIT_SPELLCAST_CHANNEL_START(unit)
   if unit ~= "player" then return end
   local name, _, icon, startMS, endMS = UnitChannelInfo("player")
   if name then self:StartCast(name, icon, startMS, endMS, true) end
-end
-
-function ClassHUD:UNIT_SPELLCAST_SUCCEEDED(unit, spellID)
-  if unit ~= "player" then return end
-  local name, _, icon = C_Spell.GetSpellInfo(spellID)
-  if name and not UnitCastingInfo("player") and not UnitChannelInfo("player") then
-    self:StartCast(name, icon, GetTime() * 1000, (GetTime() + 1) * 1000, false)
-  end
 end
 
 function ClassHUD:UNIT_SPELLCAST_STOP(unit) if unit == "player" then self:StopCast() end end
