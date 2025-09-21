@@ -1092,14 +1092,6 @@ function ClassHUD:BuildFramesForSpec()
   self.db.profile.utilityPlacement[class][specID] = self.db.profile.utilityPlacement[class][specID] or {}
 
   local placements = self.db.profile.utilityPlacement[class][specID]
-  local order = self.db.profile.barOrder or {}
-  if order[1] ~= "TOP" then
-    self.db.profile.topBar.grow = "DOWN"
-  else
-    self.db.profile.topBar.grow = "UP"
-  end
-
-
   local topFrames, bottomFrames = {}, {}
   local sideFrames = { LEFT = {}, RIGHT = {} }
 
@@ -1142,22 +1134,7 @@ function ClassHUD:BuildFramesForSpec()
     end
   end
 
-  -- Auto-grow for Top-bar basert på plassering
-  do
-    local order = self.db.profile.barOrder or {}
-    local topIndex
-    for i, key in ipairs(order) do
-      if key == "TOP" then
-        topIndex = i
-        break
-      end
-    end
-    if topIndex and topIndex > 1 then
-      self.db.profile.topBar.grow = "DOWN"
-    else
-      self.db.profile.topBar.grow = "UP"
-    end
-  end
+  -- Auto-grow for Top-bar remains user configurable via options
 
 
   LayoutTopBar(topFrames)

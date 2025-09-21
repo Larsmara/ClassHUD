@@ -565,14 +565,14 @@ local function BuildBarOrderEditor(addon, container)
   for k in pairs(container) do container[k] = nil end
 
   local db = addon.db
-  db.profile.barOrder = db.profile.barOrder or { "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+  local order = addon.GetBarOrder and addon:GetBarOrder() or { "cast", "health", "resource", "class" }
+  db.profile.barOrder = { unpack(order) }
 
   local LABELS = {
-    CAST     = "Cast Bar",
-    HP       = "Health Bar",
-    RESOURCE = "Primary Resource",
-    CLASS    = "Class/Special Power",
-    BOTTOM   = "Bottom Bar",
+    cast    = "Cast Bar",
+    health  = "Health Bar",
+    resource = "Primary Resource",
+    class   = "Class Resource",
   }
 
   for index, key in ipairs(db.profile.barOrder) do
@@ -619,15 +619,31 @@ end
 function ClassHUD_BuildOptions(addon)
   local db = addon.db
 
+  if addon.SanitizeBarProfile then
+    addon:SanitizeBarProfile()
+  end
+
   db.profile.textures = db.profile.textures or { bar = "Blizzard", font = "Friz Quadrata TT" }
   db.profile.show = db.profile.show or { cast = true, hp = true, resource = true, power = true, buffs = true }
-  db.profile.height = db.profile.height or { cast = 18, hp = 14, resource = 14, power = 14 }
+  if db.profile.show.class == nil and db.profile.show.power ~= nil then
+    db.profile.show.class = db.profile.show.power
+  end
+  db.profile.height = db.profile.height or { cast = 18, hp = 14, resource = 14, class = 14 }
+  db.profile.height.class = db.profile.height.class or db.profile.height.power or 14
+  db.profile.height.power = nil
   db.profile.colors = db.profile.colors or {
     hp = { r = 0.10, g = 0.80, b = 0.10 },
     resourceClass = true,
     resource = { r = 0.00, g = 0.55, b = 1.00 },
-    power = { r = 1.00, g = 0.85, b = 0.10 },
+    class = { r = 1.00, g = 0.85, b = 0.10 },
   }
+  if db.profile.colors.class == nil and db.profile.colors.power then
+    db.profile.colors.class = {
+      r = db.profile.colors.power.r,
+      g = db.profile.colors.power.g,
+      b = db.profile.colors.power.b,
+    }
+  end
   db.profile.position = db.profile.position or { x = 0, y = -50 }
   db.profile.position.x = db.profile.position.x or 0
   db.profile.position.y = db.profile.position.y or -50
@@ -817,11 +833,17 @@ function ClassHUD_BuildOptions(addon)
           },
           showPower = {
             type = "toggle",
-            name = "Show Special Power",
+            name = "Show Class Resource",
             order = 4,
-            get = function() return db.profile.show.power end,
+            get = function()
+              if db.profile.show.class ~= nil then
+                return db.profile.show.class
+              end
+              return db.profile.show.power
+            end,
             set = function(_, value)
               db.profile.show.power = value
+              db.profile.show.class = value
               addon:FullUpdate()
             end,
           },
@@ -955,16 +977,16 @@ function ClassHUD_BuildOptions(addon)
               addon:FullUpdate()
             end,
           },
-          heightPower = {
+          heightClass = {
             type = "range",
-            name = "Special Power Height",
+            name = "Class Resource Height",
             order = 11,
             min = 8,
             max = 40,
             step = 1,
-            get = function() return db.profile.height.power end,
+            get = function() return db.profile.height.class end,
             set = function(_, value)
-              db.profile.height.power = value
+              db.profile.height.class = value
               addon:FullUpdate()
             end,
           },
@@ -1192,17 +1214,17 @@ function ClassHUD_BuildOptions(addon)
             end,
             disabled = function() return db.profile.colors.resourceClass end,
           },
-          power = {
+          classColor = {
             type = "color",
-            name = "Special Power",
+            name = "Class Resource",
             order = 4,
             get = function()
-              local c = db.profile.colors.power
+              local c = db.profile.colors.class
               return c.r, c.g, c.b
             end,
             set = function(_, r, g, b)
-              db.profile.colors.power = { r = r, g = g, b = b }
-              addon:UpdateSpecialPower()
+              db.profile.colors.class = { r = r, g = g, b = b }
+              addon:UpdateClassBar()
             end,
           },
         },

@@ -13,10 +13,7 @@ local LSM        = LibStub("LibSharedMedia-3.0")
 ---@field ApplyBarSkins fun(self:ClassHUD)       -- defined in Bars.lua
 ---@field UpdateHP fun(self:ClassHUD)            -- defined in Bars.lua
 ---@field UpdatePrimaryResource fun(self:ClassHUD) -- defined in Bars.lua
----@field UpdateSpecialPower fun(self:ClassHUD)  -- defined in Classbar.lua
----@field UpdateSegmentsAdvanced fun(self:ClassHUD, ptype:number, max:number, partial:boolean)|nil
----@field UpdateEssenceSegments fun(self:ClassHUD, ptype:number)|nil
----@field UpdateRunes fun(self:ClassHUD)|nil
+---@field UpdateClassBar fun(self:ClassHUD)      -- defined in Classbar.lua
 
 local ClassHUD   = AceAddon:NewAddon("ClassHUD", "AceEvent-3.0", "AceConsole-3.0")
 ClassHUD:SetDefaultModuleState(true)
@@ -99,12 +96,13 @@ local defaults = {
       bar  = "Blizzard",
       font = "Friz Quadrata TT",
     },
-    barOrder         = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" },
+    barOrder         = { "cast", "health", "resource", "class" },
     show             = {
       cast     = true,
       hp       = true,
       resource = true, -- primary (mana/rage/energy/etc.)
-      power    = true, -- special (combo/chi/shards/etc.)
+      power    = true, -- legacy key for special resources
+      class    = true, -- special (combo/chi/shards/etc.)
       buffs    = true,
     },
 
@@ -112,7 +110,7 @@ local defaults = {
       cast     = 18,
       hp       = 14,
       resource = 14,
-      power    = 14,
+      class    = 14,
     },
 
     sideBars         = {
@@ -178,7 +176,7 @@ local defaults = {
       hp            = { r = 0.10, g = 0.80, b = 0.10 },
       resourceClass = true,
       resource      = { r = 0.00, g = 0.55, b = 1.00 },
-      power         = { r = 1.00, g = 0.85, b = 0.10 },
+      class         = { r = 1.00, g = 0.85, b = 0.10 },
     },
   }
 }
@@ -249,6 +247,9 @@ end
 function ClassHUD:OnInitialize()
   -- IMPORTANT: Ensure your TOC has "## SavedVariables: ClassHUDDB"
   self.db = AceDB:New("ClassHUDDB", defaults, true)
+  if self.SanitizeBarProfile then
+    self:SanitizeBarProfile()
+  end
 end
 
 -- Called by PLAYER_ENTERING_WORLD or when user changes options
@@ -256,7 +257,7 @@ function ClassHUD:FullUpdate()
   if self.Layout then self:Layout() end
   if self.UpdateHP then self:UpdateHP() end
   if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
-  if self.UpdateSpecialPower then self:UpdateSpecialPower() end
+  if self.UpdateClassBar then self:UpdateClassBar() end
 end
 
 ---Rebuilds the Cooldown Viewer snapshot for the current class/spec.
@@ -460,7 +461,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
     ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if ClassHUD.UpdateClassBar then ClassHUD:UpdateClassBar() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     ClassHUD:RefreshRegisteredOptions()
     ClassHUD:RebuildSpellTree()
@@ -478,24 +479,24 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   if event == "UNIT_POWER_FREQUENT" or event == "UNIT_DISPLAYPOWER" then
     if unit == "player" then
       if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-      if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+      if ClassHUD.UpdateClassBar then ClassHUD:UpdateClassBar() end
     end
     return
   end
 
   if event == "UPDATE_SHAPESHIFT_FORM" then
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if ClassHUD.UpdateClassBar then ClassHUD:UpdateClassBar() end
     return
   end
 
   if event == "UNIT_POWER_POINT_CHARGE" and unit == "player" then
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if ClassHUD.UpdateClassBar then ClassHUD:UpdateClassBar() end
     return
   end
 
   if event == "RUNE_POWER_UPDATE" or event == "RUNE_TYPE_UPDATE" then
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if ClassHUD.UpdateClassBar then ClassHUD:UpdateClassBar() end
     return
   end
 
