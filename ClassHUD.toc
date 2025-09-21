@@ -13,6 +13,7 @@ ClassHUD.lua
 ClassHUD_Utils.lua
 ClassHUD_Bars.lua
 ClassHUD_Classbar.lua
+ClassHUD_Eclipse.lua
 ClassHUD_Spells.lua
 ClassHUD_Options.lua
 ClassHUD_SpellSuggestions.lua

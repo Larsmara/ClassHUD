@@ -388,3 +388,47 @@ function ClassHUD:FindAuraFromCandidates(candidates, units)
 
   return nil
 end
+
+function ClassHUD:FindAuraByName(castSpellID, units)
+  local info = C_Spell.GetSpellInfo(castSpellID)
+  if not info or not info.name then return nil end
+  local spellName = info.name
+
+  units = units or { "target", "focus" }
+  for _, unit in ipairs(units) do
+    local i = 1
+    while true do
+      local aura = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
+      if not aura then break end
+      if aura.name == spellName and aura.sourceUnit == "player" then
+        return aura, aura.spellId, unit
+      end
+      i = i + 1
+    end
+  end
+  return nil
+end
+
+function ClassHUD:LacksResources(spellID)
+  -- Både gamle og nye API-navn støttes
+  local costs = (C_Spell and C_Spell.GetSpellPowerCost and C_Spell.GetSpellPowerCost(spellID))
+      or (GetSpellPowerCost and GetSpellPowerCost(spellID))
+
+  if type(costs) ~= "table" then return false end
+
+  for _, c in ipairs(costs) do
+    -- Feltnavn varierer litt mellom patches
+    local ptype = c.type or c.powerType
+    local cost  = c.cost or c.minCost or 0
+
+    if ptype ~= nil and cost and cost > 0 then
+      -- Noen kostnader er “per sec” ved channeling – de ignorerer vi her
+      local cur = UnitPower("player", ptype) or 0
+      if cur < cost then
+        return true
+      end
+    end
+  end
+
+  return false
+end
