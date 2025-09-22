@@ -36,6 +36,8 @@ ClassHUD._pending = {
 }
 ClassHUD._cooldownTextFrames = ClassHUD._cooldownTextFrames or {}
 ClassHUD._trackedBarFrames = ClassHUD._trackedBarFrames or {}
+ClassHUD._trackedAuraIDs = ClassHUD._trackedAuraIDs or {}
+ClassHUD._trackedLayoutSnapshot = ClassHUD._trackedLayoutSnapshot or nil
 ClassHUD._textTickerToken = ClassHUD._textTickerToken or nil
 ClassHUD._barTickerToken = ClassHUD._barTickerToken or nil
 
@@ -94,6 +96,82 @@ function ClassHUD:FlushUpdates()
   pending.aura = false
   pending.cooldown = false
   pending.target = false
+end
+
+local function ExtractSpellIDFromAuraPayload(auraInfo)
+  if type(auraInfo) == "number" then
+    return auraInfo
+  end
+  if type(auraInfo) == "table" then
+    local spellID = auraInfo.spellId or auraInfo.spellID or auraInfo.spell or auraInfo.id
+    if type(spellID) == "number" then
+      return spellID
+    end
+  end
+  return nil
+end
+
+local function PayloadContainsTrackedAura(self, list)
+  if type(list) ~= "table" then
+    return false
+  end
+
+  local tracked = self._trackedAuraIDs
+  if not tracked or not next(tracked) then
+    return false
+  end
+
+  local iterated = false
+  for _, auraInfo in ipairs(list) do
+    iterated = true
+    local spellID = ExtractSpellIDFromAuraPayload(auraInfo)
+    if spellID and tracked[spellID] then
+      return true
+    end
+  end
+
+  if iterated then
+    return false
+  end
+
+  for _, auraInfo in pairs(list) do
+    local spellID = ExtractSpellIDFromAuraPayload(auraInfo)
+    if spellID and tracked[spellID] then
+      return true
+    end
+  end
+
+  return false
+end
+
+function ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
+  if type(updateInfo) ~= "table" then
+    return true -- legacy payload, always rebuild
+  end
+
+  if updateInfo.isFullUpdate then
+    return true
+  end
+
+  if PayloadContainsTrackedAura(self, updateInfo.addedAuras)
+      or PayloadContainsTrackedAura(self, updateInfo.addedAuraSpellIDs) then
+    return true
+  end
+
+  if PayloadContainsTrackedAura(self, updateInfo.updatedAuras)
+      or PayloadContainsTrackedAura(self, updateInfo.updatedAuraSpellIDs) then
+    return true
+  end
+
+  local removedList = updateInfo.removedAuras
+      or updateInfo.removedAuraSpellIDs
+      or updateInfo.removedSpellIDs
+
+  if PayloadContainsTrackedAura(self, removedList) then
+    return true
+  end
+
+  return false
 end
 
 local COOLDOWN_TICK_INTERVAL = 0.10
@@ -790,7 +868,13 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   end
 
   if event == "UNIT_AURA" and (unit == "player" or unit == "pet") then
-    if ClassHUD.UpdateAllFrames then
+    local updateInfo = ...
+    local shouldUpdate = true
+    if ClassHUD.ShouldProcessAuraUpdate then
+      shouldUpdate = ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
+    end
+
+    if shouldUpdate and ClassHUD.UpdateAllFrames then
       ClassHUD:RequestUpdate("aura")
     end
 

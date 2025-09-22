@@ -836,6 +836,44 @@ local function UpdateTrackedBarFrame(frame)
 end
 
 function ClassHUD:BuildTrackedBuffFrames()
+  local trackedIDs = self._trackedAuraIDs
+  if not trackedIDs then
+    trackedIDs = {}
+    self._trackedAuraIDs = trackedIDs
+  else
+    wipe(trackedIDs)
+  end
+
+  local layoutSnapshot = self._trackedLayoutSnapshot
+  if not layoutSnapshot then
+    layoutSnapshot = {}
+    self._trackedLayoutSnapshot = layoutSnapshot
+  end
+
+  local function commitLayoutChanges()
+    local iconsContainer = EnsureAttachment("TRACKED_ICONS")
+    local barsContainer  = EnsureAttachment("TRACKED_BARS")
+
+    local iconsHeight = iconsContainer and iconsContainer._height or 0
+    local iconsGap    = iconsContainer and iconsContainer._afterGap or nil
+    local barsHeight  = barsContainer and barsContainer._height or 0
+    local barsGap     = barsContainer and barsContainer._afterGap or nil
+
+    local changed = layoutSnapshot.iconsHeight ~= iconsHeight
+        or layoutSnapshot.iconsGap ~= iconsGap
+        or layoutSnapshot.barsHeight ~= barsHeight
+        or layoutSnapshot.barsGap ~= barsGap
+
+    layoutSnapshot.iconsHeight = iconsHeight
+    layoutSnapshot.iconsGap = iconsGap
+    layoutSnapshot.barsHeight = barsHeight
+    layoutSnapshot.barsGap = barsGap
+
+    if changed and self.Layout then
+      self:Layout()
+    end
+  end
+
   -- Skjul gamle frames
   if self.trackedBuffFrames then
     for _, frame in ipairs(self.trackedBuffFrames) do
@@ -860,7 +898,7 @@ function ClassHUD:BuildTrackedBuffFrames()
   local function resetLayouts()
     LayoutTrackedBars({}, nil)
     LayoutTrackedIcons({}, nil)
-    if self.Layout then self:Layout() end
+    commitLayoutChanges()
   end
 
   if not self.db.profile.show.buffs then
@@ -923,6 +961,26 @@ function ClassHUD:BuildTrackedBuffFrames()
     local auraCandidates = CollectAuraSpellIDs(entry, buffID)
     local aura           = FindAuraFromCandidates(auraCandidates)
 
+    trackedIDs[buffID] = true
+    if auraCandidates then
+      for _, candidateID in ipairs(auraCandidates) do
+        if type(candidateID) == "number" then
+          trackedIDs[candidateID] = true
+        end
+      end
+    end
+
+    if info.config and info.config.showBar and self.ResolveTrackedBarDisplay then
+      local _, _, _, barCandidates = self:ResolveTrackedBarDisplay(entry, buffID, auraCandidates)
+      if barCandidates then
+        for _, candidateID in ipairs(barCandidates) do
+          if type(candidateID) == "number" then
+            trackedIDs[candidateID] = true
+          end
+        end
+      end
+    end
+
     if aura then
       local iconFrame = CreateBuffFrame(buffID)
       PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
@@ -947,10 +1005,7 @@ function ClassHUD:BuildTrackedBuffFrames()
 
   LayoutTrackedBars(barFrames, { topPadding = barTopPadding })
   LayoutTrackedIcons(iconFrames, { topPadding = iconTopPadding })
-
-  if self.Layout then
-    self:Layout()
-  end
+  commitLayoutChanges()
 end
 
 -- ==================================================
