@@ -55,15 +55,19 @@ local function BuildTopBarSpellsEditor(addon, container)
   local snapshot = addon:GetSnapshotForSpec(class, specID, false)
   local seen, list = {}, {}
 
-  -- 1) Ta med alle spells manuelt lagt i Top Bar
+  -- 1) Manuelle Top Bar-spells
   for spellID, placement in pairs(placements) do
-    if placement == "TOP" then
+    local placementVal = placement
+    if type(placement) == "table" then
+      placementVal = placement.placement
+    end
+    if placementVal == "TOP" then
       table.insert(list, spellID)
       seen[spellID] = true
     end
   end
 
-  -- 2) Ta med alle essential-spells fra snapshot
+  -- 2) Essential-spells fra snapshot
   if snapshot then
     for spellID, entry in pairs(snapshot) do
       if entry.categories and entry.categories.essential then
@@ -74,10 +78,25 @@ local function BuildTopBarSpellsEditor(addon, container)
       end
     end
   end
+
+  -- Sorter basert på custom order → snapshot order → navn
   table.sort(list, function(a, b)
-    local ia, ib = C_Spell.GetSpellInfo(a), C_Spell.GetSpellInfo(b)
-    local na, nb = (ia and ia.name) or tostring(a), (ib and ib.name) or tostring(b)
-    if na == nb then return a < b else return na < nb end
+    local sa, sb = snapshot and snapshot[a], snapshot and snapshot[b]
+    local pa, pb = placements[a], placements[b]
+
+    local oa = (type(pa) == "table" and pa.order)
+        or (sa and sa.categories and sa.categories.essential and sa.categories.essential.order)
+        or math.huge
+    local ob = (type(pb) == "table" and pb.order)
+        or (sb and sb.categories and sb.categories.essential and sb.categories.essential.order)
+        or math.huge
+
+    if oa == ob then
+      local na = (sa and sa.name) or (C_Spell.GetSpellInfo(a) and C_Spell.GetSpellInfo(a).name) or tostring(a)
+      local nb = (sb and sb.name) or (C_Spell.GetSpellInfo(b) and C_Spell.GetSpellInfo(b).name) or tostring(b)
+      return na < nb
+    end
+    return oa < ob
   end)
 
   local order = 1
@@ -90,13 +109,14 @@ local function BuildTopBarSpellsEditor(addon, container)
     return
   end
 
-  -- Build group per spell (inline = true => ingen underkategori i venstremenyen)
+  -- Bygg options-grupper
   for _, spellID in ipairs(list) do
     local s = C_Spell.GetSpellInfo(spellID)
     local icon = s and s.iconID and ("|T" .. s.iconID .. ":16|t ") or ""
     local name = (s and s.name) or ("Spell " .. spellID)
+    local entry = snapshot and snapshot[spellID]
 
-    -- Linked buffs for denne spellen (vis som klikk-for-å-fjerne)
+    -- Linked buffs
     local linkedArgs, idx = {}, 1
     local links = addon.db.profile.buffLinks[class] and addon.db.profile.buffLinks[class][specID]
     if links then
@@ -152,6 +172,38 @@ local function BuildTopBarSpellsEditor(addon, container)
             if ACR then ACR:NotifyChange("ClassHUD") end
           end,
         },
+        order = {
+          type  = "range",
+          name  = "Order",
+          min   = 1,
+          max   = 50,
+          step  = 1,
+          order = 3,
+          get   = function()
+            local class, specID = addon:GetPlayerClassSpec()
+            local placements = addon.db.profile.utilityPlacement[class][specID] or {}
+            local pData = placements[spellID]
+            if type(pData) == "table" then
+              return pData.order or
+              (entry and entry.categories and entry.categories.essential and entry.categories.essential.order) or 1
+            end
+            return (entry and entry.categories and entry.categories.essential and entry.categories.essential.order) or 1
+          end,
+          set   = function(_, val)
+            local class, specID = addon:GetPlayerClassSpec()
+            addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
+            addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or {}
+            local placements = addon.db.profile.utilityPlacement[class][specID]
+
+            if type(placements[spellID]) ~= "table" then
+              placements[spellID] = { placement = placements[spellID], order = val }
+            else
+              placements[spellID].order = val
+            end
+            addon:BuildFramesForSpec()
+            NotifyOptionsChanged()
+          end,
+        },
         linked = {
           type   = "group",
           name   = "Linked Buffs",
@@ -165,9 +217,7 @@ local function BuildTopBarSpellsEditor(addon, container)
           confirm = true,
           order   = 99,
           func    = function()
-            -- Fjern selve spellen fra Top Bar
             addon.db.profile.utilityPlacement[class][specID][spellID] = nil
-            -- Fjern alle buff-links som pekte på den
             local bl = addon.db.profile.buffLinks[class] and addon.db.profile.buffLinks[class][specID]
             if bl then
               for bid, sid in pairs(bl) do

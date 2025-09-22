@@ -333,43 +333,44 @@ function ClassHUD:GetAuraForSpell(spellID, units)
   return nil
 end
 
----Collects aura spellIDs associated with a snapshot entry.
----@param entry table|nil Snapshot entry from the Cooldown Viewer.
----@param primaryID number|nil Optional fallback spellID.
----@return number[]
-function ClassHUD:GetAuraCandidatesForEntry(entry, primaryID)
-  local results, seen = {}, {}
+---Collect possible aura spellIDs for a snapshot entry.
+---@param entry table|nil
+---@param spellID number
+---@return number[] candidates
+function ClassHUD:GetAuraCandidatesForEntry(entry, spellID)
+  local candidates = {}
 
-  local function add(id)
-    if type(id) == "number" and id > 0 and not seen[id] then
-      seen[id] = true
-      table.insert(results, id)
-    end
-  end
-
-  add(primaryID)
-
-  if entry then
-    add(entry.spellID)
-
-    local categories = entry.categories
-    if categories then
-      for _, key in ipairs(CATEGORY_PRIORITY) do
-        local category = categories[key]
-        if category then
-          add(category.spellID)
-          add(category.overrideSpellID)
-          if category.linkedSpellIDs then
-            for _, linked in ipairs(category.linkedSpellIDs) do
-              add(linked)
-            end
-          end
+  if entry and entry.categories then
+    for _, catData in pairs(entry.categories) do
+      if catData.overrideSpellID then
+        table.insert(candidates, catData.overrideSpellID)
+      end
+      if catData.linkedSpellIDs then
+        for _, lsid in ipairs(catData.linkedSpellIDs) do
+          table.insert(candidates, lsid)
         end
+      end
+      if catData.spellID then
+        table.insert(candidates, catData.spellID)
       end
     end
   end
 
-  return results
+  -- 🔑 Alltid legg til original spellID som fallback
+  if spellID then
+    local already = false
+    for _, id in ipairs(candidates) do
+      if id == spellID then
+        already = true
+        break
+      end
+    end
+    if not already then
+      table.insert(candidates, spellID)
+    end
+  end
+
+  return candidates
 end
 
 ---Finds an active aura from a list of candidate spellIDs.
@@ -389,19 +390,56 @@ function ClassHUD:FindAuraFromCandidates(candidates, units)
   return nil
 end
 
+---Determines if a spell should be treated as a harmful aura tracker.
+---@param spellID number
+---@param entry table|nil Snapshot entry
+---@return boolean tracksAura, boolean auraActive
+function ClassHUD:IsHarmfulAuraSpell(spellID, entry)
+  if not (C_Spell and C_Spell.IsSpellHarmful) then return false, false end
+  if not C_Spell.IsSpellHarmful(spellID) then return false, false end
+
+  -- Case 1: snapshot sier dette er en buff/debuff (klassisk DoT)
+  if entry and entry.categories and entry.categories.buff then
+    local candidates = self:GetAuraCandidatesForEntry(entry, spellID)
+    local aura = self:FindAuraFromCandidates(candidates, { "target", "focus" })
+    if aura and aura.expirationTime and aura.expirationTime > 0 then
+      return true, true
+    else
+      return true, false
+    end
+  end
+
+  -- Case 2: spell er lagt inn manuelt (ingen snapshot-entry)
+  -- Her antar vi at brukeren vil tracke det som en aura på target
+  if not entry then
+    local info = C_Spell.GetSpellInfo(spellID)
+    if info then
+      local aura = C_UnitAuras.GetAuraDataBySpellName("target", info.name, "HARMFUL")
+          or C_UnitAuras.GetAuraDataBySpellName("focus", info.name, "HARMFUL")
+      if aura and aura.expirationTime and aura.expirationTime > 0 then
+        return true, true
+      else
+        return true, false
+      end
+    end
+  end
+
+  return false, false
+end
+
 function ClassHUD:FindAuraByName(castSpellID, units)
   local info = C_Spell.GetSpellInfo(castSpellID)
   if not info or not info.name then return nil end
   local spellName = info.name
 
-  units = units or { "target", "focus" }
+  units = units or { "target" }
   for _, unit in ipairs(units) do
     local i = 1
     while true do
       local aura = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
       if not aura then break end
       if aura.name == spellName and aura.sourceUnit == "player" then
-        return aura, aura.spellId, unit
+        return aura
       end
       i = i + 1
     end
