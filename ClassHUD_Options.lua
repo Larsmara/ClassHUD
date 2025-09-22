@@ -185,7 +185,7 @@ local function BuildTopBarSpellsEditor(addon, container)
             local pData = placements[spellID]
             if type(pData) == "table" then
               return pData.order or
-              (entry and entry.categories and entry.categories.essential and entry.categories.essential.order) or 1
+                  (entry and entry.categories and entry.categories.essential and entry.categories.essential.order) or 1
             end
             return (entry and entry.categories and entry.categories.essential and entry.categories.essential.order) or 1
           end,
@@ -1200,6 +1200,48 @@ function ClassHUD_BuildOptions(addon)
           },
         },
       },
+      classbars = {
+        type = "group",
+        name = "Class Bars",
+        order = 6,
+        args = {
+          druid = {
+            type = "group",
+            name = "Druid",
+            inline = false,
+            args = {
+              balanceEclipse = {
+                type = "toggle",
+                name = "Enable Eclipse Bar (Balance)",
+                get = function() return db.profile.classbars.DRUID[102].eclipse end,
+                set = function(_, val)
+                  db.profile.classbars.DRUID[102].eclipse = val
+                  addon:FullUpdate()
+                end,
+              },
+              balanceCombo = {
+                type = "toggle",
+                name = "Enable Combo Points (Balance)",
+                get = function() return db.profile.classbars.DRUID[102].combo end,
+                set = function(_, val)
+                  db.profile.classbars.DRUID[102].combo = val
+                  addon:FullUpdate()
+                end,
+              },
+              feralCombo = {
+                type = "toggle",
+                name = "Enable Combo Points (Feral)",
+                get = function() return db.profile.classbars.DRUID[103].combo end,
+                set = function(_, val)
+                  db.profile.classbars.DRUID[103].combo = val
+                  addon:FullUpdate()
+                end,
+              },
+            },
+          },
+        },
+      },
+
       colors = {
         type = "group",
         name = "Colors",

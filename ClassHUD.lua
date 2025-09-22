@@ -120,6 +120,20 @@ local defaults = {
       spacing = 4,
       offset  = 6,
     },
+    classbars        = {
+      -- Eksempel: Druid
+      DRUID = {
+        [102] = { eclipse = true, combo = false }, -- Balance
+        [103] = { combo = true },                  -- Feral
+        [104] = { combo = true },                  -- Guardian
+        [105] = {},                                -- Resto
+      },
+      ROGUE = {
+        [259] = { combo = true }, -- Assassination
+        [260] = { combo = true }, -- Outlaw
+        [261] = { combo = true }, -- Sub
+      },
+    },
 
     topBar           = {
       perRow   = 8,
@@ -258,6 +272,7 @@ function ClassHUD:FullUpdate()
   if self.UpdateHP then self:UpdateHP() end
   if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
   if self.UpdateSpecialPower then self:UpdateSpecialPower() end
+  if self.InitBalanceEclipse then self:InitBalanceEclipse() end
 end
 
 ---Rebuilds the Cooldown Viewer snapshot for the current class/spec.
@@ -469,7 +484,6 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     ClassHUD:RefreshRegisteredOptions()
-    ClassHUD:RebuildSpellTree()
     ClassHUD:UpdateAllFrames()
     return
   end
@@ -525,27 +539,21 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     ClassHUD:UNIT_SPELLCAST_FAILED(unit, ...); return
   end
 
-  -- Spells (auras + cooldowns)
-  if (event == "UNIT_AURA" and (unit == "player" or unit == "pet")) or
-      event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES" or event == "UNIT_SPELLCAST_SUCCEEDED" then
+  if (event == "UNIT_AURA" and (unit == "player" or unit == "pet"))
+      or event == "SPELL_UPDATE_COOLDOWN"
+      or event == "SPELL_UPDATE_CHARGES"
+      or event == "UNIT_SPELLCAST_SUCCEEDED" then
     if ClassHUD.UpdateAllFrames then ClassHUD:UpdateAllFrames() end
-    -- Also show instant-cast fake bar if bars module hooked SUCCEEDED
-    if event == "UNIT_SPELLCAST_SUCCEEDED" and ClassHUD.UNIT_SPELLCAST_SUCCEEDED then
-      ClassHUD:UNIT_SPELLCAST_SUCCEEDED(unit, ...)
+
+    if event == "UNIT_SPELLCAST_SUCCEEDED" or event == "UNIT_AURA" then
+      if ClassHUD.HandleEclipseEvent and unit == "player" then
+        local spellID = (event == "UNIT_SPELLCAST_SUCCEEDED") and select(2, ...) or nil
+        ClassHUD:HandleEclipseEvent(event, unit, spellID)
+      end
     end
+
     return
   end
-
-  -- if event == "SPELL_RANGE_CHECK_UPDATE" then
-  --   local unit = ...
-  --   print("Spell range check triggered", unit)
-  --   if unit then
-  --     if ClassHUD.UpdateAllFrames then
-  --       ClassHUD:UpdateAllFrames()
-  --     end
-  --   end
-  --   return
-  -- end
 
 
   -- Target
