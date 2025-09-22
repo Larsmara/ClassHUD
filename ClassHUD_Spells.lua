@@ -239,16 +239,20 @@ end
 
 
 local function UpdateCooldownText(frame, gcdActive)
-  frame._gcdActive = gcdActive and true or false
+  local hasCooldown = frame._cooldownEnd ~= nil
 
-  if gcdActive then
-    frame.cooldownText:SetText("")
-    frame.cooldownText:Hide()
-    frame._cooldownTextValue = nil
+  frame._gcdActive = (gcdActive and not hasCooldown) or false
+
+  if frame._gcdActive then
+    if frame.cooldownText:IsShown() or frame._cooldownTextValue then
+      frame.cooldownText:SetText("")
+      frame.cooldownText:Hide()
+      frame._cooldownTextValue = nil
+    end
     return
   end
 
-  if not frame._cooldownEnd then
+  if not hasCooldown then
     if frame.cooldownText:IsShown() or frame._cooldownTextValue then
       frame.cooldownText:SetText("")
       frame.cooldownText:Hide()
