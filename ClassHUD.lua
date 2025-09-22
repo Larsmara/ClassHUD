@@ -3,10 +3,11 @@ local ADDON_NAME = ...
 local AceAddon   = LibStub("AceAddon-3.0")
 local AceEvent   = LibStub("AceEvent-3.0")
 local AceConsole = LibStub("AceConsole-3.0")
+local AceTimer   = LibStub("AceTimer-3.0")
 local AceDB      = LibStub("AceDB-3.0")
 local LSM        = LibStub("LibSharedMedia-3.0")
 
----@class ClassHUD : AceAddon, AceEvent, AceConsole
+---@class ClassHUD : AceAddon, AceEvent, AceConsole, AceTimer
 ---@field BuildFramesForSpec fun(self:ClassHUD)  -- defined in Spells.lua
 ---@field UpdateAllFrames fun(self:ClassHUD)     -- defined in Spells.lua
 ---@field Layout fun(self:ClassHUD)              -- defined in Bars.lua
@@ -18,12 +19,60 @@ local LSM        = LibStub("LibSharedMedia-3.0")
 ---@field UpdateEssenceSegments fun(self:ClassHUD, ptype:number)|nil
 ---@field UpdateRunes fun(self:ClassHUD)|nil
 
-local ClassHUD   = AceAddon:NewAddon("ClassHUD", "AceEvent-3.0", "AceConsole-3.0")
+local ClassHUD   = AceAddon:NewAddon("ClassHUD", "AceEvent-3.0", "AceConsole-3.0", "AceTimer-3.0")
 ClassHUD:SetDefaultModuleState(true)
 _G.ClassHUD = ClassHUD -- explicit global bridge so split files can always find it
 
 -- Make shared libs available to submodules
 ClassHUD.LSM = LSM
+ClassHUD._flushTimer = nil
+ClassHUD._pending = {
+  any = false,
+  aura = false,
+  cooldown = false,
+  target = false,
+}
+
+function ClassHUD:RequestUpdate(kind)
+  kind = kind or "any"
+  if not self._pending then
+    self._pending = {
+      any = false,
+      aura = false,
+      cooldown = false,
+      target = false,
+    }
+  end
+
+  self._pending[kind] = true
+
+  if not self._flushTimer then
+    self._flushTimer = self:ScheduleTimer("FlushUpdates", 0.05)
+  end
+end
+
+function ClassHUD:FlushUpdates()
+  local handle = self._flushTimer
+  self._flushTimer = nil
+  if handle then
+    self:CancelTimer(handle)
+  end
+
+  local pending = self._pending
+  if not pending then return end
+
+  if pending.any or pending.aura or pending.cooldown or pending.target then
+    if self.UpdateAllFrames then
+      self:UpdateAllFrames()
+    end
+  end
+
+  wipe(pending)
+  pending.any = false
+  pending.aura = false
+  pending.cooldown = false
+  pending.target = false
+end
 
 ---@class ClassHUDUI
 ---@field anchor Frame|nil
@@ -538,22 +587,30 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     ClassHUD:UNIT_SPELLCAST_FAILED(unit, ...); return
   end
 
-  if (event == "UNIT_AURA" and (unit == "player" or unit == "pet"))
-      or event == "SPELL_UPDATE_COOLDOWN"
-      or event == "SPELL_UPDATE_CHARGES"
-      or event == "UNIT_SPELLCAST_SUCCEEDED" then
-    if ClassHUD.UpdateAllFrames then ClassHUD:UpdateAllFrames() end
+  if event == "UNIT_AURA" and (unit == "player" or unit == "pet") then
+    if ClassHUD.UpdateAllFrames then
+      ClassHUD:RequestUpdate("aura")
+    end
 
-    if event == "UNIT_SPELLCAST_SUCCEEDED" or event == "UNIT_AURA" then
-      if ClassHUD.HandleEclipseEvent and unit == "player" then
-        local spellID = (event == "UNIT_SPELLCAST_SUCCEEDED") and select(2, ...) or nil
-        ClassHUD:HandleEclipseEvent(event, unit, spellID)
-      end
+    if ClassHUD.HandleEclipseEvent and unit == "player" then
+      ClassHUD:HandleEclipseEvent(event, unit, nil)
     end
 
     return
   end
 
+  if event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES" or event == "UNIT_SPELLCAST_SUCCEEDED" then
+    if ClassHUD.UpdateAllFrames then
+      ClassHUD:RequestUpdate("cooldown")
+    end
+
+    if event == "UNIT_SPELLCAST_SUCCEEDED" and ClassHUD.HandleEclipseEvent and unit == "player" then
+      local spellID = select(2, ...)
+      ClassHUD:HandleEclipseEvent(event, unit, spellID)
+    end
+
+    return
+  end
 
   -- Target
   if event == "PLAYER_TARGET_CHANGED"
@@ -562,7 +619,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
       or event == "SPELL_RANGE_CHECK_UPDATE"
   then
     if ClassHUD.UpdateAllFrames then
-      ClassHUD:UpdateAllFrames()
+      ClassHUD:RequestUpdate("target")
     end
     return
   end
