@@ -103,6 +103,7 @@ end
 function ClassHUD:RegisterCooldownTextFrame(frame)
   if not frame then return end
   self._cooldownTextFrames[frame] = true
+  self:RefreshCooldownTextFrame(frame)
   EnsureTicker(self, "_textTickerToken", "TickCooldownTexts", COOLDOWN_TICK_INTERVAL, self._cooldownTextFrames)
 end
 
@@ -117,6 +118,47 @@ function ClassHUD:UnregisterCooldownTextFrame(frame)
   frame._cooldownTextValue = nil
 
   EnsureTicker(self, "_textTickerToken", "TickCooldownTexts", COOLDOWN_TICK_INTERVAL, self._cooldownTextFrames)
+end
+
+function ClassHUD:RefreshCooldownTextFrame(frame, now)
+  if not frame or not frame.cooldownText then return end
+
+  now = now or GetTime()
+
+  local fontString = frame.cooldownText
+  local gcdActive = frame._gcdActive
+  local endTime = frame._cooldownEnd
+  local newText
+  local shouldShow = false
+
+  if endTime and not gcdActive then
+    local remaining = endTime - now
+    if remaining > 0 then
+      newText = ClassHUD.FormatSeconds(remaining)
+      shouldShow = newText and newText ~= ""
+    else
+      frame._cooldownEnd = nil
+      if frame.icon and frame.icon.SetDesaturated then
+        frame.icon:SetDesaturated(false)
+      end
+    end
+  end
+
+  if shouldShow then
+    if frame._cooldownTextValue ~= newText then
+      fontString:SetText(newText or "")
+      frame._cooldownTextValue = newText
+    end
+    if not fontString:IsShown() then
+      fontString:Show()
+    end
+  else
+    if fontString:IsShown() or frame._cooldownTextValue then
+      fontString:SetText("")
+      fontString:Hide()
+      frame._cooldownTextValue = nil
+    end
+  end
 end
 
 function ClassHUD:RegisterTrackedBarFrame(frame)
@@ -151,40 +193,7 @@ function ClassHUD:TickCooldownTexts()
     if not frame or not frame.cooldownText then
       frames[frame] = nil
     else
-      local fontString = frame.cooldownText
-      local gcdActive = frame._gcdActive
-      local endTime = frame._cooldownEnd
-      local newText
-      local shouldShow = false
-
-      if endTime and not gcdActive then
-        local remaining = endTime - now
-        if remaining > 0 then
-          newText = ClassHUD.FormatSeconds(remaining)
-          shouldShow = newText and newText ~= ""
-        else
-          frame._cooldownEnd = nil
-          if frame.icon and frame.icon.SetDesaturated then
-            frame.icon:SetDesaturated(false)
-          end
-        end
-      end
-
-      if shouldShow then
-        if frame._cooldownTextValue ~= newText then
-          fontString:SetText(newText or "")
-          frame._cooldownTextValue = newText
-        end
-        if not fontString:IsShown() then
-          fontString:Show()
-        end
-      else
-        if fontString:IsShown() or frame._cooldownTextValue then
-          fontString:SetText("")
-          fontString:Hide()
-          frame._cooldownTextValue = nil
-        end
-      end
+      self:RefreshCooldownTextFrame(frame, now)
     end
   end
 

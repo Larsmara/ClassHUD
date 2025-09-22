@@ -737,17 +737,11 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
     end
 
     frame._cooldownEnd = aura.expirationTime
-    frame._cooldownTextValue = nil
-    frame.cooldownText:SetText("")
-    frame.cooldownText:Hide()
     ClassHUD:RegisterCooldownTextFrame(frame)
   else
     CooldownFrame_Clear(frame.cooldown)
     frame._cooldownEnd = nil
-    frame._cooldownTextValue = nil
     ClassHUD:UnregisterCooldownTextFrame(frame)
-    frame.cooldownText:SetText("")
-    frame.cooldownText:Hide()
   end
 
   local stacks = aura and (aura.applications or aura.stackCount or aura.charges)
@@ -1040,6 +1034,7 @@ local function UpdateSpellFrame(frame)
   -- Glow & tekst
   UpdateGlow(frame, aura, sid, data)
   UpdateCooldownText(frame, gcdActive)
+  ClassHUD:RefreshCooldownTextFrame(frame)
 end
 
 
