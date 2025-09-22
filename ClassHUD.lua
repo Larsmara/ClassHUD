@@ -10,6 +10,8 @@ local LSM        = LibStub("LibSharedMedia-3.0")
 ---@class ClassHUD : AceAddon, AceEvent, AceConsole, AceTimer
 ---@field BuildFramesForSpec fun(self:ClassHUD)  -- defined in Spells.lua
 ---@field UpdateAllFrames fun(self:ClassHUD)     -- defined in Spells.lua
+---@field UpdateAllSpellFrames fun(self:ClassHUD)
+---@field RebuildTrackedBuffFrames fun(self:ClassHUD)
 ---@field Layout fun(self:ClassHUD)              -- defined in Bars.lua
 ---@field ApplyBarSkins fun(self:ClassHUD)       -- defined in Bars.lua
 ---@field UpdateHP fun(self:ClassHUD)            -- defined in Bars.lua
@@ -65,8 +67,24 @@ function ClassHUD:FlushUpdates()
   local pending = self._pending
   if not pending then return end
 
-  if pending.any or pending.aura or pending.cooldown or pending.target then
-    if self.UpdateAllFrames then
+  local runSpellUpdate = pending.any or pending.cooldown or pending.target
+  local runBuffRebuild = pending.any or pending.aura
+
+  local spellHandled = false
+  local buffHandled = false
+
+  if runSpellUpdate and self.UpdateAllSpellFrames then
+    self:UpdateAllSpellFrames()
+    spellHandled = true
+  end
+
+  if runBuffRebuild and self.RebuildTrackedBuffFrames then
+    self:RebuildTrackedBuffFrames()
+    buffHandled = true
+  end
+
+  if self.UpdateAllFrames then
+    if (runSpellUpdate and not spellHandled) or (runBuffRebuild and not buffHandled) then
       self:UpdateAllFrames()
     end
   end

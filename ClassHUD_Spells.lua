@@ -1047,12 +1047,15 @@ end
 -- ==================================================
 ClassHUD.UpdateTrackedBarFrame = UpdateTrackedBarFrame
 
-function ClassHUD:UpdateAllFrames()
+function ClassHUD:UpdateAllSpellFrames()
   self:RefreshSnapshotCache()
+
   for _, f in ipairs(activeFrames) do
     UpdateSpellFrame(f)
   end
+end
 
+function ClassHUD:RebuildTrackedBuffFrames()
   if self.BuildTrackedBuffFrames then
     self:BuildTrackedBuffFrames()
   end
@@ -1070,6 +1073,16 @@ function ClassHUD:UpdateAllFrames()
     if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
       aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
     end
+  end
+end
+
+function ClassHUD:UpdateAllFrames()
+  if self.UpdateAllSpellFrames then
+    self:UpdateAllSpellFrames()
+  end
+
+  if self.RebuildTrackedBuffFrames then
+    self:RebuildTrackedBuffFrames()
   end
 end
 
