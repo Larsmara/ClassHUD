@@ -14,6 +14,7 @@ local trackedBuffPool = ClassHUD._trackedBuffFramePool
 local trackedBarPool = ClassHUD._trackedBarFramePool
 
 local INACTIVE_BAR_COLOR = { r = 0.25, g = 0.25, b = 0.25, a = 0.6 }
+local HARMFUL_GLOW_THRESHOLD = 5
 local TRACKED_UNITS = { "player", "pet" }
 
 local function EnsureAttachment(name)
@@ -164,17 +165,27 @@ end
 local function UpdateGlow(frame, aura, sid, data)
   -- 1) Samme semantikk som original: aura tilstede → glow
   local shouldGlow = (aura ~= nil)
+  local allowExtraGlowLogic = true
 
-  if aura and aura.isHarmful then
-    if frame.isGlowing then
-      ActionButtonSpellAlertManager:HideAlert(frame)
-      frame.isGlowing = false
+  local isHarmfulSpell = C_Spell and C_Spell.IsSpellHarmful and C_Spell.IsSpellHarmful(sid)
+
+  if isHarmfulSpell then
+    allowExtraGlowLogic = false
+
+    if aura and aura.expirationTime and aura.expirationTime > 0 then
+      local remain = aura.expirationTime - GetTime()
+      if remain and remain > 0 and remain <= HARMFUL_GLOW_THRESHOLD then
+        shouldGlow = true
+      else
+        shouldGlow = false
+      end
+    else
+      shouldGlow = false
     end
-    return
   end
 
   -- 2) Manuelle buffLinks kan holde glow (som originalt "keepGlow")
-  if not shouldGlow then
+  if allowExtraGlowLogic and not shouldGlow then
     local class, specID = ClassHUD:GetPlayerClassSpec()
     local links = (ClassHUD.db.profile.buffLinks[class] and ClassHUD.db.profile.buffLinks[class][specID]) or {}
     -- links: [buffID] = linkedSpellID
@@ -187,7 +198,7 @@ local function UpdateGlow(frame, aura, sid, data)
   end
 
   -- 3) Auto-mapping fallback (som i originalens "keepGlow")
-  if not shouldGlow and ClassHUD.trackedBuffToSpell then
+  if allowExtraGlowLogic and not shouldGlow and ClassHUD.trackedBuffToSpell then
     for buffID, mappedSpellID in pairs(ClassHUD.trackedBuffToSpell) do
       if mappedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
         shouldGlow = true
