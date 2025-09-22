@@ -148,6 +148,7 @@ local defaults = {
     -- =========================
 
     -- Utility placement per spellID
+    -- [spellID] = { placement = "TOP"/"BOTTOM"/"LEFT"/"RIGHT"/"HIDDEN", order = number }
     utilityPlacement = {
       -- [spellID] = "TOP" | "BOTTOM" | "LEFT" | "RIGHT"
     },
@@ -441,6 +442,11 @@ for _, ev in pairs({
 
   -- Spells
   "UNIT_AURA", "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_CHARGES", "UNIT_SPELLCAST_SUCCEEDED",
+
+  -- Target
+  "PLAYER_TARGET_CHANGED",
+  "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
+  "SPELL_RANGE_CHECK_UPDATE"
 }) do
   eventFrame:RegisterEvent(ev)
 end
@@ -529,7 +535,32 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     end
     return
   end
+
+  -- if event == "SPELL_RANGE_CHECK_UPDATE" then
+  --   local unit = ...
+  --   print("Spell range check triggered", unit)
+  --   if unit then
+  --     if ClassHUD.UpdateAllFrames then
+  --       ClassHUD:UpdateAllFrames()
+  --     end
+  --   end
+  --   return
+  -- end
+
+
+  -- Target
+  if event == "PLAYER_TARGET_CHANGED"
+      or event == "PLAYER_REGEN_DISABLED"
+      or event == "PLAYER_REGEN_ENABLED"
+      or event == "SPELL_RANGE_CHECK_UPDATE"
+  then
+    if ClassHUD.UpdateAllFrames then
+      ClassHUD:UpdateAllFrames()
+    end
+    return
+  end
 end)
+
 
 -- Replace your slash handler with this
 SLASH_CLASSHUD1 = "/chud"

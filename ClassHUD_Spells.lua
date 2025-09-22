@@ -165,6 +165,14 @@ local function UpdateGlow(frame, aura, sid, data)
   -- 1) Samme semantikk som original: aura tilstede → glow
   local shouldGlow = (aura ~= nil)
 
+  if aura and aura.isHarmful then
+    if frame.isGlowing then
+      ActionButtonSpellAlertManager:HideAlert(frame)
+      frame.isGlowing = false
+    end
+    return
+  end
+
   -- 2) Manuelle buffLinks kan holde glow (som originalt "keepGlow")
   if not shouldGlow then
     local class, specID = ClassHUD:GetPlayerClassSpec()
@@ -903,16 +911,17 @@ function ClassHUD:BuildTrackedBuffFrames()
     local auraCandidates = CollectAuraSpellIDs(entry, buffID)
     local aura           = FindAuraFromCandidates(auraCandidates)
 
-    local iconFrame      = CreateBuffFrame(buffID)
-    PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
-
     if aura then
+      local iconFrame = CreateBuffFrame(buffID)
+      PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
       iconFrame:Show()
+      table.insert(iconFrames, iconFrame)
     else
+      -- hold frame oppdatert i poolen, men ikke reserver plass i layout
+      local iconFrame = CreateBuffFrame(buffID)
+      PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
       iconFrame:Hide()
     end
-
-    table.insert(iconFrames, iconFrame)
   end
 
   self.trackedBuffFrames = iconFrames
@@ -939,39 +948,45 @@ local function UpdateSpellFrame(frame)
   local sid = frame.spellID
   if not sid then return end
 
-  local data = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
+  local data  = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
   local entry = ClassHUD:GetSnapshotEntry(sid)
 
   -- Ikon
   UpdateSpellIcon(frame, sid, entry)
 
-
-  -- Aura
+  -- Aura lookup (target/focus først for harmful)
   local auraID
-  if data then
-    if data.buff then
-      auraID = data.buff.overrideSpellID
-          or (data.buff.linkedSpellIDs and data.buff.linkedSpellIDs[1])
-          or data.buff.spellID
-    elseif data.bar then
-      auraID = data.bar.overrideSpellID
-          or (data.bar.linkedSpellIDs and data.bar.linkedSpellIDs[1])
-          or data.bar.spellID
-    end
+  if data and data.buff then
+    auraID = data.buff.overrideSpellID
+        or (data.buff.linkedSpellIDs and data.buff.linkedSpellIDs[1])
+        or data.buff.spellID
   end
   auraID = auraID or sid
 
   local aura = ClassHUD:GetAuraForSpell(auraID)
+  if not aura then
+    aura = ClassHUD:FindAuraByName(sid, { "target", "focus" })
+  end
+
   -- Cooldown & charges
   local chargesShown, gcdActive = UpdateCooldown(frame, sid, false)
-
   UpdateAuraOverlay(frame, aura, chargesShown)
 
-  -- Gråing logikk: kombiner cooldown-status og usability-status
-  do
+  -- ---------------- FARGE / DESAT ----------------
+  local tracksAura, auraActive = ClassHUD:IsHarmfulAuraSpell(sid, entry)
+
+  if tracksAura then
+    if auraActive then
+      frame.icon:SetDesaturated(false)
+      frame.icon:SetVertexColor(1, 1, 1)
+    else
+      frame.icon:SetDesaturated(true)
+      frame.icon:SetVertexColor(0.5, 0.5, 0.5)
+    end
+  else
+    -- Vanlig usability/desaturate-logikk
     local desaturate = false
 
-    -- 1. Fra cooldown/charges (UpdateCooldown returnerer allerede shouldDesaturate, men vi kan beregne her også)
     local charges = C_Spell.GetSpellCharges(sid)
     if charges and charges.maxCharges and charges.maxCharges > 0 then
       if (charges.currentCharges or 0) <= 0 then
@@ -984,23 +999,35 @@ local function UpdateSpellFrame(frame)
       end
     end
 
-    -- 2. Fra usability (condition spells)
     local usable, noMana = C_Spell.IsSpellUsable(sid)
     if not usable and not noMana then
       desaturate = true
     end
 
-    -- Apply combined result
+    if ClassHUD:LacksResources(sid) then
+      desaturate = true
+    end
+
     frame.icon:SetDesaturated(desaturate)
+    frame.icon:SetVertexColor(1, 1, 1)
   end
 
+  -- ===== Out-of-Range via vertexColor =====
+  do
+    if UnitExists("target") and not UnitIsDead("target") then
+      local inRange = C_Spell and C_Spell.IsSpellInRange and C_Spell.IsSpellInRange(sid, "target")
+      if inRange == false then
+        frame.icon:SetVertexColor(1, 0, 0)
+      end
+    end
+  end
+  -- ========================================
 
-
-  -- Glow
+  -- Glow & tekst
   UpdateGlow(frame, aura, sid, data)
-  -- Tekst
   UpdateCooldownText(frame, gcdActive)
 end
+
 
 -- ==================================================
 -- Public API (kalles fra ClassHUD.lua events)
@@ -1072,20 +1099,28 @@ function ClassHUD:BuildFramesForSpec()
   end
 
   local function collect(category)
+    local class, specID = self:GetPlayerClassSpec()
+    self.db.profile.utilityPlacement[class] = self.db.profile.utilityPlacement[class] or {}
+    self.db.profile.utilityPlacement[class][specID] = self.db.profile.utilityPlacement[class][specID] or {}
+    local placements = self.db.profile.utilityPlacement[class][specID]
+
     local list = {}
     self:ForEachSnapshotEntry(category, function(spellID, entry, categoryData)
-      table.insert(list, { spellID = spellID, entry = entry, data = categoryData })
+      local placementData = placements[spellID]
+      local customOrder   = placementData and placementData.order
+      local baseOrder     = categoryData.order or math.huge
+      local finalOrder    = customOrder or baseOrder
+      table.insert(list, { spellID = spellID, entry = entry, data = categoryData, order = finalOrder })
     end)
     table.sort(list, function(a, b)
-      local ao = (a.data and a.data.order) or math.huge
-      local bo = (b.data and b.data.order) or math.huge
-      if ao == bo then
+      if a.order == b.order then
         return (a.entry.name or "") < (b.entry.name or "")
       end
-      return ao < bo
+      return a.order < b.order
     end)
     return list
   end
+
 
   local class, specID = self:GetPlayerClassSpec()
   self.db.profile.utilityPlacement[class] = self.db.profile.utilityPlacement[class] or {}
@@ -1106,13 +1141,23 @@ function ClassHUD:BuildFramesForSpec()
   local function placeSpell(spellID, defaultPlacement)
     if built[spellID] then return end
 
-    local placement = placements[spellID] or defaultPlacement or "TOP"
+    local pData = placements[spellID]
+    local placement, customOrder
+    if type(pData) == "table" then
+      placement = pData.placement
+      customOrder = pData.order
+    else
+      placement = pData
+    end
+    placement = placement or defaultPlacement or "TOP"
+
     if placement == "HIDDEN" then
       built[spellID] = true
       return
     end
 
     local frame = acquire(spellID)
+    frame._customOrder = customOrder -- 👈 lagres på frame
     if placement == "TOP" then
       table.insert(topFrames, frame)
     elseif placement == "BOTTOM" then
@@ -1123,6 +1168,7 @@ function ClassHUD:BuildFramesForSpec()
       table.insert(topFrames, frame)
     end
   end
+
 
   for _, item in ipairs(collect("essential")) do
     placeSpell(item.spellID, "TOP")
@@ -1160,10 +1206,40 @@ function ClassHUD:BuildFramesForSpec()
   end
 
 
+  local function sortFrames(list)
+    table.sort(list, function(a, b)
+      local ao = a._customOrder or (a.snapshotEntry and a.snapshotEntry.categories and
+        ((a.snapshotEntry.categories.essential and a.snapshotEntry.categories.essential.order)
+          or (a.snapshotEntry.categories.buff and a.snapshotEntry.categories.buff.order)
+          or (a.snapshotEntry.categories.bar and a.snapshotEntry.categories.bar.order)
+          or (a.snapshotEntry.categories.utility and a.snapshotEntry.categories.utility.order))) or math.huge
+
+      local bo = b._customOrder or (b.snapshotEntry and b.snapshotEntry.categories and
+        ((b.snapshotEntry.categories.essential and b.snapshotEntry.categories.essential.order)
+          or (b.snapshotEntry.categories.buff and b.snapshotEntry.categories.buff.order)
+          or (b.snapshotEntry.categories.bar and b.snapshotEntry.categories.bar.order)
+          or (b.snapshotEntry.categories.utility and b.snapshotEntry.categories.utility.order))) or math.huge
+
+      if ao == bo then
+        local na = a.snapshotEntry and a.snapshotEntry.name or C_Spell.GetSpellName(a.spellID) or ""
+        local nb = b.snapshotEntry and b.snapshotEntry.name or C_Spell.GetSpellName(b.spellID) or ""
+        return na < nb
+      end
+      return ao < bo
+    end)
+  end
+
+  -- sorter og layout
+  sortFrames(topFrames)
+  sortFrames(bottomFrames)
+  sortFrames(sideFrames.LEFT)
+  sortFrames(sideFrames.RIGHT)
+
   LayoutTopBar(topFrames)
   LayoutBottomBar(bottomFrames)
   if #sideFrames.LEFT > 0 then LayoutSideBar(sideFrames.LEFT, "LEFT") end
   if #sideFrames.RIGHT > 0 then LayoutSideBar(sideFrames.RIGHT, "RIGHT") end
+
 
   -- Auto-map tracked buffs to spells using snapshot descriptions
   self.db.profile.buffLinks = self.db.profile.buffLinks or {}
