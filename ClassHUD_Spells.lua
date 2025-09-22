@@ -15,6 +15,8 @@ local trackedBarPool = ClassHUD._trackedBarFramePool
 
 local INACTIVE_BAR_COLOR = { r = 0.25, g = 0.25, b = 0.25, a = 0.6 }
 local HARMFUL_GLOW_THRESHOLD = 5
+local HARMFUL_GLOW_AURA_CHECK_INTERVAL = 0.1
+local HARMFUL_GLOW_UNITS = { "target", "focus" }
 local TRACKED_UNITS = { "player", "pet" }
 
 local function EnsureAttachment(name)
@@ -162,6 +164,16 @@ local function UpdateAuraOverlay(frame, aura, chargesShown)
 end
 
 -- Erstatt hele UpdateGlow med denne:
+local function SetFrameGlow(frame, shouldGlow)
+  if shouldGlow and not frame.isGlowing then
+    ActionButtonSpellAlertManager:ShowAlert(frame)
+    frame.isGlowing = true
+  elseif not shouldGlow and frame.isGlowing then
+    ActionButtonSpellAlertManager:HideAlert(frame)
+    frame.isGlowing = false
+  end
+end
+
 local function UpdateGlow(frame, aura, sid, data)
   -- 1) Samme semantikk som original: aura tilstede → glow
   local shouldGlow = (aura ~= nil)
@@ -173,6 +185,11 @@ local function UpdateGlow(frame, aura, sid, data)
     allowExtraGlowLogic = false
 
     if aura and aura.expirationTime and aura.expirationTime > 0 then
+      frame._harmfulGlowExpiration = aura.expirationTime
+      frame._harmfulGlowWatching = true
+      frame._harmfulGlowAuraSpellID = aura.spellId or sid
+      frame._harmfulGlowNextAuraCheck = nil
+
       local remain = aura.expirationTime - GetTime()
       if remain and remain > 0 and remain <= HARMFUL_GLOW_THRESHOLD then
         shouldGlow = true
@@ -180,8 +197,17 @@ local function UpdateGlow(frame, aura, sid, data)
         shouldGlow = false
       end
     else
+      frame._harmfulGlowExpiration = nil
+      frame._harmfulGlowWatching = false
+      frame._harmfulGlowAuraSpellID = nil
+      frame._harmfulGlowNextAuraCheck = nil
       shouldGlow = false
     end
+  else
+    frame._harmfulGlowExpiration = nil
+    frame._harmfulGlowWatching = false
+    frame._harmfulGlowAuraSpellID = nil
+    frame._harmfulGlowNextAuraCheck = nil
   end
 
   -- 2) Manuelle buffLinks kan holde glow (som originalt "keepGlow")
@@ -208,13 +234,7 @@ local function UpdateGlow(frame, aura, sid, data)
   end
 
   -- 4) Idempotent toggle (ikke spam Show/Hide)
-  if shouldGlow and not frame.isGlowing then
-    ActionButtonSpellAlertManager:ShowAlert(frame)
-    frame.isGlowing = true
-  elseif not shouldGlow and frame.isGlowing then
-    ActionButtonSpellAlertManager:HideAlert(frame)
-    frame.isGlowing = false
-  end
+  SetFrameGlow(frame, shouldGlow)
 end
 
 
@@ -286,14 +306,22 @@ local function CreateSpellFrame(spellID)
 
 
   frame._cooldownEnd = nil
+  frame._harmfulGlowExpiration = nil
+  frame._harmfulGlowWatching = false
+  frame._harmfulGlowThreshold = HARMFUL_GLOW_THRESHOLD
+  frame._harmfulGlowAuraSpellID = nil
+  frame._harmfulGlowNextAuraCheck = nil
+  frame._harmfulGlowCheckUnits = HARMFUL_GLOW_UNITS
   frame.spellID = spellID
   frame.isGlowing = false
 
   ClassHUD.spellFrames[spellID] = frame
 
   frame:SetScript("OnUpdate", function(selfFrame)
+    local now = GetTime()
+
     if selfFrame._cooldownEnd then
-      local remain = selfFrame._cooldownEnd - GetTime()
+      local remain = selfFrame._cooldownEnd - now
       if remain > 0 then
         if not selfFrame._gcdActive then
           local secs = ClassHUD.FormatSeconds(remain)
@@ -308,6 +336,51 @@ local function CreateSpellFrame(spellID)
         selfFrame.cooldownText:SetText("")
         selfFrame.cooldownText:Hide()
         selfFrame.icon:SetDesaturated(false)
+      end
+    end
+
+    if selfFrame._harmfulGlowWatching then
+      local expiration = selfFrame._harmfulGlowExpiration
+      local threshold = selfFrame._harmfulGlowThreshold or HARMFUL_GLOW_THRESHOLD
+      local auraSpellID = selfFrame._harmfulGlowAuraSpellID or selfFrame.spellID
+      local auraStillPresent = true
+
+      local nextCheck = selfFrame._harmfulGlowNextAuraCheck
+      if not nextCheck or now >= nextCheck then
+        local units = selfFrame._harmfulGlowCheckUnits or HARMFUL_GLOW_UNITS
+        local auraCheck = auraSpellID and ClassHUD:GetAuraForSpell(auraSpellID, units) or nil
+        if not auraCheck then
+          auraCheck = ClassHUD:FindAuraByName(selfFrame.spellID, units)
+        end
+        if not auraCheck then
+          auraStillPresent = false
+        end
+        selfFrame._harmfulGlowNextAuraCheck = now + HARMFUL_GLOW_AURA_CHECK_INTERVAL
+      end
+
+      if not auraStillPresent then
+        selfFrame._harmfulGlowWatching = false
+        selfFrame._harmfulGlowExpiration = nil
+        selfFrame._harmfulGlowAuraSpellID = nil
+        selfFrame._harmfulGlowNextAuraCheck = nil
+        SetFrameGlow(selfFrame, false)
+      elseif expiration and expiration > 0 then
+        local remain = expiration - now
+        if remain > 0 then
+          SetFrameGlow(selfFrame, remain <= threshold)
+        else
+          selfFrame._harmfulGlowWatching = false
+          selfFrame._harmfulGlowExpiration = nil
+          selfFrame._harmfulGlowAuraSpellID = nil
+          selfFrame._harmfulGlowNextAuraCheck = nil
+          SetFrameGlow(selfFrame, false)
+        end
+      else
+        selfFrame._harmfulGlowWatching = false
+        selfFrame._harmfulGlowExpiration = nil
+        selfFrame._harmfulGlowAuraSpellID = nil
+        selfFrame._harmfulGlowNextAuraCheck = nil
+        SetFrameGlow(selfFrame, false)
       end
     end
   end)
