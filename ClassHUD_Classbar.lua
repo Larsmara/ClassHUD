@@ -4,6 +4,36 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local UI = ClassHUD.UI
 UI.attachments = UI.attachments or {}
 
+local function GetSpecSettings(class, specID)
+  local db = ClassHUD.db
+  if not db or not db.profile or not db.profile.classbars then return nil end
+  local perClass = db.profile.classbars[class]
+  if not perClass then return nil end
+  return perClass[specID]
+end
+
+local function IsComboEnabled(class, specID)
+  local settings = GetSpecSettings(class, specID)
+  if settings and settings.combo ~= nil then
+    return settings.combo
+  end
+  if class == "DRUID" then
+    -- Default to disabled for specs without explicit opt-in
+    return false
+  end
+  return true
+end
+
+local MOONKIN_FORM_ID = _G.MOONKIN_FORM or 31
+local INCARNATION_MOONKIN_FORM_ID = _G.INCARNATION_CHOSEN_OF_ELUNE or MOONKIN_FORM_ID
+
+local function IsMoonkinForm()
+  if not GetShapeshiftFormID then return false end
+  local formID = GetShapeshiftFormID()
+  if not formID or formID == 0 then return false end
+  return formID == MOONKIN_FORM_ID or formID == INCARNATION_MOONKIN_FORM_ID
+end
+
 -- ========= Advanced Class Resource System =========
 
 -- Map classes → special resource power types
@@ -189,22 +219,49 @@ local function ResolveSpecialPower()
   local _, class = UnitClass("player")
   local spec = GetSpecialization()
   local specID = spec and GetSpecializationInfo(spec) or 0
+
   local ptype = CLASS_POWER_ID[class]
+  if not ptype then return nil end
+
   if REQUIRED_SPEC[class] and specID ~= REQUIRED_SPEC[class] then return nil end
-  if class == "DRUID" and select(1, UnitPowerType("player")) ~= Enum.PowerType.Energy then
-    return nil
+
+  if ptype == Enum.PowerType.ComboPoints then
+    if not IsComboEnabled(class, specID) then
+      return nil
+    end
+    if class == "DRUID" and select(1, UnitPowerType("player")) ~= Enum.PowerType.Energy then
+      return nil
+    end
   end
+
   return ptype, specID
 end
 
 -- Main update entry
 function ClassHUD:UpdateSpecialPower()
-  if not self.db.profile.show.power then return end
+  if not (self.db and self.db.profile and self.db.profile.show.power) then
+    HideAllSegments(1)
+    if UI.power then UI.power:Hide() end
+    DeactivateEclipseBar()
+    return
+  end
+
+  local usingEclipse = self.InitBalanceEclipse and self:InitBalanceEclipse()
+  if usingEclipse then
+    HideAllSegments(1)
+    if UI.power then UI.power:Show() end
+    return
+  end
+
+  DeactivateEclipseBar()
+
   local ptype, specID = ResolveSpecialPower()
   if not ptype then
-    HideAllSegments(1); UI.power:Hide(); return
+    HideAllSegments(1)
+    if UI.power then UI.power:Hide() end
+    return
   end
-  UI.power:Show()
+  if UI.power then UI.power:Show() end
   if ptype == Enum.PowerType.Runes then
     self:UpdateRunes()
     return
@@ -281,8 +338,55 @@ local function QueryEclipseAuras()
   return nil
 end
 
+local function ResizeEclipseBar(f)
+  if not f then return end
+
+  local width = f:GetWidth()
+  if (not width or width <= 0) and UI.power then
+    width = UI.power:GetWidth()
+  end
+  if not width or width <= 0 then
+    width = (ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.width) or 250
+  end
+
+  local height = f:GetHeight()
+  if (not height or height <= 0) and UI.power then
+    height = UI.power:GetHeight()
+  end
+  if not height or height <= 0 then
+    local profile = ClassHUD.db and ClassHUD.db.profile
+    height = (profile and profile.height and profile.height.power) or 20
+  end
+
+  f:SetSize(width, height)
+
+  local segW = width / 4
+  for i, seg in ipairs(f.segments) do
+    seg:SetStatusBarTexture(ClassHUD:FetchStatusbar())
+    seg:SetSize(segW - 1, height)
+    seg:ClearAllPoints()
+    seg:SetPoint("LEFT", f, "LEFT", (i - 1) * segW, 0)
+  end
+
+  if f.activeBars then
+    if f.activeBars.SOLAR then
+      f.activeBars.SOLAR:SetStatusBarTexture(ClassHUD:FetchStatusbar())
+      f.activeBars.SOLAR:SetSize(width / 2, height)
+    end
+    if f.activeBars.LUNAR then
+      f.activeBars.LUNAR:SetStatusBarTexture(ClassHUD:FetchStatusbar())
+      f.activeBars.LUNAR:SetSize(width / 2, height)
+    end
+  end
+
+  if f.overlay then
+    f.overlay:SetAllPoints(f)
+  end
+end
+
 -- Reset til idle state (ingen aura aktiv)
 local function ResetEclipseBar(f)
+  ResizeEclipseBar(f)
   f.activeType, f.remaining = nil, nil
   f:SetScript("OnUpdate", nil)
 
@@ -374,6 +478,7 @@ end
 
 -- Start Eclipse state (active)
 local function TriggerEclipse(f, eclipseType, remain)
+  ResizeEclipseBar(f)
   f.activeType = eclipseType
   f.remaining  = remain or 15
   f:SetScript("OnUpdate", OnUpdateEclipse)
@@ -408,8 +513,7 @@ end
 -- Create container
 local function CreateEclipseBar(parent)
   local f = CreateFrame("Frame", "ClassHUD_EclipseBar", parent, "BackdropTemplate")
-  local width = ClassHUD.db and ClassHUD.db.profile.width or 250
-  f:SetSize(width, 20)
+  f:SetAllPoints(parent)
   f:Hide()
 
   -- Backdrop for hele containeren
@@ -424,22 +528,15 @@ local function CreateEclipseBar(parent)
   f.segments = {}
   f.activeBars = {}
 
-  local segW = width / 4
-
   -- Idle-segmenter (2 per side)
   for i = 1, 4 do
     local seg = CreateFrame("StatusBar", nil, f)
     seg:SetStatusBarTexture(ClassHUD:FetchStatusbar())
     seg:SetMinMaxValues(0, 1)
     seg:SetValue(1)
-    seg:SetSize(segW - 1, f:GetHeight())
-    seg:SetPoint("LEFT", f, "LEFT", (i - 1) * segW, 0)
-
-    if i <= 2 then
-      seg:SetStatusBarColor(0.3, 0.3, 0.3) -- idle grå
-    else
-      seg:SetStatusBarColor(0.3, 0.3, 0.3)
-    end
+    seg:SetSize(1, f:GetHeight())
+    seg:SetPoint("LEFT", f, "LEFT", 0, 0)
+    seg:SetStatusBarColor(0.3, 0.3, 0.3)
 
     seg.text = seg:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     seg.text:SetPoint("CENTER")
@@ -451,79 +548,117 @@ local function CreateEclipseBar(parent)
   f.activeBars.SOLAR = CreateFrame("StatusBar", nil, f)
   f.activeBars.SOLAR:SetStatusBarTexture(ClassHUD:FetchStatusbar())
   f.activeBars.SOLAR:SetMinMaxValues(0, 1)
-  f.activeBars.SOLAR:SetSize(width / 2, f:GetHeight())
+  f.activeBars.SOLAR:SetSize(1, f:GetHeight())
   f.activeBars.SOLAR:SetPoint("LEFT", f, "LEFT", 0, 0)
   f.activeBars.SOLAR:SetStatusBarColor(1.0, 0.9, 0.3)
   f.activeBars.SOLAR:SetOrientation("HORIZONTAL")
-  f.activeBars.SOLAR:SetReverseFill(true) -- 👈 endringen
+  f.activeBars.SOLAR:SetReverseFill(true)
   f.activeBars.SOLAR:Hide()
 
   f.activeBars.LUNAR = CreateFrame("StatusBar", nil, f)
   f.activeBars.LUNAR:SetStatusBarTexture(ClassHUD:FetchStatusbar())
   f.activeBars.LUNAR:SetMinMaxValues(0, 1)
-  f.activeBars.LUNAR:SetSize(width / 2, f:GetHeight())
+  f.activeBars.LUNAR:SetSize(1, f:GetHeight())
   f.activeBars.LUNAR:SetPoint("RIGHT", f, "RIGHT", 0, 0)
   f.activeBars.LUNAR:SetStatusBarColor(0.6, 0.4, 1.0)
   f.activeBars.LUNAR:Hide()
 
-  -- Etter at du har laget segmentene og activeBars:
   local overlay = CreateFrame("Frame", nil, f)
   overlay:SetAllPoints(f)
   overlay:SetFrameLevel(f:GetFrameLevel() + 10)
+  f.overlay = overlay
 
   f.cooldownText = overlay:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
   f.cooldownText:SetPoint("CENTER", overlay, "CENTER")
-
-
 
   ResetEclipseBar(f)
   return f
 end
 
--- Init
-function ClassHUD:InitBalanceEclipse()
-  if select(2, UnitClass("player")) ~= "DRUID" then return end
-  local spec = GetSpecialization()
-  if (spec and GetSpecializationInfo(spec) or 0) ~= specID_BALANCE then return end
-
-  if not UI.eclipseBar then
-    UI.eclipseBar = CreateEclipseBar(UI.anchor or UIParent)
-    UI.eclipseBar:SetPoint("TOP", UI.resource or UI.anchor or UIParent, "BOTTOM", 0, -4)
-    UI.eclipseBar:Show()
-  end
-
+local function DeactivateEclipseBar()
+  if not UI.eclipseBar then return end
   ResetEclipseBar(UI.eclipseBar)
-
-  -- Sync ved innlasting
-  local etype, remain = QueryEclipseAuras()
-  if etype then TriggerEclipse(UI.eclipseBar, etype, remain) end
+  UI.eclipseBar:Hide()
 end
 
--- Event handler
+function ClassHUD:ShouldUseEclipseBar()
+  local db = self.db and self.db.profile
+  if not db or not db.show or not db.show.power then return false end
+
+  local _, class = UnitClass("player")
+  if class ~= "DRUID" then return false end
+
+  local spec = GetSpecialization()
+  local specID = spec and GetSpecializationInfo(spec) or 0
+  if specID ~= specID_BALANCE then return false end
+
+  local settings = GetSpecSettings(class, specID)
+  if not (settings and settings.eclipse) then return false end
+
+  return IsMoonkinForm()
+end
+
+function ClassHUD:EnsureEclipseBar()
+  if not UI.power then return nil end
+  if not UI.eclipseBar then
+    UI.eclipseBar = CreateEclipseBar(UI.power)
+  end
+  return UI.eclipseBar
+end
+
+function ClassHUD:InitBalanceEclipse()
+  if not self:ShouldUseEclipseBar() then
+    DeactivateEclipseBar()
+    return false
+  end
+
+  local bar = self:EnsureEclipseBar()
+  if not bar then return false end
+
+  bar:Show()
+  bar:ClearAllPoints()
+  bar:SetAllPoints(UI.power)
+
+  local etype, remain = QueryEclipseAuras()
+  if etype then
+    TriggerEclipse(bar, etype, remain)
+  else
+    ResetEclipseBar(bar)
+  end
+
+  return true
+end
+
 function ClassHUD:HandleEclipseEvent(event, unit, spellID)
-  local f = UI.eclipseBar
-  if not f or unit ~= "player" then return end
+  if unit ~= "player" then return end
+
+  if not self:ShouldUseEclipseBar() then
+    DeactivateEclipseBar()
+    return
+  end
+
+  local bar = self:EnsureEclipseBar()
+  if not bar then return end
+
+  ResizeEclipseBar(bar)
 
   if event == "UNIT_AURA" then
     local etype, remain = QueryEclipseAuras()
     if etype then
-      TriggerEclipse(f, etype, remain)
+      TriggerEclipse(bar, etype, remain)
     else
-      ResetEclipseBar(f)
+      ResetEclipseBar(bar)
     end
     return
   end
 
   if event == "UNIT_SPELLCAST_SUCCEEDED" then
-    -- hopp helt over hvis aura er aktiv
-    local etype = QueryEclipseAuras()
-    if etype then return end
+    if QueryEclipseAuras() then return end
 
-    -- ellers idle-state precast refresh
     if WRATH_IDS[spellID] then
-      ResetEclipseBar(f)
+      ResetEclipseBar(bar)
     elseif STARFIRE_IDS[spellID] and not HasLunarCalling() then
-      ResetEclipseBar(f)
+      ResetEclipseBar(bar)
     end
   end
 end

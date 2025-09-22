@@ -272,7 +272,6 @@ function ClassHUD:FullUpdate()
   if self.UpdateHP then self:UpdateHP() end
   if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
   if self.UpdateSpecialPower then self:UpdateSpecialPower() end
-  if self.InitBalanceEclipse then self:InitBalanceEclipse() end
 end
 
 ---Rebuilds the Cooldown Viewer snapshot for the current class/spec.

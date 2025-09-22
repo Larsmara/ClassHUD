@@ -865,16 +865,6 @@ function ClassHUD_BuildOptions(addon)
               addon:FullUpdate()
             end,
           },
-          showPower = {
-            type = "toggle",
-            name = "Show Special Power",
-            order = 4,
-            get = function() return db.profile.show.power end,
-            set = function(_, value)
-              db.profile.show.power = value
-              addon:FullUpdate()
-            end,
-          },
           showBuffs = {
             type = "toggle",
             name = "Show Tracked Buff Bar",
@@ -953,19 +943,6 @@ function ClassHUD_BuildOptions(addon)
             end,
           },
 
-          powerSpacing = {
-            type = "range",
-            name = "Power Spacing",
-            order = 7,
-            min = 0,
-            max = 12,
-            step = 1,
-            get = function() return db.profile.powerSpacing or 2 end,
-            set = function(_, value)
-              db.profile.powerSpacing = value
-              addon:FullUpdate()
-            end,
-          },
           heightCast = {
             type = "range",
             name = "Cast Height",
@@ -1002,19 +979,6 @@ function ClassHUD_BuildOptions(addon)
             get = function() return db.profile.height.resource end,
             set = function(_, value)
               db.profile.height.resource = value
-              addon:FullUpdate()
-            end,
-          },
-          heightPower = {
-            type = "range",
-            name = "Special Power Height",
-            order = 11,
-            min = 8,
-            max = 40,
-            step = 1,
-            get = function() return db.profile.height.power end,
-            set = function(_, value)
-              db.profile.height.power = value
               addon:FullUpdate()
             end,
           },
@@ -1200,48 +1164,6 @@ function ClassHUD_BuildOptions(addon)
           },
         },
       },
-      classbars = {
-        type = "group",
-        name = "Class Bars",
-        order = 6,
-        args = {
-          druid = {
-            type = "group",
-            name = "Druid",
-            inline = false,
-            args = {
-              balanceEclipse = {
-                type = "toggle",
-                name = "Enable Eclipse Bar (Balance)",
-                get = function() return db.profile.classbars.DRUID[102].eclipse end,
-                set = function(_, val)
-                  db.profile.classbars.DRUID[102].eclipse = val
-                  addon:FullUpdate()
-                end,
-              },
-              balanceCombo = {
-                type = "toggle",
-                name = "Enable Combo Points (Balance)",
-                get = function() return db.profile.classbars.DRUID[102].combo end,
-                set = function(_, val)
-                  db.profile.classbars.DRUID[102].combo = val
-                  addon:FullUpdate()
-                end,
-              },
-              feralCombo = {
-                type = "toggle",
-                name = "Enable Combo Points (Feral)",
-                get = function() return db.profile.classbars.DRUID[103].combo end,
-                set = function(_, val)
-                  db.profile.classbars.DRUID[103].combo = val
-                  addon:FullUpdate()
-                end,
-              },
-            },
-          },
-        },
-      },
-
       colors = {
         type = "group",
         name = "Colors",
@@ -1284,18 +1206,201 @@ function ClassHUD_BuildOptions(addon)
             end,
             disabled = function() return db.profile.colors.resourceClass end,
           },
-          power = {
-            type = "color",
-            name = "Special Power",
-            order = 4,
-            get = function()
-              local c = db.profile.colors.power
-              return c.r, c.g, c.b
-            end,
-            set = function(_, r, g, b)
-              db.profile.colors.power = { r = r, g = g, b = b }
-              addon:UpdateSpecialPower()
-            end,
+        },
+      },
+      classbar = {
+        type = "group",
+        name = "Class Bar",
+        order = 3,
+        args = {
+          general = {
+            type = "group",
+            name = "General",
+            inline = true,
+            order = 1,
+            args = {
+              show = {
+                type = "toggle",
+                name = "Show Class Bar",
+                order = 1,
+                get = function() return db.profile.show.power end,
+                set = function(_, value)
+                  db.profile.show.power = value
+                  addon:FullUpdate()
+                end,
+              },
+              height = {
+                type = "range",
+                name = "Bar Height",
+                order = 2,
+                min = 8,
+                max = 40,
+                step = 1,
+                get = function() return db.profile.height.power end,
+                set = function(_, value)
+                  db.profile.height.power = value
+                  addon:FullUpdate()
+                end,
+                disabled = function() return not db.profile.show.power end,
+              },
+              spacing = {
+                type = "range",
+                name = "Segment Spacing",
+                order = 3,
+                min = 0,
+                max = 12,
+                step = 1,
+                get = function() return db.profile.powerSpacing or 2 end,
+                set = function(_, value)
+                  db.profile.powerSpacing = value
+                  addon:FullUpdate()
+                end,
+                disabled = function() return not db.profile.show.power end,
+              },
+            },
+          },
+          colors = {
+            type = "group",
+            name = "Colors",
+            inline = true,
+            order = 2,
+            args = {
+              power = {
+                type = "color",
+                name = "Special Power",
+                order = 1,
+                get = function()
+                  local c = db.profile.colors.power
+                  return c.r, c.g, c.b
+                end,
+                set = function(_, r, g, b)
+                  db.profile.colors.power = { r = r, g = g, b = b }
+                  addon:UpdateSpecialPower()
+                end,
+                disabled = function() return not db.profile.show.power end,
+              },
+            },
+          },
+          druid = {
+            type = "group",
+            name = "Druid",
+            order = 10,
+            args = {
+              balanceHeader = {
+                type = "header",
+                name = "Balance",
+                order = 1,
+              },
+              balanceEclipse = {
+                type = "toggle",
+                name = "Enable Eclipse Bar",
+                order = 2,
+                get = function()
+                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local spec = classbars and classbars[102]
+                  if spec and spec.eclipse ~= nil then
+                    return spec.eclipse
+                  end
+                  return true
+                end,
+                set = function(_, val)
+                  db.profile.classbars = db.profile.classbars or {}
+                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
+                  db.profile.classbars.DRUID[102] = db.profile.classbars.DRUID[102] or {}
+                  db.profile.classbars.DRUID[102].eclipse = val
+                  addon:FullUpdate()
+                end,
+              },
+              balanceCombo = {
+                type = "toggle",
+                name = "Enable Combo Points (Balance)",
+                order = 3,
+                get = function()
+                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local spec = classbars and classbars[102]
+                  return spec and spec.combo or false
+                end,
+                set = function(_, val)
+                  db.profile.classbars = db.profile.classbars or {}
+                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
+                  db.profile.classbars.DRUID[102] = db.profile.classbars.DRUID[102] or {}
+                  db.profile.classbars.DRUID[102].combo = val
+                  addon:FullUpdate()
+                end,
+              },
+              feralHeader = {
+                type = "header",
+                name = "Feral",
+                order = 4,
+              },
+              feralCombo = {
+                type = "toggle",
+                name = "Enable Combo Points (Feral)",
+                order = 5,
+                get = function()
+                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local spec = classbars and classbars[103]
+                  if spec and spec.combo ~= nil then
+                    return spec.combo
+                  end
+                  return true
+                end,
+                set = function(_, val)
+                  db.profile.classbars = db.profile.classbars or {}
+                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
+                  db.profile.classbars.DRUID[103] = db.profile.classbars.DRUID[103] or {}
+                  db.profile.classbars.DRUID[103].combo = val
+                  addon:FullUpdate()
+                end,
+              },
+              guardianHeader = {
+                type = "header",
+                name = "Guardian",
+                order = 6,
+              },
+              guardianCombo = {
+                type = "toggle",
+                name = "Enable Combo Points (Guardian)",
+                order = 7,
+                get = function()
+                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local spec = classbars and classbars[104]
+                  if spec and spec.combo ~= nil then
+                    return spec.combo
+                  end
+                  return true
+                end,
+                set = function(_, val)
+                  db.profile.classbars = db.profile.classbars or {}
+                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
+                  db.profile.classbars.DRUID[104] = db.profile.classbars.DRUID[104] or {}
+                  db.profile.classbars.DRUID[104].combo = val
+                  addon:FullUpdate()
+                end,
+              },
+              restoHeader = {
+                type = "header",
+                name = "Restoration",
+                order = 8,
+              },
+              restoCombo = {
+                type = "toggle",
+                name = "Enable Combo Points (Restoration)",
+                order = 9,
+                get = function()
+                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local spec = classbars and classbars[105]
+                  return spec and spec.combo or false
+                end,
+                set = function(_, val)
+                  db.profile.classbars = db.profile.classbars or {}
+                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
+                  db.profile.classbars.DRUID[105] = db.profile.classbars.DRUID[105] or {}
+                  db.profile.classbars.DRUID[105].combo = val
+                  addon:FullUpdate()
+                end,
+              },
+            },
           },
         },
       },
