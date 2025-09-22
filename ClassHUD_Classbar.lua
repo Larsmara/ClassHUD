@@ -126,6 +126,8 @@ local function HideAllSegments(from)
   end
 end
 
+local DeactivateEclipseBar
+
 -- Advanced segment updater
 function ClassHUD:UpdateSegmentsAdvanced(ptype, max, partial)
   local w = self.db.profile.width
@@ -575,7 +577,7 @@ local function CreateEclipseBar(parent)
   return f
 end
 
-local function DeactivateEclipseBar()
+function DeactivateEclipseBar()
   if not UI.eclipseBar then return end
   ResetEclipseBar(UI.eclipseBar)
   UI.eclipseBar:Hide()
