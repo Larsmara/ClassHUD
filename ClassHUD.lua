@@ -32,6 +32,10 @@ ClassHUD._pending = {
   cooldown = false,
   target = false,
 }
+ClassHUD._cooldownTextFrames = ClassHUD._cooldownTextFrames or {}
+ClassHUD._trackedBarFrames = ClassHUD._trackedBarFrames or {}
+ClassHUD._textTickerToken = ClassHUD._textTickerToken or nil
+ClassHUD._barTickerToken = ClassHUD._barTickerToken or nil
 
 function ClassHUD:RequestUpdate(kind)
   kind = kind or "any"
@@ -72,6 +76,186 @@ function ClassHUD:FlushUpdates()
   pending.aura = false
   pending.cooldown = false
   pending.target = false
+end
+
+local COOLDOWN_TICK_INTERVAL = 0.10
+local BAR_TICK_INTERVAL = 0.10
+
+local function CancelTicker(self, field)
+  local token = self[field]
+  if token then
+    self:CancelTimer(token)
+    self[field] = nil
+  end
+end
+
+local function EnsureTicker(self, field, method, interval, registry)
+  if not next(registry) then
+    CancelTicker(self, field)
+    return
+  end
+
+  if not self[field] then
+    self[field] = self:ScheduleRepeatingTimer(method, interval)
+  end
+end
+
+function ClassHUD:RegisterCooldownTextFrame(frame)
+  if not frame then return end
+  self._cooldownTextFrames[frame] = true
+  self:RefreshCooldownTextFrame(frame)
+  EnsureTicker(self, "_textTickerToken", "TickCooldownTexts", COOLDOWN_TICK_INTERVAL, self._cooldownTextFrames)
+end
+
+function ClassHUD:UnregisterCooldownTextFrame(frame)
+  if not frame then return end
+  self._cooldownTextFrames[frame] = nil
+
+  if frame.cooldownText then
+    frame.cooldownText:SetText("")
+    frame.cooldownText:Hide()
+  end
+  frame._cooldownTextValue = nil
+
+  EnsureTicker(self, "_textTickerToken", "TickCooldownTexts", COOLDOWN_TICK_INTERVAL, self._cooldownTextFrames)
+end
+
+function ClassHUD:RefreshCooldownTextFrame(frame, now)
+  if not frame or not frame.cooldownText then return end
+
+  now = now or GetTime()
+
+  local fontString = frame.cooldownText
+  local gcdActive = frame._gcdActive
+  local endTime = frame._cooldownEnd
+  local newText
+  local shouldShow = false
+
+  if endTime and not gcdActive then
+    local remaining = endTime - now
+    if remaining > 0 then
+      newText = ClassHUD.FormatSeconds(remaining)
+      shouldShow = newText and newText ~= ""
+    else
+      frame._cooldownEnd = nil
+      if frame.icon and frame.icon.SetDesaturated then
+        frame.icon:SetDesaturated(false)
+      end
+    end
+  end
+
+  if shouldShow then
+    if frame._cooldownTextValue ~= newText then
+      fontString:SetText(newText or "")
+      frame._cooldownTextValue = newText
+    end
+    if not fontString:IsShown() then
+      fontString:Show()
+    end
+  else
+    if fontString:IsShown() or frame._cooldownTextValue then
+      fontString:SetText("")
+      fontString:Hide()
+      frame._cooldownTextValue = nil
+    end
+  end
+end
+
+function ClassHUD:RegisterTrackedBarFrame(frame)
+  if not frame then return end
+  self._trackedBarFrames[frame] = true
+  EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, self._trackedBarFrames)
+end
+
+function ClassHUD:UnregisterTrackedBarFrame(frame)
+  if not frame then return end
+  self._trackedBarFrames[frame] = nil
+
+  if frame.timer then
+    frame.timer:SetText("")
+    frame.timer:Hide()
+  end
+  frame._timerTextValue = nil
+
+  EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, self._trackedBarFrames)
+end
+
+function ClassHUD:TickCooldownTexts()
+  local frames = self._cooldownTextFrames
+  if not frames or not next(frames) then
+    EnsureTicker(self, "_textTickerToken", "TickCooldownTexts", COOLDOWN_TICK_INTERVAL, frames or {})
+    return
+  end
+
+  local now = GetTime()
+
+  for frame in pairs(frames) do
+    if not frame or not frame.cooldownText then
+      frames[frame] = nil
+    else
+      self:RefreshCooldownTextFrame(frame, now)
+    end
+  end
+
+  EnsureTicker(self, "_textTickerToken", "TickCooldownTexts", COOLDOWN_TICK_INTERVAL, frames)
+end
+
+function ClassHUD:TickTrackedBars()
+  local frames = self._trackedBarFrames
+  if not frames or not next(frames) then
+    EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, frames or {})
+    return
+  end
+
+  local now = GetTime()
+  local pendingRefresh = nil
+
+  for frame in pairs(frames) do
+    if not frame or not frame._duration or not frame._expiration then
+      frames[frame] = nil
+    else
+      local remaining = frame._expiration - now
+      if remaining < 0 then remaining = 0 end
+
+      if frame.SetValue then
+        local current = frame:GetValue()
+        if current ~= remaining then
+          frame:SetValue(remaining)
+        end
+      end
+
+      if frame._showTimer and frame.timer then
+        local formatted = ClassHUD.FormatSeconds(remaining)
+        if frame._timerTextValue ~= formatted then
+          frame.timer:SetText(formatted or "")
+          frame._timerTextValue = formatted
+        end
+        if not frame.timer:IsShown() then
+          frame.timer:Show()
+        end
+      elseif frame.timer then
+        if frame.timer:IsShown() then
+          frame.timer:Hide()
+        end
+        frame._timerTextValue = nil
+      end
+
+      if remaining <= 0 then
+        pendingRefresh = pendingRefresh or {}
+        table.insert(pendingRefresh, frame)
+      end
+    end
+  end
+
+  if pendingRefresh and self.UpdateTrackedBarFrame then
+    for _, frame in ipairs(pendingRefresh) do
+      if frames[frame] then
+        self:UpdateTrackedBarFrame(frame)
+      end
+    end
+  end
+
+  EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, frames)
 end
 
 ---@class ClassHUDUI

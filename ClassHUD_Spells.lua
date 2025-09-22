@@ -239,25 +239,25 @@ end
 
 
 local function UpdateCooldownText(frame, gcdActive)
-  if gcdActive then
-    frame.cooldownText:SetText("")
-    frame.cooldownText:Hide()
+  local hasCooldown = frame._cooldownEnd ~= nil
+
+  frame._gcdActive = (gcdActive and not hasCooldown) or false
+
+  if frame._gcdActive then
+    if frame.cooldownText:IsShown() or frame._cooldownTextValue then
+      frame.cooldownText:SetText("")
+      frame.cooldownText:Hide()
+      frame._cooldownTextValue = nil
+    end
     return
   end
 
-  if frame._cooldownEnd then
-    local remain = frame._cooldownEnd - GetTime()
-    if remain > 0 then
-      local secs = ClassHUD.FormatSeconds(remain)
-      frame.cooldownText:SetText(secs or "")
-      frame.cooldownText:Show()
-    else
+  if not hasCooldown then
+    if frame.cooldownText:IsShown() or frame._cooldownTextValue then
       frame.cooldownText:SetText("")
       frame.cooldownText:Hide()
+      frame._cooldownTextValue = nil
     end
-  else
-    frame.cooldownText:SetText("")
-    frame.cooldownText:Hide()
   end
 end
 
@@ -306,6 +306,8 @@ local function CreateSpellFrame(spellID)
 
 
   frame._cooldownEnd = nil
+  frame._cooldownTextValue = nil
+  frame._gcdActive = false
   frame._harmfulGlowExpiration = nil
   frame._harmfulGlowWatching = false
   frame._harmfulGlowThreshold = HARMFUL_GLOW_THRESHOLD
@@ -318,63 +320,39 @@ local function CreateSpellFrame(spellID)
   ClassHUD.spellFrames[spellID] = frame
 
   frame:SetScript("OnUpdate", function(selfFrame)
-    local now = GetTime()
-
-    if selfFrame._cooldownEnd then
-      local remain = selfFrame._cooldownEnd - now
-      if remain > 0 then
-        if not selfFrame._gcdActive then
-          local secs = ClassHUD.FormatSeconds(remain)
-          selfFrame.cooldownText:SetText(secs or "")
-          selfFrame.cooldownText:Show()
-        else
-          selfFrame.cooldownText:SetText("")
-          selfFrame.cooldownText:Hide()
-        end
-      else
-        selfFrame._cooldownEnd = nil
-        selfFrame.cooldownText:SetText("")
-        selfFrame.cooldownText:Hide()
-        selfFrame.icon:SetDesaturated(false)
-      end
+    if not selfFrame._harmfulGlowWatching then
+      return
     end
 
-    if selfFrame._harmfulGlowWatching then
-      local expiration = selfFrame._harmfulGlowExpiration
-      local threshold = selfFrame._harmfulGlowThreshold or HARMFUL_GLOW_THRESHOLD
-      local auraSpellID = selfFrame._harmfulGlowAuraSpellID or selfFrame.spellID
-      local auraStillPresent = true
+    local now = GetTime()
+    local expiration = selfFrame._harmfulGlowExpiration
+    local threshold = selfFrame._harmfulGlowThreshold or HARMFUL_GLOW_THRESHOLD
+    local auraSpellID = selfFrame._harmfulGlowAuraSpellID or selfFrame.spellID
+    local auraStillPresent = true
 
-      local nextCheck = selfFrame._harmfulGlowNextAuraCheck
-      if not nextCheck or now >= nextCheck then
-        local units = selfFrame._harmfulGlowCheckUnits or HARMFUL_GLOW_UNITS
-        local auraCheck = auraSpellID and ClassHUD:GetAuraForSpell(auraSpellID, units) or nil
-        if not auraCheck then
-          auraCheck = ClassHUD:FindAuraByName(selfFrame.spellID, units)
-        end
-        if not auraCheck then
-          auraStillPresent = false
-        end
-        selfFrame._harmfulGlowNextAuraCheck = now + HARMFUL_GLOW_AURA_CHECK_INTERVAL
+    local nextCheck = selfFrame._harmfulGlowNextAuraCheck
+    if not nextCheck or now >= nextCheck then
+      local units = selfFrame._harmfulGlowCheckUnits or HARMFUL_GLOW_UNITS
+      local auraCheck = auraSpellID and ClassHUD:GetAuraForSpell(auraSpellID, units) or nil
+      if not auraCheck then
+        auraCheck = ClassHUD:FindAuraByName(selfFrame.spellID, units)
       end
+      if not auraCheck then
+        auraStillPresent = false
+      end
+      selfFrame._harmfulGlowNextAuraCheck = now + HARMFUL_GLOW_AURA_CHECK_INTERVAL
+    end
 
-      if not auraStillPresent then
-        selfFrame._harmfulGlowWatching = false
-        selfFrame._harmfulGlowExpiration = nil
-        selfFrame._harmfulGlowAuraSpellID = nil
-        selfFrame._harmfulGlowNextAuraCheck = nil
-        SetFrameGlow(selfFrame, false)
-      elseif expiration and expiration > 0 then
-        local remain = expiration - now
-        if remain > 0 then
-          SetFrameGlow(selfFrame, remain <= threshold)
-        else
-          selfFrame._harmfulGlowWatching = false
-          selfFrame._harmfulGlowExpiration = nil
-          selfFrame._harmfulGlowAuraSpellID = nil
-          selfFrame._harmfulGlowNextAuraCheck = nil
-          SetFrameGlow(selfFrame, false)
-        end
+    if not auraStillPresent then
+      selfFrame._harmfulGlowWatching = false
+      selfFrame._harmfulGlowExpiration = nil
+      selfFrame._harmfulGlowAuraSpellID = nil
+      selfFrame._harmfulGlowNextAuraCheck = nil
+      SetFrameGlow(selfFrame, false)
+    elseif expiration and expiration > 0 then
+      local remain = expiration - now
+      if remain > 0 then
+        SetFrameGlow(selfFrame, remain <= threshold)
       else
         selfFrame._harmfulGlowWatching = false
         selfFrame._harmfulGlowExpiration = nil
@@ -382,8 +360,16 @@ local function CreateSpellFrame(spellID)
         selfFrame._harmfulGlowNextAuraCheck = nil
         SetFrameGlow(selfFrame, false)
       end
+    else
+      selfFrame._harmfulGlowWatching = false
+      selfFrame._harmfulGlowExpiration = nil
+      selfFrame._harmfulGlowAuraSpellID = nil
+      selfFrame._harmfulGlowNextAuraCheck = nil
+      SetFrameGlow(selfFrame, false)
     end
   end)
+
+  ClassHUD:RegisterCooldownTextFrame(frame)
 
 
 
@@ -443,64 +429,12 @@ local function CreateBuffFrame(buffID)
 
   f.buffID = buffID
   f._cooldownEnd = nil
-
-  -- Live oppdatering av vår egen cooldown-tekst
-  f:SetScript("OnUpdate", function(self)
-    local t = self._cooldownEnd
-    if not t then
-      if self.cooldownText:IsShown() then
-        self.cooldownText:SetText("")
-        self.cooldownText:Hide()
-      end
-      return
-    end
-    local remain = t - GetTime()
-    if remain > 0 then
-      local secs = math.floor(remain + 0.5)
-      if secs > 0 then
-        self.cooldownText:SetText(secs)
-        self.cooldownText:Show()
-      else
-        self.cooldownText:SetText("")
-        self.cooldownText:Hide()
-      end
-    else
-      self._cooldownEnd = nil
-      self.cooldownText:SetText("")
-      self.cooldownText:Hide()
-    end
-  end)
+  f._cooldownTextValue = nil
+  f._gcdActive = false
 
   trackedBuffPool[buffID] = f
   return f
 end
-
-
-
-local function OnTrackedBarUpdate(self)
-  if not self._duration or not self._expiration then
-    self:SetScript("OnUpdate", nil)
-    return
-  end
-
-  local remaining = self._expiration - GetTime()
-  if remaining < 0 then remaining = 0 end
-
-  self:SetValue(remaining)
-
-  if self._showTimer and self.timer then
-    self.timer:SetText(ClassHUD.FormatSeconds(remaining))
-    self.timer:Show()
-  elseif self.timer then
-    self.timer:Hide()
-  end
-
-  if remaining <= 0 then
-    self:SetScript("OnUpdate", nil)
-    ClassHUD:UpdateTrackedBarFrame(self)
-  end
-end
-
 local function CreateTrackedBarFrame(buffID)
   if trackedBarPool[buffID] then
     return trackedBarPool[buffID]
@@ -541,6 +475,7 @@ local function CreateTrackedBarFrame(buffID)
   bar._activeColor = CopyColor(ClassHUD:GetDefaultTrackedBarColor())
   bar._inactiveColor = CopyColor(INACTIVE_BAR_COLOR)
   bar.cooldownSpellID = buffID
+  bar._timerTextValue = nil
 
   bar:SetMinMaxValues(0, 1)
   bar:SetValue(0)
@@ -805,15 +740,12 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
       end
     end
 
-    -- >>> legg til disse to linjene:
     frame._cooldownEnd = aura.expirationTime
-    frame.cooldownText:Show()
+    ClassHUD:RegisterCooldownTextFrame(frame)
   else
     CooldownFrame_Clear(frame.cooldown)
-    -- >>> og disse to linjene:
     frame._cooldownEnd = nil
-    frame.cooldownText:SetText("")
-    frame.cooldownText:Hide()
+    ClassHUD:UnregisterCooldownTextFrame(frame)
   end
 
   local stacks = aura and (aura.applications or aura.stackCount or aura.charges)
@@ -867,18 +799,18 @@ local function UpdateTrackedBarFrame(frame)
       frame._expiration = aura.expirationTime
       frame:SetMinMaxValues(0, aura.duration)
       frame:SetValue(math.max(0, aura.expirationTime - GetTime()))
-      frame:SetScript("OnUpdate", OnTrackedBarUpdate)
-      OnTrackedBarUpdate(frame)
+      frame._timerTextValue = nil
+      if frame.timer then
+        frame.timer:SetText("")
+        frame.timer:Hide()
+      end
+      ClassHUD:RegisterTrackedBarFrame(frame)
     else
       frame._duration = nil
       frame._expiration = nil
       frame:SetMinMaxValues(0, 1)
       frame:SetValue(1)
-      frame:SetScript("OnUpdate", nil)
-      if frame.timer then
-        frame.timer:SetText("")
-        frame.timer:Hide()
-      end
+      ClassHUD:UnregisterTrackedBarFrame(frame)
     end
 
     return true
@@ -889,12 +821,7 @@ local function UpdateTrackedBarFrame(frame)
   frame:SetMinMaxValues(0, 1)
   frame:SetValue(0)
   frame:SetStatusBarColor(frame._inactiveColor.r, frame._inactiveColor.g, frame._inactiveColor.b, frame._inactiveColor.a)
-  frame:SetScript("OnUpdate", nil)
-
-  if frame.timer then
-    frame.timer:SetText("")
-    frame.timer:Hide()
-  end
+  ClassHUD:UnregisterTrackedBarFrame(frame)
   if frame.stacks then
     frame.stacks:SetText("")
     frame.stacks:Hide()
@@ -913,12 +840,13 @@ function ClassHUD:BuildTrackedBuffFrames()
   if self.trackedBuffFrames then
     for _, frame in ipairs(self.trackedBuffFrames) do
       frame:Hide()
+      ClassHUD:UnregisterCooldownTextFrame(frame)
     end
   end
   if self.trackedBarFrames then
     for _, frame in ipairs(self.trackedBarFrames) do
       frame:Hide()
-      frame:SetScript("OnUpdate", nil)
+      ClassHUD:UnregisterTrackedBarFrame(frame)
     end
   end
 
@@ -1110,6 +1038,7 @@ local function UpdateSpellFrame(frame)
   -- Glow & tekst
   UpdateGlow(frame, aura, sid, data)
   UpdateCooldownText(frame, gcdActive)
+  ClassHUD:RefreshCooldownTextFrame(frame)
 end
 
 
