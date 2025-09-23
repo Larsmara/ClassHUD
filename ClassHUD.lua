@@ -32,8 +32,19 @@ ClassHUD._pending = {
   any = false,
   aura = false,
   cooldown = false,
+  resource = false,
   target = false,
 }
+ClassHUD._framesByConcern = ClassHUD._framesByConcern or {
+  aura = ClassHUD._framesByConcern and ClassHUD._framesByConcern.aura or {},
+  cooldown = ClassHUD._framesByConcern and ClassHUD._framesByConcern.cooldown or {},
+  range = ClassHUD._framesByConcern and ClassHUD._framesByConcern.range or {},
+  resource = ClassHUD._framesByConcern and ClassHUD._framesByConcern.resource or {},
+}
+ClassHUD._framesByConcern.cooldown = ClassHUD._framesByConcern.cooldown or {}
+ClassHUD._framesByConcern.range = ClassHUD._framesByConcern.range or {}
+ClassHUD._framesByConcern.resource = ClassHUD._framesByConcern.resource or {}
+ClassHUD._framesByConcern.aura = ClassHUD._framesByConcern.aura or {}
 ClassHUD._cooldownTextFrames = ClassHUD._cooldownTextFrames or {}
 ClassHUD._trackedBarFrames = ClassHUD._trackedBarFrames or {}
 ClassHUD._trackedAuraIDs = ClassHUD._trackedAuraIDs or {}
@@ -48,6 +59,7 @@ function ClassHUD:RequestUpdate(kind)
       any = false,
       aura = false,
       cooldown = false,
+      resource = false,
       target = false,
     }
   end
@@ -69,14 +81,41 @@ function ClassHUD:FlushUpdates()
   local pending = self._pending
   if not pending then return end
 
-  local runSpellUpdate = pending.any or pending.cooldown or pending.target
+  local runSpellUpdate = pending.any or pending.cooldown or pending.resource or pending.target or pending.aura
   local runBuffRebuild = pending.any or pending.aura
 
   local spellHandled = false
   local buffHandled = false
 
   if runSpellUpdate and self.UpdateAllSpellFrames then
-    self:UpdateAllSpellFrames()
+    if pending.any then
+      self:UpdateAllSpellFrames()
+    else
+      local concernFlags = {}
+      if pending.cooldown then concernFlags.cooldown = true end
+      if pending.resource then concernFlags.resource = true end
+      if pending.target then
+        concernFlags.range = true
+        concernFlags.aura = true
+      end
+      if pending.aura then
+        concernFlags.aura = true
+      end
+
+      local ordered = { "cooldown", "resource", "aura", "range" }
+      local list = {}
+      for _, key in ipairs(ordered) do
+        if concernFlags[key] then
+          list[#list + 1] = key
+        end
+      end
+
+      if #list == 1 then
+        self:UpdateAllSpellFrames(list[1])
+      elseif #list > 1 then
+        self:UpdateAllSpellFrames(list)
+      end
+    end
     spellHandled = true
   end
 
@@ -95,6 +134,7 @@ function ClassHUD:FlushUpdates()
   pending.any = false
   pending.aura = false
   pending.cooldown = false
+  pending.resource = false
   pending.target = false
 end
 
@@ -827,6 +867,9 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if unit == "player" then
       if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
       if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+      if ClassHUD.UpdateAllSpellFrames then
+        ClassHUD:RequestUpdate("resource")
+      end
     end
     return
   end
@@ -834,16 +877,25 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   if event == "UPDATE_SHAPESHIFT_FORM" then
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if ClassHUD.UpdateAllSpellFrames then
+      ClassHUD:RequestUpdate("resource")
+    end
     return
   end
 
   if event == "UNIT_POWER_POINT_CHARGE" and unit == "player" then
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if ClassHUD.UpdateAllSpellFrames then
+      ClassHUD:RequestUpdate("resource")
+    end
     return
   end
 
   if event == "RUNE_POWER_UPDATE" or event == "RUNE_TYPE_UPDATE" then
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if ClassHUD.UpdateAllSpellFrames then
+      ClassHUD:RequestUpdate("resource")
+    end
     return
   end
 
