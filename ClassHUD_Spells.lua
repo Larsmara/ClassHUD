@@ -18,6 +18,123 @@ local HARMFUL_GLOW_THRESHOLD = 5
 local HARMFUL_GLOW_AURA_CHECK_INTERVAL = 0.1
 local HARMFUL_GLOW_UNITS = { "target", "focus" }
 local TRACKED_UNITS = { "player", "pet" }
+local SPELL_AURA_UNITS_DEFAULT = TRACKED_UNITS
+local SPELL_AURA_UNITS_HARMFUL = { "target", "focus" }
+
+local function CopyCandidates(list)
+  if type(list) ~= "table" then return nil end
+  local copy = {}
+  for i = 1, #list do
+    copy[i] = list[i]
+  end
+  return copy
+end
+
+local function ExtractAuraSpellID(payload)
+  if type(payload) == "number" then
+    return payload
+  end
+  if type(payload) == "table" then
+    local spellID = payload.spellId or payload.spellID or payload.spell or payload.id
+    if type(spellID) == "number" then
+      return spellID
+    end
+  end
+  return nil
+end
+
+local function ClearFrameAuraWatchers(frame)
+  if not frame then return end
+
+  local spellBuckets = ClassHUD._auraWatchersBySpellID
+  local registered = frame._registeredAuraSpellIDs
+  if registered and spellBuckets then
+    for i = #registered, 1, -1 do
+      local spellID = registered[i]
+      local bucket = spellBuckets[spellID]
+      if bucket then
+        bucket[frame] = nil
+        if not next(bucket) then
+          spellBuckets[spellID] = nil
+        end
+      end
+      registered[i] = nil
+    end
+  elseif registered then
+    wipe(registered)
+  end
+
+  local unitBuckets = ClassHUD._auraWatchersByUnit
+  local registeredUnits = frame._registeredAuraUnits
+  if registeredUnits and unitBuckets then
+    for unit in pairs(registeredUnits) do
+      local bucket = unitBuckets[unit]
+      if bucket then
+        bucket[frame] = nil
+      end
+      registeredUnits[unit] = nil
+    end
+  elseif registeredUnits then
+    wipe(registeredUnits)
+  end
+end
+
+local function RegisterFrameAuraWatchers(frame, candidates, units)
+  if not frame then return end
+
+  ClearFrameAuraWatchers(frame)
+
+  local spellBuckets = ClassHUD._auraWatchersBySpellID
+  local unitBuckets = ClassHUD._auraWatchersByUnit
+
+  if type(candidates) == "table" and spellBuckets then
+    frame._registeredAuraSpellIDs = frame._registeredAuraSpellIDs or {}
+    local registered = frame._registeredAuraSpellIDs
+    for i = 1, #candidates do
+      local spellID = candidates[i]
+      if type(spellID) == "number" and spellID > 0 then
+        local bucket = spellBuckets[spellID]
+        if not bucket then
+          bucket = {}
+          spellBuckets[spellID] = bucket
+        end
+        bucket[frame] = true
+        registered[#registered + 1] = spellID
+      end
+    end
+  end
+
+  if type(units) == "table" and unitBuckets then
+    frame._registeredAuraUnits = frame._registeredAuraUnits or {}
+    local registeredUnits = frame._registeredAuraUnits
+    for i = 1, #units do
+      local unit = units[i]
+      if unitBuckets[unit] then
+        unitBuckets[unit][frame] = true
+        registeredUnits[unit] = true
+      end
+    end
+  end
+end
+
+ClassHUD.ClearFrameAuraWatchers = ClearFrameAuraWatchers
+ClassHUD.RegisterFrameAuraWatchers = RegisterFrameAuraWatchers
+
+local function MarkFrameForAuraUpdate(frame)
+  if not frame then return end
+
+  local dirty = ClassHUD._pendingAuraFrames
+  if not dirty then
+    dirty = {}
+    ClassHUD._pendingAuraFrames = dirty
+  end
+
+  dirty[frame] = true
+
+  if not ClassHUD._auraFlushTimer then
+    ClassHUD._auraFlushTimer = ClassHUD:ScheduleTimer("FlushAuraChanges", 0)
+  end
+end
 
 local concernScratch = {}
 
@@ -167,6 +284,20 @@ local function EnsureAttachment(name)
 end
 
 
+local function ShouldShowCooldownNumbers()
+  local db = ClassHUD.db
+  if not db or not db.profile then
+    return true
+  end
+
+  local settings = db.profile.cooldowns
+  if settings and settings.showText ~= nil then
+    return settings.showText
+  end
+
+  return true
+end
+
 local function CollectAuraSpellIDs(entry, primaryID)
   return ClassHUD:GetAuraCandidatesForEntry(entry, primaryID)
 end
@@ -314,8 +445,10 @@ local function CreateSpellFrame(spellID)
   frame.cooldownText = frame.overlay:CreateFontString(nil, "OVERLAY")
   frame.cooldownText:ClearAllPoints()
   frame.cooldownText:SetPoint("BOTTOM", frame, "BOTTOM", 0, 2)
-  local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.spellFontSize or 12)
-  frame.cooldownText:SetFont(fontPath, fontSize, "OUTLINE")
+  local cooldownFontPath, cooldownFontSize = ClassHUD:FetchFont(12)
+  frame.cooldownText:SetFont(cooldownFontPath, cooldownFontSize, "OUTLINE")
+  frame.cooldownText:SetJustifyH("CENTER")
+  frame.cooldownText:SetJustifyV("MIDDLE")
   frame.cooldownText:Hide()
 
 
@@ -328,6 +461,7 @@ local function CreateSpellFrame(spellID)
   frame.spellID = spellID
   frame.isGlowing = false
   frame._last = frame._last or {}
+  frame._updateKind = "spell"
 
   ClassHUD.spellFrames[spellID] = frame
 
@@ -432,12 +566,17 @@ local function CreateBuffFrame(buffID)
   f.cooldownText = f.overlay:CreateFontString(nil, "OVERLAY")
   f.cooldownText:ClearAllPoints()
   f.cooldownText:SetPoint("BOTTOM", f, "BOTTOM", 0, 2)
-  f.cooldownText:SetFont(fontPath, fontSize, "OUTLINE")
+  local cooldownFontPath, cooldownFontSize = ClassHUD:FetchFont(12)
+  f.cooldownText:SetFont(cooldownFontPath, cooldownFontSize, "OUTLINE")
   f.cooldownText:SetJustifyH("CENTER")
   f.cooldownText:SetJustifyV("MIDDLE")
   f.cooldownText:Hide()
 
   f.buffID = buffID
+  f._updateKind = "trackedIcon"
+  f._auraUnitList = TRACKED_UNITS
+  f._layoutActive = false
+  f._last = f._last or {}
 
   trackedBuffPool[buffID] = f
   return f
@@ -453,7 +592,11 @@ local function CreateTrackedBarFrame(buffID)
 
   local bar = ClassHUD:CreateStatusBar(parent, height)
   bar.buffID = buffID
+  bar._updateKind = "trackedBar"
+  bar._auraUnitList = TRACKED_UNITS
+  bar._layoutActive = false
   bar.auraSpellIDs = { buffID }
+  bar._trackedAuraCandidates = bar.auraSpellIDs
   bar.text:Hide()
   bar.icon = bar:CreateTexture(nil, "ARTWORK")
   bar.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
@@ -596,6 +739,69 @@ local function LayoutTrackedIcons(iconFrames, opts)
   container:Show()
 end
 
+function ClassHUD:UpdateTrackedLayoutSnapshot()
+  local snapshot = self._trackedLayoutSnapshot
+  if not snapshot then
+    snapshot = {}
+    self._trackedLayoutSnapshot = snapshot
+  end
+
+  local iconsContainer = EnsureAttachment("TRACKED_ICONS")
+  local barsContainer  = EnsureAttachment("TRACKED_BARS")
+
+  local iconsHeight = iconsContainer and iconsContainer._height or 0
+  local iconsGap    = iconsContainer and iconsContainer._afterGap or nil
+  local barsHeight  = barsContainer and barsContainer._height or 0
+  local barsGap     = barsContainer and barsContainer._afterGap or nil
+
+  local changed = snapshot.iconsHeight ~= iconsHeight
+      or snapshot.iconsGap ~= iconsGap
+      or snapshot.barsHeight ~= barsHeight
+      or snapshot.barsGap ~= barsGap
+
+  snapshot.iconsHeight = iconsHeight
+  snapshot.iconsGap = iconsGap
+  snapshot.barsHeight = barsHeight
+  snapshot.barsGap = barsGap
+
+  if changed and self.Layout then
+    self:Layout()
+  end
+end
+
+
+function ClassHUD:ApplyTrackedBuffLayout()
+  local registry = self._trackedBuffRegistry or {}
+  local orderList = self._trackedBuffOrder or {}
+
+  local iconFrames = {}
+  local barFrames = {}
+
+  for i = 1, #orderList do
+    local buffID = orderList[i]
+    local def = registry[buffID]
+    if def then
+      local iconFrame = def.iconFrame
+      if iconFrame and iconFrame._layoutActive then
+        iconFrames[#iconFrames + 1] = iconFrame
+      end
+      local barFrame = def.barFrame
+      if barFrame and barFrame._layoutActive then
+        barFrames[#barFrames + 1] = barFrame
+      end
+    end
+  end
+
+  local settings = self.db.profile.trackedBuffBar or {}
+  local yOffset = settings.yOffset or 0
+  local barTopPadding = (#barFrames > 0) and yOffset or 0
+  local iconTopPadding = (#barFrames == 0 and #iconFrames > 0) and yOffset or 0
+
+  LayoutTrackedBars(barFrames, { topPadding = barTopPadding })
+  LayoutTrackedIcons(iconFrames, { topPadding = iconTopPadding })
+  self:UpdateTrackedLayoutSnapshot()
+end
+
 
 
 local function LayoutTopBar(frames)
@@ -729,6 +935,12 @@ end
 local function PopulateBuffIconFrame(frame, buffID, aura, entry)
   frame:SetParent(EnsureAttachment("TRACKED_ICONS") or UI.anchor)
 
+  local cache = frame._last
+  if not cache then
+    cache = {}
+    frame._last = cache
+  end
+
   local iconID = entry and entry.iconID
   if not iconID then
     local info = C_Spell.GetSpellInfo(buffID)
@@ -740,6 +952,13 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
     frame.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration, aura.modRate or 1)
     frame.cooldown:Show()
 
+    cache.cooldownStart = aura.expirationTime - aura.duration
+    cache.cooldownDuration = aura.duration
+    cache.cooldownModRate = aura.modRate or 1
+    cache.cooldownEnd = aura.expirationTime
+    cache.hasCooldown = true
+    cache.hasChargeCooldown = false
+
     -- sørg for at overlay er over cooldown
     if frame.overlay and frame.cooldown then
       local need = frame.cooldown:GetFrameLevel() + 1
@@ -750,6 +969,13 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
   else
     CooldownFrame_Clear(frame.cooldown)
     frame.cooldown:Hide()
+
+    cache.cooldownStart = nil
+    cache.cooldownDuration = nil
+    cache.cooldownModRate = nil
+    cache.cooldownEnd = nil
+    cache.hasCooldown = false
+    cache.hasChargeCooldown = false
   end
 
   local stacks = aura and (aura.applications or aura.stackCount or aura.charges)
@@ -761,16 +987,141 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
     frame.count:Hide()
   end
 
+  local showNumbers = ShouldShowCooldownNumbers()
+  local remaining = nil
+  if showNumbers and cache.hasCooldown and cache.cooldownEnd then
+    remaining = cache.cooldownEnd - GetTime()
+    if remaining and remaining <= 0 then
+      remaining = nil
+    end
+  end
+  ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
+
   frame:Show()
 end
 
 
 
+
+
+local function UpdateTrackedIconFrame(frame)
+  if not frame then return false end
+
+  local cache = frame._last
+  if not cache then
+    cache = {}
+    frame._last = cache
+  end
+
+  local buffID = frame.buffID
+  if not buffID then
+    frame:Hide()
+    frame._layoutActive = false
+    return false
+  end
+
+  local entry = frame._trackedEntry
+  local candidates = frame._trackedAuraCandidates
+  if not candidates then
+    candidates = CollectAuraSpellIDs(entry, buffID)
+    candidates = CopyCandidates(candidates) or { buffID }
+    frame._trackedAuraCandidates = candidates
+    RegisterFrameAuraWatchers(frame, candidates, frame._auraUnitList or TRACKED_UNITS)
+  end
+
+  local units = frame._auraUnitList or TRACKED_UNITS
+  local aura = nil
+  if candidates then
+    aura = select(1, FindAuraFromCandidates(candidates, units))
+  end
+
+  if aura then
+    local iconID = entry and entry.iconID
+    if not iconID then
+      local info = C_Spell.GetSpellInfo(buffID)
+      iconID = info and info.iconID
+    end
+    iconID = iconID or C_Spell.GetSpellTexture(buffID) or 134400
+    if cache.iconID ~= iconID then
+      frame.icon:SetTexture(iconID)
+      cache.iconID = iconID
+    end
+
+    if aura.expirationTime and aura.duration and aura.duration > 0 then
+      frame.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration, aura.modRate or 1)
+      frame.cooldown:Show()
+      if frame.overlay and frame.cooldown then
+        local need = frame.cooldown:GetFrameLevel() + 1
+        if frame.overlay:GetFrameLevel() <= need then
+          frame.overlay:SetFrameLevel(need)
+        end
+      end
+
+      cache.cooldownStart = aura.expirationTime - aura.duration
+      cache.cooldownDuration = aura.duration
+      cache.cooldownModRate = aura.modRate or 1
+      cache.cooldownEnd = aura.expirationTime
+      cache.hasCooldown = true
+      cache.hasChargeCooldown = false
+    else
+      CooldownFrame_Clear(frame.cooldown)
+      frame.cooldown:Hide()
+
+      cache.cooldownStart = nil
+      cache.cooldownDuration = nil
+      cache.cooldownModRate = nil
+      cache.cooldownEnd = nil
+      cache.hasCooldown = false
+      cache.hasChargeCooldown = false
+    end
+
+    local stacks = aura.applications or aura.stackCount or aura.charges
+    if stacks and stacks > 1 then
+      frame.count:SetText(stacks)
+      frame.count:Show()
+    else
+      frame.count:SetText("")
+      frame.count:Hide()
+    end
+
+    local showNumbers = ShouldShowCooldownNumbers()
+    local remaining = nil
+    if showNumbers and cache.hasCooldown and cache.cooldownEnd then
+      remaining = cache.cooldownEnd - GetTime()
+      if remaining and remaining <= 0 then
+        remaining = nil
+      end
+    end
+    ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
+
+    frame:Show()
+    frame._layoutActive = true
+    return true
+  end
+
+  CooldownFrame_Clear(frame.cooldown)
+  frame.cooldown:Hide()
+  frame.count:SetText("")
+  frame.count:Hide()
+  cache.cooldownStart = nil
+  cache.cooldownDuration = nil
+  cache.cooldownModRate = nil
+  cache.cooldownEnd = nil
+  cache.hasCooldown = false
+  cache.hasChargeCooldown = false
+  ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+  frame:Hide()
+  frame._layoutActive = false
+  return false
+end
+
 local function UpdateTrackedBarFrame(frame)
   local buffID = frame.buffID
   if not buffID then return false end
 
-  local aura, auraSpellID = FindAuraFromCandidates(frame.auraSpellIDs)
+  local candidates = frame._trackedAuraCandidates or frame.auraSpellIDs
+  local units = frame._auraUnitList or TRACKED_UNITS
+  local aura, auraSpellID = FindAuraFromCandidates(candidates, units)
   if aura then
     frame:Show()
 
@@ -809,6 +1160,7 @@ local function UpdateTrackedBarFrame(frame)
         frame.timer:Hide()
       end
       ClassHUD:RegisterTrackedBarFrame(frame)
+      frame._layoutActive = true
     else
       frame._duration = nil
       frame._expiration = nil
@@ -836,6 +1188,7 @@ local function UpdateTrackedBarFrame(frame)
   end
 
   frame:Hide()
+  frame._layoutActive = false
   return false
 end
 
@@ -848,40 +1201,28 @@ function ClassHUD:BuildTrackedBuffFrames()
     wipe(trackedIDs)
   end
 
-  local layoutSnapshot = self._trackedLayoutSnapshot
-  if not layoutSnapshot then
-    layoutSnapshot = {}
-    self._trackedLayoutSnapshot = layoutSnapshot
+  local registry = self._trackedBuffRegistry
+  if not registry then
+    registry = {}
+    self._trackedBuffRegistry = registry
+  else
+    wipe(registry)
   end
 
-  local function commitLayoutChanges()
-    local iconsContainer = EnsureAttachment("TRACKED_ICONS")
-    local barsContainer  = EnsureAttachment("TRACKED_BARS")
-
-    local iconsHeight = iconsContainer and iconsContainer._height or 0
-    local iconsGap    = iconsContainer and iconsContainer._afterGap or nil
-    local barsHeight  = barsContainer and barsContainer._height or 0
-    local barsGap     = barsContainer and barsContainer._afterGap or nil
-
-    local changed = layoutSnapshot.iconsHeight ~= iconsHeight
-        or layoutSnapshot.iconsGap ~= iconsGap
-        or layoutSnapshot.barsHeight ~= barsHeight
-        or layoutSnapshot.barsGap ~= barsGap
-
-    layoutSnapshot.iconsHeight = iconsHeight
-    layoutSnapshot.iconsGap = iconsGap
-    layoutSnapshot.barsHeight = barsHeight
-    layoutSnapshot.barsGap = barsGap
-
-    if changed and self.Layout then
-      self:Layout()
-    end
+  local orderList = self._trackedBuffOrder
+  if not orderList then
+    orderList = {}
+    self._trackedBuffOrder = orderList
+  else
+    wipe(orderList)
   end
 
   -- Skjul gamle frames
   if self.trackedBuffFrames then
     for _, frame in ipairs(self.trackedBuffFrames) do
+      self:ClearFrameAuraWatchers(frame)
       frame:Hide()
+      frame._layoutActive = false
       if frame.cooldown then
         CooldownFrame_Clear(frame.cooldown)
         frame.cooldown:Hide()
@@ -890,7 +1231,9 @@ function ClassHUD:BuildTrackedBuffFrames()
   end
   if self.trackedBarFrames then
     for _, frame in ipairs(self.trackedBarFrames) do
+      self:ClearFrameAuraWatchers(frame)
       frame:Hide()
+      frame._layoutActive = false
       ClassHUD:UnregisterTrackedBarFrame(frame)
     end
   end
@@ -905,7 +1248,7 @@ function ClassHUD:BuildTrackedBuffFrames()
   local function resetLayouts()
     LayoutTrackedBars({}, nil)
     LayoutTrackedIcons({}, nil)
-    commitLayoutChanges()
+    self:UpdateTrackedLayoutSnapshot()
   end
 
   if not self.db.profile.show.buffs then
@@ -988,31 +1331,34 @@ function ClassHUD:BuildTrackedBuffFrames()
       end
     end
 
-    if aura then
-      local iconFrame = CreateBuffFrame(buffID)
-      PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
+    local iconFrame = CreateBuffFrame(buffID)
+    PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
+    iconFrame._trackedEntry = entry
+    iconFrame._auraUnitList = TRACKED_UNITS
+    iconFrame._last = iconFrame._last or {}
+    iconFrame._updateKind = "trackedIcon"
+    local iconCandidates = CopyCandidates(auraCandidates) or { buffID }
+    iconFrame._trackedAuraCandidates = iconCandidates
+    RegisterFrameAuraWatchers(iconFrame, iconCandidates, TRACKED_UNITS)
+    iconFrame._layoutActive = aura and true or false
+    if iconFrame._layoutActive then
       iconFrame:Show()
       table.insert(iconFrames, iconFrame)
     else
-      -- hold frame oppdatert i poolen, men ikke reserver plass i layout
-      local iconFrame = CreateBuffFrame(buffID)
-      PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
       iconFrame:Hide()
     end
+
+    registry[buffID] = registry[buffID] or {}
+    registry[buffID].iconFrame = iconFrame
+    registry[buffID].entry = entry
+    registry[buffID].iconCandidates = iconCandidates
+    orderList[#orderList + 1] = buffID
   end
 
   self.trackedBuffFrames = iconFrames
   self.trackedBarFrames  = barFrames
 
-  local settings         = self.db.profile.trackedBuffBar or {}
-  local yOffset          = settings.yOffset or 0
-
-  local barTopPadding    = (#barFrames > 0) and yOffset or 0
-  local iconTopPadding   = (#barFrames == 0 and #iconFrames > 0) and yOffset or 0
-
-  LayoutTrackedBars(barFrames, { topPadding = barTopPadding })
-  LayoutTrackedIcons(iconFrames, { topPadding = iconTopPadding })
-  commitLayoutChanges()
+  self:ApplyTrackedBuffLayout()
 end
 
 -- ==================================================
@@ -1030,6 +1376,17 @@ local function UpdateSpellFrame(frame)
 
   local data  = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
   local entry = ClassHUD:GetSnapshotEntry(sid)
+  local auraCandidates = ClassHUD:GetAuraCandidatesForEntry(entry, sid)
+  frame._auraCandidates = auraCandidates
+
+  local harmfulTracksAura = false
+  if ClassHUD.IsHarmfulAuraSpell then
+    harmfulTracksAura = select(1, ClassHUD:IsHarmfulAuraSpell(sid, entry))
+  end
+
+  local auraUnits = harmfulTracksAura and SPELL_AURA_UNITS_HARMFUL or SPELL_AURA_UNITS_DEFAULT
+  frame._auraUnitList = auraUnits
+  RegisterFrameAuraWatchers(frame, auraCandidates, auraUnits)
 
   local iconID = entry and entry.iconID
   if not iconID then
@@ -1042,18 +1399,20 @@ local function UpdateSpellFrame(frame)
     cache.iconID = iconID
   end
 
-  local auraID
-  if data and data.buff then
-    auraID = data.buff.overrideSpellID
-        or (data.buff.linkedSpellIDs and data.buff.linkedSpellIDs[1])
-        or data.buff.spellID
+  local aura, auraSpellID, auraUnit = nil, nil, nil
+  if auraCandidates then
+    aura, auraSpellID, auraUnit = ClassHUD:FindAuraFromCandidates(auraCandidates, auraUnits)
   end
-  auraID = auraID or sid
-
-  local aura = ClassHUD:GetAuraForSpell(auraID)
   if not aura then
-    aura = ClassHUD:FindAuraByName(sid, { "target", "focus" })
+    aura, auraUnit = ClassHUD:GetAuraForSpell(sid, auraUnits)
+    auraSpellID = sid
   end
+  if not aura and harmfulTracksAura then
+    aura = ClassHUD:FindAuraByName(sid, SPELL_AURA_UNITS_HARMFUL)
+    auraSpellID = sid
+  end
+  frame._lastAuraUnit = auraUnit
+  frame._lastAuraSpellID = auraSpellID
 
   local chargesInfo = C_Spell and C_Spell.GetSpellCharges and C_Spell.GetSpellCharges(sid)
   local chargesShown = false
@@ -1061,6 +1420,7 @@ local function UpdateSpellFrame(frame)
   local countText, countShown = nil, false
   local cdStart, cdDuration, cdModRate = nil, nil, nil
   local cooldownEnd = nil
+  local cooldownSource = nil
   local shouldDesaturate = false
   local chargeStart, chargeDuration, chargeModRate = nil, nil, nil
 
@@ -1081,10 +1441,10 @@ local function UpdateSpellFrame(frame)
         cdDuration = chargeDuration
         cdModRate = chargeModRate
         cooldownEnd = chargeStart + chargeDuration
+        cooldownSource = "charges"
       end
     end
 
-    shouldDesaturate = (chargesValue <= 0)
   end
 
   local baseCooldown = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(sid)
@@ -1095,8 +1455,8 @@ local function UpdateSpellFrame(frame)
       cdDuration = baseCooldown.duration
       cdModRate = baseCooldown.modRate or 1
       cooldownEnd = baseEnd
+      cooldownSource = "spell"
     end
-    shouldDesaturate = true
   end
 
   local gcd = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(61304)
@@ -1107,6 +1467,7 @@ local function UpdateSpellFrame(frame)
       cdDuration = gcd.duration
       cdModRate = gcd.modRate or 1
       cooldownEnd = gcdEnd
+      cooldownSource = "gcd"
     end
   end
 
@@ -1119,6 +1480,7 @@ local function UpdateSpellFrame(frame)
       cdDuration = aura.duration
       cdModRate = aura.modRate or cdModRate or 1
       cooldownEnd = aura.expirationTime
+      cooldownSource = "aura"
     end
     if stacks > 1 and not chargesShown then
       countText = tostring(stacks)
@@ -1127,6 +1489,10 @@ local function UpdateSpellFrame(frame)
       countText = nil
       countShown = false
     end
+  end
+
+  if cooldownSource == "gcd" then
+    swipeR, swipeG, swipeB, swipeA = 0, 0, 0, 0.15
   end
 
   local hasCooldown = cdStart and cdDuration and cdDuration > 0
@@ -1217,17 +1583,58 @@ local function UpdateSpellFrame(frame)
   end
 
   local usable, noMana = C_Spell and C_Spell.IsSpellUsable and C_Spell.IsSpellUsable(sid)
-  if not usable and not noMana then
-    shouldDesaturate = true
+  local resourceLimited = false
+  if usable == false and noMana then
+    resourceLimited = true
   end
 
   local lacksResources = ClassHUD:LacksResources(sid)
   cache.lacksResources = lacksResources
   if lacksResources then
+    resourceLimited = true
+  end
+
+  local cooldownEndTime = cooldownEnd or (cdStart and cdDuration and (cdStart + cdDuration)) or nil
+  if hasCooldown then
+    cache.cooldownEnd = cooldownEndTime
+  else
+    cache.cooldownEnd = nil
+  end
+
+  if hasChargeCooldown and chargeStart and chargeDuration then
+    cache.chargeCooldownEnd = chargeStart + chargeDuration
+  else
+    cache.chargeCooldownEnd = nil
+  end
+
+  local now = GetTime()
+  local chargesDepleted = chargesShown and (chargesValue or 0) <= 0
+  local onCooldown = false
+  if hasCooldown and cooldownEndTime then
+    onCooldown = (cooldownEndTime - now) > 0
+  end
+
+  local isGCDCooldown = cooldownSource == "gcd"
+
+  local showNumbers = ShouldShowCooldownNumbers()
+  local cooldownTextRemaining = nil
+  if showNumbers and hasCooldown and cooldownEndTime then
+    local remaining = cooldownEndTime - now
+    if remaining > 0 then
+      cooldownTextRemaining = remaining
+    end
+  end
+  ClassHUD:ApplyCooldownText(frame, showNumbers, cooldownTextRemaining)
+
+  shouldDesaturate = false
+  if onCooldown and not isGCDCooldown and (not chargesShown or chargesDepleted) then
+    shouldDesaturate = true
+  end
+  if resourceLimited then
     shouldDesaturate = true
   end
 
-  local tracksAura, auraActive = ClassHUD:IsHarmfulAuraSpell(sid, entry)
+  local tracksAura = harmfulTracksAura or (auraCandidates and #auraCandidates > 0)
   if tracksAura then
     ClassHUD:AddFrameToConcern(frame, "aura")
   else
@@ -1239,19 +1646,7 @@ local function UpdateSpellFrame(frame)
     vertexR, vertexG, vertexB = 1, 1, 0.3
   end
 
-  local finalDesaturate
-  if tracksAura then
-    if auraActive then
-      finalDesaturate = false
-      vertexR, vertexG, vertexB = 1, 1, 1
-    else
-      finalDesaturate = true
-      vertexR, vertexG, vertexB = 0.5, 0.5, 0.5
-    end
-  else
-    finalDesaturate = shouldDesaturate
-    vertexR, vertexG, vertexB = 1, 1, 1
-  end
+  local finalDesaturate = shouldDesaturate
 
   local inRange = nil
   if UnitExists("target") and not UnitIsDead("target") then
@@ -1286,6 +1681,137 @@ end
 -- Public API (kalles fra ClassHUD.lua events)
 -- ==================================================
 ClassHUD.UpdateTrackedBarFrame = UpdateTrackedBarFrame
+
+function ClassHUD:UpdateCooldown(spellID)
+  if not self.spellFrames then return end
+
+  if spellID then
+    local frame = self.spellFrames[spellID]
+    if frame then
+      UpdateSpellFrame(frame)
+      return
+    end
+  end
+
+  for _, frame in ipairs(activeFrames) do
+    UpdateSpellFrame(frame)
+  end
+end
+
+function ClassHUD:HandleUnitAuraUpdate(unit, updateInfo)
+  local unitWatchers = self._auraWatchersByUnit and self._auraWatchersByUnit[unit]
+  if not unitWatchers or not next(unitWatchers) then
+    return
+  end
+
+  local spellWatchers = self._auraWatchersBySpellID
+  local any = false
+
+  local function markAllForUnit()
+    for frame in pairs(unitWatchers) do
+      MarkFrameForAuraUpdate(frame)
+    end
+    any = true
+  end
+
+  local function queueFromList(list)
+    if type(list) ~= "table" then return end
+    local iterated = false
+    for _, payload in ipairs(list) do
+      iterated = true
+      local spellID = ExtractAuraSpellID(payload)
+      if spellID then
+        local frames = spellWatchers and spellWatchers[spellID]
+        if frames then
+          for frame in pairs(frames) do
+            if unitWatchers[frame] then
+              MarkFrameForAuraUpdate(frame)
+              any = true
+            end
+          end
+        end
+      end
+    end
+    if iterated then
+      return
+    end
+    for _, payload in pairs(list) do
+      local spellID = ExtractAuraSpellID(payload)
+      if spellID then
+        local frames = spellWatchers and spellWatchers[spellID]
+        if frames then
+          for frame in pairs(frames) do
+            if unitWatchers[frame] then
+              MarkFrameForAuraUpdate(frame)
+              any = true
+            end
+          end
+        end
+      end
+    end
+  end
+
+  local function handleInstanceList(list)
+    if type(list) ~= "table" then return end
+    if next(list) ~= nil then
+      markAllForUnit()
+    end
+  end
+
+  if type(updateInfo) == "table" and not updateInfo.isFullUpdate then
+    queueFromList(updateInfo.addedAuras)
+    queueFromList(updateInfo.updatedAuras)
+    queueFromList(updateInfo.removedAuras)
+    queueFromList(updateInfo.addedAuraSpellIDs)
+    queueFromList(updateInfo.updatedAuraSpellIDs)
+    queueFromList(updateInfo.removedAuraSpellIDs)
+    queueFromList(updateInfo.removedSpellIDs)
+    handleInstanceList(updateInfo.removedAuraInstanceIDs)
+    handleInstanceList(updateInfo.updatedAuraInstanceIDs)
+    if not any then
+      markAllForUnit()
+    end
+  else
+    markAllForUnit()
+  end
+end
+
+function ClassHUD:FlushAuraChanges()
+  local handle = self._auraFlushTimer
+  self._auraFlushTimer = nil
+  if handle then
+    self:CancelTimer(handle)
+  end
+
+  local dirty = self._pendingAuraFrames
+  if not dirty or not next(dirty) then
+    return
+  end
+
+  local layoutDirty = false
+  for frame in pairs(dirty) do
+    dirty[frame] = nil
+    if frame and frame._updateKind == "spell" then
+      UpdateSpellFrame(frame)
+    elseif frame and frame._updateKind == "trackedIcon" then
+      local previous = frame._layoutActive
+      local active = UpdateTrackedIconFrame(frame)
+      if active ~= previous then
+        layoutDirty = true
+      end
+    elseif frame and frame._updateKind == "trackedBar" then
+      local previous = frame._layoutActive
+      local active = UpdateTrackedBarFrame(frame)
+      if active ~= previous then
+        layoutDirty = true
+      end
+    end
+  end
+
+  if layoutDirty then
+    self:ApplyTrackedBuffLayout()
+  end
+end
 
 local function UpdateFramesFromBucket(bucket, seen)
   if not bucket then return end
@@ -1361,6 +1887,7 @@ end
 function ClassHUD:BuildFramesForSpec()
   for _, f in ipairs(activeFrames) do
     self:ClearFrameConcerns(f)
+    self:ClearFrameAuraWatchers(f)
     f:Hide()
   end
   wipe(activeFrames)
