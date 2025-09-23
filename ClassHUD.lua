@@ -60,6 +60,76 @@ ClassHUD._auraWatchersByUnit = ClassHUD._auraWatchersByUnit or {
 }
 ClassHUD._pendingAuraFrames = ClassHUD._pendingAuraFrames or {}
 ClassHUD._auraFlushTimer = ClassHUD._auraFlushTimer or nil
+ClassHUD._syntheticBuffEntries = ClassHUD._syntheticBuffEntries or {}
+ClassHUD._syntheticBuffOrder = ClassHUD._syntheticBuffOrder or {}
+ClassHUD._summonGuidToKey = ClassHUD._summonGuidToKey or {}
+ClassHUD._wildImpGUIDs = ClassHUD._wildImpGUIDs or {}
+ClassHUD._wildImpCount = ClassHUD._wildImpCount or 0
+ClassHUD._activeTotems = ClassHUD._activeTotems or {}
+ClassHUD._totemSlotToSpell = ClassHUD._totemSlotToSpell or {}
+
+local SUMMON_SEQUENCE_RESET_THRESHOLD = 0.30
+
+local SUMMON_SPELLS = {
+  -- Priest
+  [34433] = { duration = 12, order = 100 }, -- Shadowfiend
+  [123040] = { duration = 12, order = 101 }, -- Mindbender (Discipline)
+  [200174] = { duration = 12, order = 102 }, -- Mindbender (Shadow/Holy)
+
+  -- Warlock
+  [104316] = { duration = 20, order = 200 }, -- Summon Dreadstalkers
+  [111898] = { duration = 17, order = 201 }, -- Grimoire: Felguard
+  [264119] = { duration = 15, order = 202 }, -- Summon Vilefiend
+  [265187] = { duration = 15, order = 203 }, -- Summon Demonic Tyrant
+
+  -- Death Knight
+  [49206]  = { duration = 30, order = 300 }, -- Summon Gargoyle
+  [288853] = { duration = 15, order = 301 }, -- Summon Magus of the Dead
+  [42650]  = { duration = 30, order = 302 }, -- Army of the Dead
+}
+
+local WILD_IMP_SPELLS = {
+  [104317] = true, -- Summon Wild Imp (Hand of Gul'dan)
+  [267986] = true, -- Summon Wild Imp (Inner Demons)
+}
+
+local IMPLOSION_SPELL_ID = 196277
+local MAX_TOTEM_SLOTS = MAX_TOTEMS or 4
+
+local function NormalizeDuration(value)
+  if not value or value <= 0 then
+    return nil
+  end
+  if value > 1000 then
+    return value / 1000
+  end
+  return value
+end
+
+local function GetSpellDurationSeconds(spellID)
+  if not spellID then return nil end
+  if C_Spell and C_Spell.GetSpellInfo then
+    local info = C_Spell.GetSpellInfo(spellID)
+    if info and info.duration and info.duration > 0 then
+      return NormalizeDuration(info.duration)
+    end
+  end
+  return nil
+end
+
+local function DetermineSummonDuration(spellID, data)
+  local duration
+  if data and data.durationSpellID then
+    duration = GetSpellDurationSeconds(data.durationSpellID)
+  end
+  if not duration then
+    duration = GetSpellDurationSeconds(spellID)
+  end
+  if (not duration or duration <= 0) and data and data.duration then
+    duration = data.duration
+  end
+  return duration
+end
 
 function ClassHUD:RequestUpdate(kind)
   kind = kind or "any"
@@ -887,6 +957,348 @@ function ClassHUD:OpenOptions()
   ACD:Open("ClassHUD")
 end
 
+-- ---------------------------------------------------------------------------
+-- Summon, Wild Imp and Totem tracking
+-- ---------------------------------------------------------------------------
+
+function ClassHUD:ResetSummonTracking()
+  local entries = self._syntheticBuffEntries
+  local removed = false
+  if entries then
+    for key, data in pairs(entries) do
+      if data and data.kind == "summon" then
+        if data.timerHandle then
+          self:CancelTimer(data.timerHandle)
+          data.timerHandle = nil
+        end
+        entries[key] = nil
+        removed = true
+      end
+    end
+  end
+
+  local order = self._syntheticBuffOrder
+  if removed and order then
+    for index = #order, 1, -1 do
+      local key = order[index]
+      if not entries or not entries[key] then
+        table.remove(order, index)
+      end
+    end
+  end
+
+  wipe(self._summonGuidToKey)
+
+  if removed and self.RebuildTrackedBuffFrames then
+    self:RebuildTrackedBuffFrames()
+  end
+end
+
+function ClassHUD:HandleSummonTimerExpired(key, sequence)
+  local entries = self._syntheticBuffEntries
+  if not entries then return end
+  local entry = entries[key]
+  if not entry then return end
+  if sequence and entry.sequence and entry.sequence ~= sequence then
+    return
+  end
+  entry.timerHandle = nil
+  if self.RemoveSyntheticBuff then
+    self:RemoveSyntheticBuff(key)
+  end
+end
+
+function ClassHUD:ActivateSummonTimer(spellID, destGUID)
+  local info = SUMMON_SPELLS[spellID]
+  if not info then return end
+
+  local duration = DetermineSummonDuration(spellID, info)
+  if not duration or duration <= 0 then return end
+
+  local entries = self._syntheticBuffEntries
+  if not entries then
+    entries = {}
+    self._syntheticBuffEntries = entries
+  end
+
+  local order = self._syntheticBuffOrder
+  if not order then
+    order = {}
+    self._syntheticBuffOrder = order
+  end
+
+  local key = "summon:" .. tostring(info.trackerKey or spellID)
+  local entry = entries[key]
+  local now = GetTime()
+
+  if not entry then
+    entry = { kind = "summon", unitGUIDs = {}, sequence = 0 }
+    entries[key] = entry
+  end
+
+  local shouldReset = false
+  if not entry.lastCastTime then
+    shouldReset = true
+  elseif entry.expiration and entry.expiration <= now then
+    shouldReset = true
+  elseif now - entry.lastCastTime > SUMMON_SEQUENCE_RESET_THRESHOLD then
+    shouldReset = true
+  end
+
+  if shouldReset then
+    if entry.unitGUIDs then
+      for guid in pairs(entry.unitGUIDs) do
+        local map = self._summonGuidToKey
+        if map and map[guid] and map[guid].key == key then
+          map[guid] = nil
+        end
+      end
+      wipe(entry.unitGUIDs)
+    else
+      entry.unitGUIDs = {}
+    end
+    entry.sequence = (entry.sequence or 0) + 1
+  elseif not entry.unitGUIDs then
+    entry.unitGUIDs = {}
+  end
+
+  entry.sequence = entry.sequence or 1
+  entry.lastCastTime = now
+  entry.startTime = now
+  entry.duration = duration
+  entry.expiration = now + duration
+  entry.modRate = 1
+  entry.order = info.order or entry.order or 1000
+  entry.displaySpellID = info.displaySpellID or spellID
+  entry.spellID = spellID
+  entry.iconID = info.iconID or (C_Spell and C_Spell.GetSpellTexture(entry.displaySpellID))
+      or (C_Spell and C_Spell.GetSpellTexture(spellID))
+  entry.name = C_Spell and C_Spell.GetSpellName(info.labelSpellID or entry.displaySpellID)
+      or entry.name or ("Summon " .. spellID)
+  entry.showCount = false
+
+  if entry.timerHandle then
+    self:CancelTimer(entry.timerHandle)
+    entry.timerHandle = nil
+  end
+
+  entry.timerHandle = self:ScheduleTimer(function()
+    self:HandleSummonTimerExpired(key, entry.sequence)
+  end, duration)
+
+  entry.unitGUIDs = entry.unitGUIDs or {}
+  if destGUID then
+    entry.unitGUIDs[destGUID] = entry.sequence
+    local map = self._summonGuidToKey
+    if map then
+      map[destGUID] = { key = key, sequence = entry.sequence }
+    end
+  end
+
+  local exists = false
+  for _, existing in ipairs(order) do
+    if existing == key then
+      exists = true
+      break
+    end
+  end
+  if not exists then
+    order[#order + 1] = key
+  end
+
+  if self.RebuildTrackedBuffFrames then
+    self:RebuildTrackedBuffFrames()
+  end
+end
+
+function ClassHUD:HandleSummonedUnitDeath(destGUID)
+  if not destGUID then return end
+  local map = self._summonGuidToKey
+  if not map then return end
+
+  local entryInfo = map[destGUID]
+  map[destGUID] = nil
+  if not entryInfo or not entryInfo.key then return end
+
+  local entries = self._syntheticBuffEntries
+  local entry = entries and entries[entryInfo.key]
+  if not entry then return end
+
+  if entry.unitGUIDs then
+    entry.unitGUIDs[destGUID] = nil
+  end
+
+  local hasActive = false
+  if entry.unitGUIDs then
+    for _, seq in pairs(entry.unitGUIDs) do
+      if seq == entry.sequence then
+        hasActive = true
+        break
+      end
+    end
+  end
+
+  if not hasActive then
+    if entry.timerHandle then
+      self:CancelTimer(entry.timerHandle)
+      entry.timerHandle = nil
+    end
+    if self.RemoveSyntheticBuff then
+      self:RemoveSyntheticBuff(entryInfo.key)
+    end
+  end
+end
+
+function ClassHUD:ResetWildImpTracking()
+  wipe(self._wildImpGUIDs)
+  self._wildImpCount = 0
+  if self.SetSpellCountOverride then
+    self:SetSpellCountOverride(IMPLOSION_SPELL_ID, nil)
+  end
+end
+
+function ClassHUD:HandleWildImpSummon(destGUID)
+  if not destGUID then return end
+  local imps = self._wildImpGUIDs
+  if imps[destGUID] then
+    return
+  end
+
+  imps[destGUID] = true
+  self._wildImpCount = (self._wildImpCount or 0) + 1
+
+  if self.SetSpellCountOverride then
+    self:SetSpellCountOverride(IMPLOSION_SPELL_ID, self._wildImpCount)
+  end
+end
+
+function ClassHUD:HandleWildImpDeath(destGUID)
+  if not destGUID then return end
+  local imps = self._wildImpGUIDs
+  if not imps[destGUID] then
+    return
+  end
+
+  imps[destGUID] = nil
+  self._wildImpCount = math.max(0, (self._wildImpCount or 0) - 1)
+
+  if self.SetSpellCountOverride then
+    if self._wildImpCount > 0 then
+      self:SetSpellCountOverride(IMPLOSION_SPELL_ID, self._wildImpCount)
+    else
+      self:SetSpellCountOverride(IMPLOSION_SPELL_ID, nil)
+    end
+  end
+end
+
+function ClassHUD:HandleCombatLogEvent()
+  local info = { CombatLogGetCurrentEventInfo() }
+  local eventType = info[2]
+  if not eventType then return end
+
+  local sourceGUID = info[4]
+  local destGUID   = info[8]
+  local spellID    = info[12]
+  local playerGUID = UnitGUID("player")
+
+  if eventType == "SPELL_SUMMON" and sourceGUID == playerGUID then
+    if SUMMON_SPELLS[spellID] then
+      self:ActivateSummonTimer(spellID, destGUID)
+    elseif WILD_IMP_SPELLS[spellID] then
+      self:HandleWildImpSummon(destGUID)
+    end
+    return
+  end
+
+  if eventType == "UNIT_DIED" or eventType == "UNIT_DESTROYED" or eventType == "UNIT_DISSIPATES" then
+    if destGUID then
+      if self._summonGuidToKey and self._summonGuidToKey[destGUID] then
+        self:HandleSummonedUnitDeath(destGUID)
+      end
+      if self._wildImpGUIDs and self._wildImpGUIDs[destGUID] then
+        self:HandleWildImpDeath(destGUID)
+      end
+    end
+  end
+end
+
+function ClassHUD:HandleTotemUpdate(slot)
+  slot = tonumber(slot)
+  if not slot or slot < 1 or slot > MAX_TOTEM_SLOTS then return end
+
+  local haveTotem, name, startTime, duration, icon = GetTotemInfo(slot)
+  local slotMap = self._totemSlotToSpell
+  local active  = self._activeTotems
+
+  if haveTotem and name and name ~= "" then
+    local spellID
+    if C_Spell and C_Spell.GetSpellInfo then
+      local spellInfo = C_Spell.GetSpellInfo(name)
+      spellID = spellInfo and spellInfo.spellID
+    end
+
+    if spellID then
+      local data = active[spellID]
+      if not data then
+        data = {}
+        active[spellID] = data
+      end
+
+      data.slot = slot
+      data.name = name
+      data.icon = icon
+      data.startTime = startTime
+      data.duration = duration
+      data.modRate = 1
+      if duration and duration > 0 and startTime then
+        data.expiration = startTime + duration
+      else
+        data.expiration = nil
+      end
+
+      slotMap[slot] = spellID
+
+      if self.UpdateTotemSpellFrame then
+        self:UpdateTotemSpellFrame(spellID)
+      end
+    end
+  else
+    local previous = slotMap[slot]
+    slotMap[slot] = nil
+    if previous then
+      active[previous] = nil
+      if self.UpdateTotemSpellFrame then
+        self:UpdateTotemSpellFrame(previous)
+      end
+    end
+  end
+end
+
+function ClassHUD:RefreshTotemTracking(scanAllSlots)
+  if scanAllSlots then
+    for slot = 1, MAX_TOTEM_SLOTS do
+      self:HandleTotemUpdate(slot)
+    end
+    return
+  end
+
+  if not self.UpdateTotemSpellFrame then
+    return
+  end
+
+  if self.spellFrames then
+    for spellID in pairs(self.spellFrames) do
+      self:UpdateTotemSpellFrame(spellID)
+    end
+  end
+end
+
+function ClassHUD:ResetTotemTracking()
+  wipe(self._activeTotems)
+  wipe(self._totemSlotToSpell)
+  self:RefreshTotemTracking(false)
+end
+
 -- ========= Bars/Spells bootstrap on enable =========
 function ClassHUD:OnEnable()
   local UI = self.UI
@@ -934,7 +1346,9 @@ for _, ev in pairs({
   -- Target
   "PLAYER_TARGET_CHANGED",
   "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
-  "SPELL_RANGE_CHECK_UPDATE"
+  "SPELL_RANGE_CHECK_UPDATE",
+  "COMBAT_LOG_EVENT_UNFILTERED",
+  "PLAYER_TOTEM_UPDATE",
 }) do
   eventFrame:RegisterEvent(ev)
 end
@@ -946,6 +1360,10 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     ClassHUD:ApplyAnchorPosition()
     local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
+    if ClassHUD.ResetWildImpTracking then ClassHUD:ResetWildImpTracking() end
+    if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
+    if ClassHUD.RefreshTotemTracking then ClassHUD:RefreshTotemTracking(true) end
     if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
     return
   end
@@ -956,8 +1374,26 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
+    if ClassHUD.ResetWildImpTracking then ClassHUD:ResetWildImpTracking() end
+    if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
+    if ClassHUD.RefreshTotemTracking then ClassHUD:RefreshTotemTracking(true) end
     ClassHUD:RefreshRegisteredOptions()
     ClassHUD:UpdateAllFrames()
+    return
+  end
+
+  if event == "COMBAT_LOG_EVENT_UNFILTERED" then
+    if ClassHUD.HandleCombatLogEvent then
+      ClassHUD:HandleCombatLogEvent()
+    end
+    return
+  end
+
+  if event == "PLAYER_TOTEM_UPDATE" then
+    if ClassHUD.HandleTotemUpdate then
+      ClassHUD:HandleTotemUpdate(unit)
+    end
     return
   end
 

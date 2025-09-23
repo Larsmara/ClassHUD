@@ -8,6 +8,7 @@ ClassHUD.trackedBuffFrames = ClassHUD.trackedBuffFrames or {}
 ClassHUD.trackedBarFrames = ClassHUD.trackedBarFrames or {}
 ClassHUD._trackedBuffFramePool = ClassHUD._trackedBuffFramePool or {}
 ClassHUD._trackedBarFramePool = ClassHUD._trackedBarFramePool or {}
+ClassHUD._spellCountOverrides = ClassHUD._spellCountOverrides or {}
 
 local activeFrames = {}
 local trackedBuffPool = ClassHUD._trackedBuffFramePool
@@ -1003,6 +1004,273 @@ end
 
 
 
+local function UpdateSyntheticIconFrame(frame, dataOverride)
+  if not frame then return false end
+
+  local cache = frame._last
+  if not cache then
+    cache = {}
+    frame._last = cache
+  end
+
+  local key = frame._syntheticKey
+  local data = dataOverride or (key and ClassHUD._syntheticBuffEntries and ClassHUD._syntheticBuffEntries[key])
+  if not data then
+    CooldownFrame_Clear(frame.cooldown)
+    frame.cooldown:Hide()
+    frame.count:SetText("")
+    frame.count:Hide()
+    cache.cooldownStart = nil
+    cache.cooldownDuration = nil
+    cache.cooldownModRate = nil
+    cache.cooldownEnd = nil
+    cache.hasCooldown = false
+    cache.hasChargeCooldown = false
+    ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+    frame:Hide()
+    frame._layoutActive = false
+    return false
+  end
+
+  local now = GetTime()
+  local expiration = data.expiration
+  local duration = data.duration
+  local startTime = data.startTime
+
+  if duration and duration > 0 and startTime and not expiration then
+    expiration = startTime + duration
+  elseif duration and duration > 0 and expiration and not startTime then
+    startTime = expiration - duration
+  elseif expiration and not duration and startTime then
+    duration = expiration - startTime
+  end
+
+  if expiration and expiration <= now then
+    CooldownFrame_Clear(frame.cooldown)
+    frame.cooldown:Hide()
+    frame.count:SetText("")
+    frame.count:Hide()
+    cache.cooldownStart = nil
+    cache.cooldownDuration = nil
+    cache.cooldownModRate = nil
+    cache.cooldownEnd = nil
+    cache.hasCooldown = false
+    cache.hasChargeCooldown = false
+    ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+    frame:Hide()
+    frame._layoutActive = false
+    return false
+  end
+
+  if not startTime then
+    startTime = now
+    if duration and duration > 0 and not expiration then
+      expiration = now + duration
+    end
+  end
+
+  if not duration and expiration then
+    duration = expiration - startTime
+  end
+
+  local iconID = data.iconID
+      or (data.displaySpellID and C_Spell and C_Spell.GetSpellTexture(data.displaySpellID))
+      or (data.spellID and C_Spell and C_Spell.GetSpellTexture(data.spellID))
+      or 134400
+
+  if cache.iconID ~= iconID then
+    frame.icon:SetTexture(iconID)
+    cache.iconID = iconID
+  end
+
+  if duration and duration > 0 and expiration then
+    frame.cooldown:SetCooldown(startTime, duration, data.modRate or 1)
+    frame.cooldown:SetSwipeColor(1, 0.85, 0.1, 0.9)
+    frame.cooldown:Show()
+    if frame.overlay and frame.cooldown then
+      local need = frame.cooldown:GetFrameLevel() + 1
+      if frame.overlay:GetFrameLevel() <= need then
+        frame.overlay:SetFrameLevel(need)
+      end
+    end
+
+    cache.cooldownStart = startTime
+    cache.cooldownDuration = duration
+    cache.cooldownModRate = data.modRate or 1
+    cache.cooldownEnd = expiration
+    cache.hasCooldown = true
+    cache.hasChargeCooldown = false
+
+    local remaining = expiration - now
+    if remaining and remaining <= 0 then
+      remaining = nil
+    end
+    ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), remaining)
+  else
+    CooldownFrame_Clear(frame.cooldown)
+    frame.cooldown:Hide()
+    cache.cooldownStart = nil
+    cache.cooldownDuration = nil
+    cache.cooldownModRate = nil
+    cache.cooldownEnd = nil
+    cache.hasCooldown = false
+    cache.hasChargeCooldown = false
+    ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+  end
+
+  if data.showCount and data.count and data.count > 0 then
+    local text = tostring(data.count)
+    if cache.countText ~= text then
+      frame.count:SetText(text)
+      cache.countText = text
+    end
+    if not cache.countShown then
+      frame.count:Show()
+      cache.countShown = true
+    end
+  else
+    if cache.countShown then
+      frame.count:Hide()
+      cache.countShown = false
+    end
+    if cache.countText then
+      frame.count:SetText("")
+      cache.countText = nil
+    end
+  end
+
+  frame:Show()
+  frame._layoutActive = true
+  return true
+end
+
+ClassHUD.UpdateSyntheticIconFrame = UpdateSyntheticIconFrame
+
+local function IntegrateSyntheticTrackedEntries(self, iconFrames, _, registry, orderList)
+  local entries = self._syntheticBuffEntries
+  if not entries or not next(entries) then
+    return
+  end
+
+  local order = self._syntheticBuffOrder or {}
+  if #order > 1 then
+    table.sort(order, function(a, b)
+      local entryA = entries[a]
+      local entryB = entries[b]
+      local orderA = entryA and entryA.order or math.huge
+      local orderB = entryB and entryB.order or math.huge
+      if orderA == orderB then
+        local nameA = entryA and (entryA.name or (entryA.displaySpellID and C_Spell and C_Spell.GetSpellName(entryA.displaySpellID))) or tostring(a)
+        local nameB = entryB and (entryB.name or (entryB.displaySpellID and C_Spell and C_Spell.GetSpellName(entryB.displaySpellID))) or tostring(b)
+        return nameA < nameB
+      end
+      return orderA < orderB
+    end)
+  end
+
+  local now = GetTime()
+  local needsCleanup = false
+
+  for _, key in ipairs(order) do
+    local data = entries[key]
+    if data then
+      local expiration = data.expiration
+      if expiration and expiration <= now then
+        if data.timerHandle then
+          self:CancelTimer(data.timerHandle)
+          data.timerHandle = nil
+        end
+        entries[key] = nil
+        needsCleanup = true
+      else
+        local frame = CreateBuffFrame(key)
+        if self.ClearFrameAuraWatchers then
+          self:ClearFrameAuraWatchers(frame)
+        end
+        frame.buffID = key
+        frame._syntheticKey = key
+        frame._syntheticData = data
+        frame._trackedEntry = nil
+        frame._auraUnitList = nil
+        frame._trackedAuraCandidates = nil
+        frame._updateKind = "trackedIcon"
+        frame._last = frame._last or {}
+
+        registry[key] = registry[key] or {}
+        registry[key].iconFrame = frame
+        registry[key].entry = nil
+        registry[key].iconCandidates = nil
+
+        local active = UpdateSyntheticIconFrame(frame, data)
+        frame._layoutActive = active and true or false
+        if active then
+          frame:Show()
+          iconFrames[#iconFrames + 1] = frame
+        else
+          frame:Hide()
+        end
+
+        local exists = false
+        for i = 1, #orderList do
+          if orderList[i] == key then
+            exists = true
+            break
+          end
+        end
+        if not exists then
+          orderList[#orderList + 1] = key
+        end
+      end
+    else
+      needsCleanup = true
+    end
+  end
+
+  if needsCleanup then
+    for index = #order, 1, -1 do
+      local key = order[index]
+      if not entries[key] then
+        table.remove(order, index)
+      end
+    end
+  end
+end
+
+ClassHUD.IntegrateSyntheticTrackedEntries = IntegrateSyntheticTrackedEntries
+
+local function ApplyTotemOverlayToFrame(frame, spellID)
+  if not frame or not spellID then return end
+
+  local data = ClassHUD._activeTotems and ClassHUD._activeTotems[spellID]
+  local overlay = frame._totemCooldown
+
+  if data and data.duration and data.duration > 0 and data.startTime then
+    if not overlay then
+      local parent = frame.overlay or frame
+      overlay = CreateFrame("Cooldown", nil, parent, "CooldownFrameTemplate")
+      overlay:SetAllPoints(frame.icon or frame)
+      overlay:SetHideCountdownNumbers(true)
+      overlay:SetDrawBling(false)
+      overlay:SetDrawEdge(false)
+      overlay.noCooldownCount = true
+      frame._totemCooldown = overlay
+    end
+
+    local baseLevel = (frame.overlay and frame.overlay:GetFrameLevel()) or frame:GetFrameLevel()
+    overlay:SetFrameLevel(baseLevel + 5)
+    overlay:SetSwipeColor(0.2, 0.8, 1.0, 0.7)
+    overlay:SetCooldown(data.startTime, data.duration, data.modRate or 1)
+    overlay:Show()
+  else
+    if overlay then
+      CooldownFrame_Clear(overlay)
+      overlay:Hide()
+    end
+  end
+end
+
+ClassHUD.ApplyTotemOverlayToFrame = ApplyTotemOverlayToFrame
+
 
 local function UpdateTrackedIconFrame(frame)
   if not frame then return false end
@@ -1011,6 +1279,10 @@ local function UpdateTrackedIconFrame(frame)
   if not cache then
     cache = {}
     frame._last = cache
+  end
+
+  if frame._syntheticKey then
+    return UpdateSyntheticIconFrame(frame)
   end
 
   local buffID = frame.buffID
@@ -1355,10 +1627,71 @@ function ClassHUD:BuildTrackedBuffFrames()
     orderList[#orderList + 1] = buffID
   end
 
+  if self.IntegrateSyntheticTrackedEntries then
+    self:IntegrateSyntheticTrackedEntries(iconFrames, barFrames, registry, orderList)
+  end
+
   self.trackedBuffFrames = iconFrames
   self.trackedBarFrames  = barFrames
 
   self:ApplyTrackedBuffLayout()
+end
+
+function ClassHUD:RemoveSyntheticBuff(key)
+  if not key then return end
+
+  local entries = self._syntheticBuffEntries
+  if not entries then return end
+
+  local data = entries[key]
+  if not data then return end
+
+  if data.timerHandle then
+    self:CancelTimer(data.timerHandle)
+    data.timerHandle = nil
+  end
+
+  if data.kind == "summon" and data.unitGUIDs then
+    local map = self._summonGuidToKey
+    if map then
+      for guid, info in pairs(map) do
+        if info and info.key == key then
+          map[guid] = nil
+        end
+      end
+    end
+  end
+
+  entries[key] = nil
+
+  local order = self._syntheticBuffOrder
+  if order then
+    for index = #order, 1, -1 do
+      if order[index] == key then
+        table.remove(order, index)
+        break
+      end
+    end
+  end
+
+  local registry = self._trackedBuffRegistry
+  if registry and registry[key] then
+    local frame = registry[key].iconFrame
+    if frame then
+      CooldownFrame_Clear(frame.cooldown)
+      frame.cooldown:Hide()
+      frame.count:SetText("")
+      frame.count:Hide()
+      ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+      frame:Hide()
+      frame._layoutActive = false
+    end
+    registry[key] = nil
+  end
+
+  if self.RebuildTrackedBuffFrames then
+    self:RebuildTrackedBuffFrames()
+  end
 end
 
 -- ==================================================
@@ -1488,6 +1821,19 @@ local function UpdateSpellFrame(frame)
     elseif not chargesShown then
       countText = nil
       countShown = false
+    end
+  end
+
+  if not chargesShown and ClassHUD._spellCountOverrides then
+    local override = ClassHUD._spellCountOverrides[sid]
+    if override then
+      if override > 0 then
+        countText = tostring(override)
+        countShown = true
+      else
+        countText = nil
+        countShown = false
+      end
     end
   end
 
@@ -1668,6 +2014,10 @@ local function UpdateSpellFrame(frame)
     cache.vertexR, cache.vertexG, cache.vertexB = vertexR, vertexG, vertexB
   end
 
+  if ApplyTotemOverlayToFrame then
+    ApplyTotemOverlayToFrame(frame, sid)
+  end
+
   local shouldGlow = UpdateGlow(frame, aura, sid, data) or false
   if cache.glow ~= shouldGlow then
     SetFrameGlow(frame, shouldGlow)
@@ -1681,6 +2031,15 @@ end
 -- Public API (kalles fra ClassHUD.lua events)
 -- ==================================================
 ClassHUD.UpdateTrackedBarFrame = UpdateTrackedBarFrame
+
+function ClassHUD:UpdateTotemSpellFrame(spellID)
+  if not spellID then return end
+  local frame = self.spellFrames and self.spellFrames[spellID]
+  if not frame then return end
+  if ApplyTotemOverlayToFrame then
+    ApplyTotemOverlayToFrame(frame, spellID)
+  end
+end
 
 function ClassHUD:UpdateCooldown(spellID)
   if not self.spellFrames then return end
@@ -1696,6 +2055,38 @@ function ClassHUD:UpdateCooldown(spellID)
   for _, frame in ipairs(activeFrames) do
     UpdateSpellFrame(frame)
   end
+end
+
+function ClassHUD:SetSpellCountOverride(spellID, count)
+  if not spellID then return end
+
+  local overrides = self._spellCountOverrides
+  if not overrides then
+    overrides = {}
+    self._spellCountOverrides = overrides
+  end
+
+  if count and count > 0 then
+    if overrides[spellID] ~= count then
+      overrides[spellID] = count
+      if self.UpdateCooldown then
+        self:UpdateCooldown(spellID)
+      end
+    end
+  else
+    if overrides[spellID] then
+      overrides[spellID] = nil
+      if self.UpdateCooldown then
+        self:UpdateCooldown(spellID)
+      end
+    end
+  end
+end
+
+function ClassHUD:GetSpellCountOverride(spellID)
+  local overrides = self._spellCountOverrides
+  if not overrides then return nil end
+  return overrides[spellID]
 end
 
 function ClassHUD:HandleUnitAuraUpdate(unit, updateInfo)
