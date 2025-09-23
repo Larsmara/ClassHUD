@@ -686,8 +686,12 @@ local defaults = {
     },
     trackSummons     = true,
     trackWildImps    = true,
+    wildImpTrackingMode = "implosion",
     trackTotems      = true,
     totemOverlayStyle = "SWIPE",
+    totems = {
+      showDuration = true,
+    },
     cooldowns        = {
       showText = true,
     },

@@ -19,6 +19,8 @@ local IMPLOSION_SPELL_ID = 196277
 local FEL_FIREBOLT_SPELL_ID = 104318
 local WILD_IMP_NPC_ID = 55659
 local WILD_IMP_MAX_CHARGES = 5
+local WILD_IMP_AVERAGE_DURATION = 12
+local WILD_IMP_DISPLAY_SPELL_ID = 104317
 
 local SUMMON_SPELLS = {
   [34433]  = { fallbackDuration = 15, class = "PRIEST" },      -- Shadowfiend
@@ -63,7 +65,17 @@ local function UpdateWildImpIndicator(self, count)
     count = TableCount(self and self._wildImpGuids)
   end
 
-  self._wildImpCount = count or 0
+  count = count or 0
+  self._wildImpCount = count
+
+  if self and self.GetWildImpTrackingMode and self.UpdateWildImpBuffFrame and self.HideWildImpBuffFrame then
+    local mode = self:GetWildImpTrackingMode()
+    if mode == "buff" and self:IsWildImpTrackingEnabled() then
+      self:UpdateWildImpBuffFrame(count)
+    else
+      self:HideWildImpBuffFrame()
+    end
+  end
 
   if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
     self:UpdateCooldown(IMPLOSION_SPELL_ID)
@@ -161,6 +173,21 @@ function ClassHUD:IsWildImpTrackingEnabled()
   return not not enabled
 end
 
+function ClassHUD:GetWildImpTrackingMode()
+  if not (self and self.db and self.db.profile) then
+    return "implosion"
+  end
+  local mode = self.db.profile.wildImpTrackingMode
+  if mode == "buff" then
+    return "buff"
+  end
+  return "implosion"
+end
+
+function ClassHUD:IsWildImpBuffMode()
+  return self:GetWildImpTrackingMode() == "buff"
+end
+
 function ClassHUD:IsTotemTrackingEnabled()
   if not (self and self.db and self.db.profile) then
     return true
@@ -179,12 +206,45 @@ function ClassHUD:GetTotemOverlayStyle()
   return self.db.profile.totemOverlayStyle or "SWIPE"
 end
 
+function ClassHUD:GetActiveTotemStateForSpell(spellID)
+  if not spellID then return nil end
+  local list = self._activeTotems
+  if not list then return nil end
+
+  for slot = 1, 4 do
+    local state = list[slot]
+    if state and state.spellID == spellID then
+      return state
+    end
+  end
+
+  return nil
+end
+
+function ClassHUD:IsTotemDurationTextEnabled()
+  if not (self and self.db and self.db.profile) then
+    return true
+  end
+  local settings = self.db.profile.totems
+  if settings and settings.showDuration ~= nil then
+    return not not settings.showDuration
+  end
+  return true
+end
+
 function ClassHUD:ClearWildImpTracking()
   if self._wildImpGuids then
     wipe(self._wildImpGuids)
   else
     self._wildImpGuids = {}
   end
+  if self.HideWildImpBuffFrame then
+    self:HideWildImpBuffFrame()
+  end
+  SyncWildImpCount(self)
+end
+
+function ClassHUD:RefreshWildImpDisplay()
   SyncWildImpCount(self)
 end
 
@@ -1266,6 +1326,103 @@ local function EnsureSummonFrame(self, spellID)
   return frame, def
 end
 
+local function EnsureWildImpBuffFrame(self)
+  local frame = self._wildImpBuffFrame
+  if frame and frame._manualWildImp then
+    return frame
+  end
+
+  frame = select(1, EnsureSummonFrame(self, WILD_IMP_DISPLAY_SPELL_ID))
+  if frame then
+    frame._manualWildImp = true
+    frame._manualSummon = true
+    self._wildImpBuffFrame = frame
+  end
+
+  return frame
+end
+
+local function FinalizeSummonState(active)
+  if not active then return 0, nil, nil end
+
+  local count = 0
+  local latestExpiration = nil
+  local earliestExpiration = nil
+  local earliestStart = nil
+
+  if active.guids then
+    for guid, data in pairs(active.guids) do
+      if data then
+        count = count + 1
+        local expiration = data.expiration
+        if expiration then
+          if not latestExpiration or expiration > latestExpiration then
+            latestExpiration = expiration
+          end
+          if not earliestExpiration or expiration < earliestExpiration then
+            earliestExpiration = expiration
+          end
+        end
+
+        local startTime = data.startTime
+        if not startTime and expiration and data.duration then
+          startTime = expiration - data.duration
+        end
+        if startTime and (not earliestStart or startTime < earliestStart) then
+          earliestStart = startTime
+        end
+      end
+    end
+  end
+
+  active.count = count
+  active.expiration = latestExpiration
+  active.nextExpiration = earliestExpiration
+
+  if count > 0 then
+    if earliestStart then
+      active.startTime = earliestStart
+    end
+    if active.startTime and latestExpiration then
+      active.duration = math.max(latestExpiration - active.startTime, 0)
+    elseif latestExpiration and not active.startTime then
+      active.startTime = latestExpiration
+      active.duration = 0
+    end
+  else
+    active.startTime = nil
+    active.duration = nil
+    active.nextExpiration = nil
+    active.expiration = nil
+  end
+
+  return count, latestExpiration, earliestExpiration
+end
+
+local function RemoveExpiredSummonGUIDs(self, spellID, active, now)
+  if not active or not active.guids then return 0 end
+
+  now = now or GetTime()
+  local removed = 0
+
+  for guid, data in pairs(active.guids) do
+    local expiration = data and data.expiration
+    if not expiration or expiration <= now then
+      active.guids[guid] = nil
+      if self._summonGuidToSpell then
+        self._summonGuidToSpell[guid] = nil
+      end
+      removed = removed + 1
+    end
+  end
+
+  if removed > 0 then
+    FinalizeSummonState(active)
+  end
+
+  return removed
+end
+
 function ClassHUD:GetSummonDuration(spellID)
   local def = SUMMON_SPELLS[spellID]
   if not def then return nil end
@@ -1297,18 +1454,24 @@ function ClassHUD:UpdateSummonFrame(spellID, suppressLayout)
 
   local displayID = active.iconSpellID or spellID
 
+  local aura = nil
   if active.expiration and duration and duration > 0 then
-    local aura = {
+    aura = {
       duration = duration,
       expirationTime = active.expiration,
       modRate = 1,
     }
-    frame.buffID = displayID
-    PopulateBuffIconFrame(frame, displayID, aura, nil)
-  else
-    frame.buffID = displayID
-    PopulateBuffIconFrame(frame, displayID, nil, nil)
   end
+
+  local count = active.count or 0
+  if count > 0 then
+    aura = aura or {}
+    aura.applications = count
+    aura.charges = count
+  end
+
+  frame.buffID = displayID
+  PopulateBuffIconFrame(frame, displayID, aura, nil)
 
   frame._manualSummon = true
   frame._layoutActive = true
@@ -1321,14 +1484,17 @@ end
 
 function ClassHUD:ScheduleSummonExpiryCheck(spellID)
   local active = self._activeSummonsBySpell and self._activeSummonsBySpell[spellID]
-  if not active or not active.expiration then return end
+  if not active then return end
 
   if active.timer then
     self:CancelTimer(active.timer)
     active.timer = nil
   end
 
-  local delay = active.expiration - GetTime()
+  local nextExpiration = active.nextExpiration or active.expiration
+  if not nextExpiration then return end
+
+  local delay = nextExpiration - GetTime()
   if delay and delay > 0 then
     active.timer = self:ScheduleTimer("CheckSummonExpiration", delay + 0.05, spellID)
   else
@@ -1341,12 +1507,19 @@ function ClassHUD:CheckSummonExpiration(spellID)
   if not active then return end
 
   active.timer = nil
-  if active.expiration and active.expiration > GetTime() then
-    self:ScheduleSummonExpiryCheck(spellID)
+
+  local removed = RemoveExpiredSummonGUIDs(self, spellID, active, GetTime())
+
+  if not active.count or active.count <= 0 then
+    self:DeactivateSummonSpell(spellID)
     return
   end
 
-  self:DeactivateSummonSpell(spellID)
+  if removed > 0 then
+    self:UpdateSummonFrame(spellID, true)
+  end
+
+  self:ScheduleSummonExpiryCheck(spellID)
 end
 
 function ClassHUD:DeactivateSummonSpell(spellID)
@@ -1410,31 +1583,35 @@ function ClassHUD:HandleTrackedSummon(spellID, destGUID)
       startTime = now,
       duration = duration,
       expiration = now + duration,
+      nextExpiration = now + duration,
       guids = {},
       count = 0,
       demon = not not def.demon,
       npcID = def.npcID,
     }
     self._activeSummonsBySpell[spellID] = active
-  else
-    active.duration = math.max(duration, active.duration or 0)
-    if not active.startTime then
-      active.startTime = now
-    end
-    local newExpiration = now + duration
-    if not active.expiration or newExpiration > active.expiration then
-      active.expiration = newExpiration
-    end
   end
 
-  active.count = (active.count or 0) + 1
   active.iconSpellID = active.iconSpellID or spellID
   active.guids = active.guids or {}
+  local guidKey = destGUID
+  if not guidKey then
+    active._syntheticIndex = (active._syntheticIndex or 0) + 1
+    guidKey = string.format("synthetic:%d:%d:%d", spellID, math.floor(now * 1000), active._syntheticIndex)
+  end
+
+  active.guids[guidKey] = {
+    guid = destGUID or guidKey,
+    startTime = now,
+    duration = duration,
+    expiration = now + duration,
+  }
+
   if destGUID then
-    active.guids[destGUID] = true
     self._summonGuidToSpell[destGUID] = spellID
   end
 
+  FinalizeSummonState(active)
   self:UpdateSummonFrame(spellID, true)
   self:ScheduleSummonExpiryCheck(spellID)
   if def.tyrant then
@@ -1453,24 +1630,27 @@ function ClassHUD:ExtendActiveSummonDurations(extension, excludeSpellID)
     if spellID ~= excludeSpellID and active then
       local def = SUMMON_SPELLS[spellID]
       if def and def.demon then
-        local expiration = active.expiration
-        if expiration and expiration > now then
-          expiration = expiration + extension
-        else
-          expiration = now + extension
-        end
-        active.expiration = expiration
+        if active.guids then
+          for _, data in pairs(active.guids) do
+            if data then
+              local expiration = data.expiration
+              if expiration and expiration > now then
+                data.expiration = expiration + extension
+              else
+                data.expiration = now + extension
+              end
 
-        if active.startTime then
-          local newDuration = expiration - active.startTime
-          if not active.duration or newDuration > active.duration then
-            active.duration = newDuration
+              if data.startTime then
+                data.duration = data.expiration - data.startTime
+              else
+                data.startTime = now
+                data.duration = math.max(data.duration or 0, extension)
+              end
+            end
           end
-        else
-          active.startTime = now
-          active.duration = math.max(active.duration or 0, extension)
         end
 
+        FinalizeSummonState(active)
         self:UpdateSummonFrame(spellID, true)
         self:ScheduleSummonExpiryCheck(spellID)
       end
@@ -1493,14 +1673,15 @@ function ClassHUD:HandleSummonedUnitDeath(destGUID)
     active.guids[destGUID] = nil
   end
 
-  if active.count and active.count > 0 then
-    active.count = active.count - 1
+  FinalizeSummonState(active)
+
+  if not active.count or active.count <= 0 then
+    self:DeactivateSummonSpell(spellID)
+    return
   end
 
-  if not active.guids or next(active.guids) == nil then
-    active.expiration = active.expiration or GetTime()
-    self:DeactivateSummonSpell(spellID)
-  end
+  self:UpdateSummonFrame(spellID, true)
+  self:ScheduleSummonExpiryCheck(spellID)
 end
 
 function ClassHUD:RefreshTemporaryBuffs(suppressLayout)
@@ -1516,7 +1697,9 @@ function ClassHUD:RefreshTemporaryBuffs(suppressLayout)
   local now = GetTime()
   local any = false
   for spellID, active in pairs(self._activeSummonsBySpell) do
-    if active.expiration and active.expiration <= now then
+    RemoveExpiredSummonGUIDs(self, spellID, active, now)
+
+    if not active.count or active.count <= 0 then
       self:DeactivateSummonSpell(spellID)
     else
       self:UpdateSummonFrame(spellID, true)
@@ -1549,6 +1732,82 @@ function ClassHUD:ResetSummonTracking()
   end
 
   self:ClearWildImpTracking()
+end
+
+function ClassHUD:HideWildImpBuffFrame()
+  local frame = self._wildImpBuffFrame
+  if not frame then return end
+
+  local wasActive = not not frame._layoutActive
+
+  CooldownFrame_Clear(frame.cooldown)
+  frame.cooldown:Hide()
+
+  frame.count:SetText("")
+  frame.count:Hide()
+
+  self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+
+  frame._layoutActive = false
+  frame:Hide()
+
+  if wasActive then
+    self:ApplyTrackedBuffLayout()
+  end
+end
+
+function ClassHUD:UpdateWildImpBuffFrame(count)
+  if not self:IsWildImpTrackingEnabled() or not self:IsWildImpBuffMode() then
+    self:HideWildImpBuffFrame()
+    return
+  end
+
+  count = count or (self._wildImpCount or 0)
+  if count <= 0 then
+    self:HideWildImpBuffFrame()
+    return
+  end
+
+  local frame = EnsureWildImpBuffFrame(self)
+  if not frame then return end
+
+  local aura = {}
+  local duration = WILD_IMP_AVERAGE_DURATION
+  local now = GetTime()
+  local oldestSpawn = nil
+
+  if self._wildImpGuids then
+    for _, entry in pairs(self._wildImpGuids) do
+      if entry and entry.spawnTime then
+        if not oldestSpawn or entry.spawnTime < oldestSpawn then
+          oldestSpawn = entry.spawnTime
+        end
+      end
+    end
+  end
+
+  if duration and duration > 0 then
+    local startTime = oldestSpawn or now
+    local elapsed = now - startTime
+    local remaining = duration - elapsed
+    if remaining < 0 then remaining = 0 end
+    aura.duration = duration
+    aura.expirationTime = now + remaining
+    aura.modRate = 1
+  end
+
+  aura.applications = count
+  aura.charges = count
+
+  frame.buffID = WILD_IMP_DISPLAY_SPELL_ID
+  PopulateBuffIconFrame(frame, WILD_IMP_DISPLAY_SPELL_ID, aura, nil)
+  frame._manualWildImp = true
+  frame._manualSummon = true
+  frame._layoutActive = true
+  frame:Show()
+
+  self._wildImpBuffFrame = frame
+  self:ApplyTrackedBuffLayout()
 end
 
 function ClassHUD:HandleWildImpSummon(destGUID)
@@ -1706,6 +1965,7 @@ function ClassHUD:ApplyTotemOverlay(state)
 
   frame._totemActive = true
   frame._totemSlot = state.slot
+  frame._activeTotemState = state
 end
 
 function ClassHUD:ClearTotemOverlay(state)
@@ -1724,6 +1984,11 @@ function ClassHUD:ClearTotemOverlay(state)
 
   frame._totemActive = nil
   frame._totemSlot = nil
+  frame._activeTotemState = nil
+
+  if state.spellID and self and self.UpdateCooldown then
+    self:UpdateCooldown(state.spellID)
+  end
 end
 
 function ClassHUD:UpdateTotemSlot(slot)
@@ -1764,6 +2029,9 @@ function ClassHUD:UpdateTotemSlot(slot)
       self._activeTotems[slot] = state
 
       self:ApplyTotemOverlay(state)
+      if spellID and self.UpdateCooldown then
+        self:UpdateCooldown(spellID)
+      end
     else
       local previous = self._activeTotems[slot]
       if previous then
@@ -1776,9 +2044,6 @@ function ClassHUD:UpdateTotemSlot(slot)
     if previous then
       self:ClearTotemOverlay(previous)
       self._activeTotems[slot] = nil
-      if previous.spellID and self.UpdateCooldown then
-        self:UpdateCooldown(previous.spellID)
-      end
     end
   end
 end
@@ -1816,6 +2081,9 @@ function ClassHUD:GetManualCountForSpell(spellID)
   if spellID == IMPLOSION_SPELL_ID then
     if not self:IsWildImpTrackingEnabled() then
       return 0
+    end
+    if self:GetWildImpTrackingMode and self:GetWildImpTrackingMode() ~= "implosion" then
+      return nil
     end
     return self._wildImpCount or 0
   end
@@ -2461,7 +2729,26 @@ local function UpdateSpellFrame(frame)
       cooldownTextRemaining = remaining
     end
   end
-  ClassHUD:ApplyCooldownText(frame, showNumbers, cooldownTextRemaining)
+
+  local totemOverride = false
+  if ClassHUD.IsTotemDurationTextEnabled and ClassHUD:IsTotemDurationTextEnabled() then
+    local totemState = frame._activeTotemState
+    if not totemState then
+      totemState = ClassHUD:GetActiveTotemStateForSpell(sid)
+      frame._activeTotemState = totemState
+    end
+    if totemState and totemState.expiration and totemState.duration and totemState.duration > 0 then
+      local remaining = totemState.expiration - now
+      if remaining and remaining > 0 then
+        ClassHUD:ApplyCooldownText(frame, true, remaining)
+        totemOverride = true
+      end
+    end
+  end
+
+  if not totemOverride then
+    ClassHUD:ApplyCooldownText(frame, showNumbers, cooldownTextRemaining)
+  end
 
   shouldDesaturate = false
   if onCooldown and not isGCDCooldown and (not chargesShown or chargesDepleted) then
@@ -2529,9 +2816,14 @@ function ClassHUD:HandleCombatLogEvent()
 
   if subevent == "SPELL_SUMMON" then
     if IsMine(sourceGUID, sourceFlags) then
+      local handledSummon = false
       if SUMMON_SPELLS[spellID] then
         self:HandleTrackedSummon(spellID, destGUID)
-      elseif WILD_IMP_SUMMON_IDS[spellID] then
+        handledSummon = true
+      end
+
+      local npcID = destGUID and GetNPCIDFromGUID(destGUID)
+      if npcID == WILD_IMP_NPC_ID or (not handledSummon and WILD_IMP_SUMMON_IDS[spellID]) then
         self:HandleWildImpSummon(destGUID)
       end
     end

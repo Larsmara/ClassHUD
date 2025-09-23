@@ -33,6 +33,11 @@ local TOTEM_OVERLAY_OPTIONS = {
   GLOW  = "Glow",
 }
 
+local WILD_IMP_MODE_OPTIONS = {
+  implosion = "Implosion Counter",
+  buff = "Buff Icon",
+}
+
 local function PlayerMatchesClass(addon, class)
   if not class then return false end
   local playerClass = select(1, addon:GetPlayerClassSpec())
@@ -1757,10 +1762,34 @@ function ClassHUD_BuildOptions(addon)
               NotifyOptionsChanged()
             end,
           },
+          wildImpMode = {
+            type = "select",
+            name = "Wild Imp Tracking Mode",
+            order = 4,
+            values = WILD_IMP_MODE_OPTIONS,
+            hidden = function()
+              return not PlayerMatchesSpec(addon, "WARLOCK", 266)
+            end,
+            disabled = function()
+              return addon.db.profile.trackSummons == false or addon.db.profile.trackWildImps == false
+            end,
+            get = function()
+              local mode = addon.db.profile.wildImpTrackingMode
+              if mode == "buff" then
+                return "buff"
+              end
+              return "implosion"
+            end,
+            set = function(_, value)
+              addon.db.profile.wildImpTrackingMode = value
+              if addon.RefreshWildImpDisplay then addon:RefreshWildImpDisplay() end
+              NotifyOptionsChanged()
+            end,
+          },
           trackTotems = {
             type = "toggle",
             name = "Track totem uptime",
-            order = 4,
+            order = 5,
             hidden = function()
               return not PlayerMatchesClass(addon, "SHAMAN")
             end,
@@ -1780,7 +1809,7 @@ function ClassHUD_BuildOptions(addon)
           totemStyle = {
             type = "select",
             name = "Totem overlay style",
-            order = 5,
+            order = 7,
             values = TOTEM_OVERLAY_OPTIONS,
             hidden = function()
               return not PlayerMatchesClass(addon, "SHAMAN") or addon.db.profile.trackTotems == false
@@ -1790,6 +1819,30 @@ function ClassHUD_BuildOptions(addon)
             end,
             set = function(_, value)
               addon.db.profile.totemOverlayStyle = value
+              if addon.RefreshAllTotems then addon:RefreshAllTotems() end
+              NotifyOptionsChanged()
+            end,
+          },
+          totemShowDuration = {
+            type = "toggle",
+            name = "Show Totem Duration",
+            order = 6,
+            hidden = function()
+              return not PlayerMatchesClass(addon, "SHAMAN")
+            end,
+            disabled = function()
+              return addon.db.profile.trackTotems == false
+            end,
+            get = function()
+              local settings = addon.db.profile.totems or {}
+              if settings.showDuration == nil then
+                return true
+              end
+              return settings.showDuration
+            end,
+            set = function(_, val)
+              addon.db.profile.totems = addon.db.profile.totems or {}
+              addon.db.profile.totems.showDuration = not not val
               if addon.RefreshAllTotems then addon:RefreshAllTotems() end
               NotifyOptionsChanged()
             end,
