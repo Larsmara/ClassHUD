@@ -24,6 +24,7 @@ local WILD_IMP_NPC_IDS = {
 local WILD_IMP_MAX_CHARGES = 5
 local WILD_IMP_AVERAGE_DURATION = 12
 local WILD_IMP_DISPLAY_SPELL_ID = 104317
+local TOTEM_DURATION_UPDATE_INTERVAL = 0.1
 
 local SUMMON_SPELLS = {
   [34433]  = { fallbackDuration = 15, class = "PRIEST" },      -- Shadowfiend
@@ -107,6 +108,7 @@ ClassHUD._summonGuidToSpell = ClassHUD._summonGuidToSpell or {}
 ClassHUD._wildImpGuids = ClassHUD._wildImpGuids or {}
 ClassHUD._wildImpCount = ClassHUD._wildImpCount or 0
 ClassHUD._activeTotems = ClassHUD._activeTotems or {}
+ClassHUD._pendingTotemFrames = ClassHUD._pendingTotemFrames or {}
 ClassHUD._spellNameToID = ClassHUD._spellNameToID or {}
 ClassHUD._trackedBuffRegistry = ClassHUD._trackedBuffRegistry or {}
 ClassHUD._trackedBuffOrder = ClassHUD._trackedBuffOrder or {}
@@ -1710,6 +1712,52 @@ function ClassHUD:RefreshTemporaryBuffs(suppressLayout)
       any = true
     end
   end
+
+  local wildImps = self._wildImpGuids
+  if wildImps and next(wildImps) then
+    local mapChanged = false
+    for guid, entry in pairs(wildImps) do
+      if entry then
+        if not entry.npcID then
+          entry.npcID = self:GetNpcIDFromGUID(guid)
+        end
+
+        local npcID = entry.npcID
+        local remove = false
+
+        if npcID and not WILD_IMP_NPC_IDS[npcID] then
+          remove = true
+        end
+
+        local charges = entry.charges
+        if not remove and charges and charges <= 0 then
+          remove = true
+        end
+
+        local spawnTime = entry.spawnTime
+        if not remove and spawnTime then
+          if (now - spawnTime) > WILD_IMP_AVERAGE_DURATION then
+            remove = true
+          end
+        elseif not remove and not spawnTime then
+          entry.spawnTime = now
+        end
+
+        if remove then
+          wildImps[guid] = nil
+          mapChanged = true
+        end
+      else
+        wildImps[guid] = nil
+        mapChanged = true
+      end
+    end
+
+    if mapChanged then
+      SyncWildImpCount(self)
+    end
+  end
+
   if any and not suppressLayout then
     self:ApplyTrackedBuffLayout()
   end
@@ -1825,14 +1873,15 @@ function ClassHUD:HandleWildImpSummon(destGUID, npcID)
 
   self._wildImpGuids = self._wildImpGuids or {}
   local entry = self._wildImpGuids[destGUID]
+  local now = GetTime()
   if entry then
     entry.charges = WILD_IMP_MAX_CHARGES
-    entry.spawnTime = GetTime()
-    entry.npcID = npcID or entry.npcID
+    entry.spawnTime = now
+    entry.npcID = npcID or entry.npcID or self:GetNpcIDFromGUID(destGUID)
   else
     self._wildImpGuids[destGUID] = {
       charges = WILD_IMP_MAX_CHARGES,
-      spawnTime = GetTime(),
+      spawnTime = now,
       npcID = npcID,
     }
   end
@@ -1844,8 +1893,20 @@ function ClassHUD:HandleWildImpDespawn(destGUID, npcID)
   if not destGUID then return end
   if not self:IsWildImpTrackingEnabled() then return end
 
-  npcID = npcID or self:GetNpcIDFromGUID(destGUID)
+  local map = self._wildImpGuids
+  local entry = map and map[destGUID]
+
+  if entry and not entry.npcID then
+    entry.npcID = npcID or self:GetNpcIDFromGUID(destGUID)
+  end
+
+  npcID = (entry and entry.npcID) or npcID or self:GetNpcIDFromGUID(destGUID)
+
   if npcID and not WILD_IMP_NPC_IDS[npcID] then
+    if entry then
+      map[destGUID] = nil
+      SyncWildImpCount(self)
+    end
     return
   end
 
@@ -1875,11 +1936,14 @@ function ClassHUD:HandleWildImpFelFirebolt(destGUID, sourceGUID)
     entry.npcID = self:GetNpcIDFromGUID(guid)
   end
 
-  if entry.npcID and not WILD_IMP_NPC_IDS[entry.npcID] then
+  local npcID = entry.npcID
+  if npcID and not WILD_IMP_NPC_IDS[npcID] then
+    map[guid] = nil
+    SyncWildImpCount(self)
     return
   end
 
-  local remaining = (entry.charges or 0) - 1
+  local remaining = (entry.charges or WILD_IMP_MAX_CHARGES) - 1
   if remaining <= 0 then
     RemoveWildImp(self, guid)
     return
@@ -1914,6 +1978,95 @@ local function FindSpellFrameByName(self, name)
 
   cache[name] = nil
   return nil
+end
+
+local function HasTotemDuration(state)
+  return state and state.expiration and state.duration and state.duration > 0
+end
+
+function ClassHUD:MarkTotemFrameForUpdate(frame)
+  if not frame then return end
+
+  local state = frame._activeTotemState
+  if not self:IsTotemDurationTextEnabled() or not HasTotemDuration(state) then
+    self:UnmarkTotemFrame(frame)
+    return
+  end
+
+  local bucket = self._pendingTotemFrames
+  if not bucket then
+    bucket = {}
+    self._pendingTotemFrames = bucket
+  end
+
+  bucket[frame] = true
+
+  if not self._totemFlushTimer then
+    self._totemFlushTimer = self:ScheduleTimer("FlushTotemChanges", TOTEM_DURATION_UPDATE_INTERVAL)
+  end
+end
+
+function ClassHUD:UnmarkTotemFrame(frame)
+  local bucket = self._pendingTotemFrames
+  if not bucket then return end
+
+  if frame then
+    bucket[frame] = nil
+  end
+
+  if not next(bucket) and self._totemFlushTimer then
+    local handle = self._totemFlushTimer
+    self._totemFlushTimer = nil
+    self:CancelTimer(handle)
+  end
+end
+
+function ClassHUD:FlushTotemChanges()
+  local handle = self._totemFlushTimer
+  self._totemFlushTimer = nil
+  if handle then
+    self:CancelTimer(handle)
+  end
+
+  local bucket = self._pendingTotemFrames
+  if not bucket or not next(bucket) then
+    return
+  end
+
+  if not self:IsTotemDurationTextEnabled() then
+    for frame in pairs(bucket) do
+      bucket[frame] = nil
+      if frame then
+        self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+      end
+    end
+    return
+  end
+
+  local now = GetTime()
+  local keepTicker = false
+  for frame in pairs(bucket) do
+    local state = frame and frame._activeTotemState
+    if frame and HasTotemDuration(state) then
+      local remaining = state.expiration - now
+      if remaining and remaining > 0 then
+        keepTicker = true
+        self:ApplyCooldownText(frame, true, remaining)
+      else
+        bucket[frame] = nil
+        self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+      end
+    else
+      bucket[frame] = nil
+      if frame then
+        self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+      end
+    end
+  end
+
+  if keepTicker and next(bucket) then
+    self._totemFlushTimer = self:ScheduleTimer("FlushTotemChanges", TOTEM_DURATION_UPDATE_INTERVAL)
+  end
 end
 
 local function EnsureTotemCooldown(frame)
@@ -1975,12 +2128,24 @@ function ClassHUD:ApplyTotemOverlay(state)
   frame._totemActive = true
   frame._totemSlot = state.slot
   frame._activeTotemState = state
+
+  if self:IsTotemDurationTextEnabled() and HasTotemDuration(state) then
+    local remaining = state.expiration - GetTime()
+    if remaining and remaining > 0 then
+      self:ApplyCooldownText(frame, true, remaining)
+    else
+      self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+    end
+  end
+
+  self:MarkTotemFrameForUpdate(frame)
 end
 
 function ClassHUD:ClearTotemOverlay(state)
   if not state or not state.frame then return end
 
   local frame = state.frame
+  self:UnmarkTotemFrame(frame)
   if frame.totemCooldown then
     CooldownFrame_Clear(frame.totemCooldown)
     frame.totemCooldown:Hide()
@@ -2083,6 +2248,17 @@ function ClassHUD:ResetTotemTracking()
     wipe(self._spellNameToID)
   else
     self._spellNameToID = {}
+  end
+
+  if self._pendingTotemFrames then
+    wipe(self._pendingTotemFrames)
+  else
+    self._pendingTotemFrames = {}
+  end
+
+  if self._totemFlushTimer then
+    self:CancelTimer(self._totemFlushTimer)
+    self._totemFlushTimer = nil
   end
 end
 
@@ -2746,12 +2922,20 @@ local function UpdateSpellFrame(frame)
       totemState = ClassHUD:GetActiveTotemStateForSpell(sid)
       frame._activeTotemState = totemState
     end
-    if totemState and totemState.expiration and totemState.duration and totemState.duration > 0 then
-      local remaining = totemState.expiration - now
-      if remaining and remaining > 0 then
-        ClassHUD:ApplyCooldownText(frame, true, remaining)
-        totemOverride = true
+
+    if HasTotemDuration(totemState) then
+      totemOverride = true
+      if ClassHUD.MarkTotemFrameForUpdate then
+        ClassHUD:MarkTotemFrameForUpdate(frame)
       end
+    else
+      if ClassHUD.UnmarkTotemFrame then
+        ClassHUD:UnmarkTotemFrame(frame)
+      end
+    end
+  else
+    if ClassHUD.UnmarkTotemFrame then
+      ClassHUD:UnmarkTotemFrame(frame)
     end
   end
 
