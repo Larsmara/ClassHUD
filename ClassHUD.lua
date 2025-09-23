@@ -930,11 +930,15 @@ for _, ev in pairs({
 
   -- Spells
   "UNIT_AURA", "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_CHARGES", "SPELL_UPDATE_USABLE", "UNIT_SPELLCAST_SUCCEEDED",
+  "COMBAT_LOG_EVENT_UNFILTERED",
 
   -- Target
   "PLAYER_TARGET_CHANGED",
   "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
-  "SPELL_RANGE_CHECK_UPDATE"
+  "SPELL_RANGE_CHECK_UPDATE",
+
+  -- Totems
+  "PLAYER_TOTEM_UPDATE",
 }) do
   eventFrame:RegisterEvent(ev)
 end
@@ -942,22 +946,28 @@ end
 eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   -- Full refresh after world load
   if event == "PLAYER_ENTERING_WORLD" then
+    if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
+    if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:FullUpdate()
     ClassHUD:ApplyAnchorPosition()
     local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
+    if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
   end
 
   -- Spec change
   if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
+    if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
+    if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     ClassHUD:RefreshRegisteredOptions()
     ClassHUD:UpdateAllFrames()
+    if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
   end
 
@@ -1077,6 +1087,23 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
       ClassHUD:HandleEclipseEvent(event, unit, spellID)
     end
 
+    return
+  end
+
+  if event == "COMBAT_LOG_EVENT_UNFILTERED" then
+    if ClassHUD.HandleCombatLogEvent then
+      ClassHUD:HandleCombatLogEvent()
+    end
+    return
+  end
+
+  if event == "PLAYER_TOTEM_UPDATE" then
+    local slot = tonumber(unit)
+    if ClassHUD.UpdateTotemSlot then
+      ClassHUD:UpdateTotemSlot(slot)
+    elseif ClassHUD.RefreshAllTotems then
+      ClassHUD:RefreshAllTotems()
+    end
     return
   end
 

@@ -13,6 +13,37 @@ local activeFrames = {}
 local trackedBuffPool = ClassHUD._trackedBuffFramePool
 local trackedBarPool = ClassHUD._trackedBarFramePool
 
+local bit_band = bit and bit.band or (bit32 and bit32.band)
+local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
+local IMPLOSION_SPELL_ID = 196277
+
+local SUMMON_SPELLS = {
+  [34433]  = { fallbackDuration = 15 }, -- Shadowfiend
+  [123040] = { fallbackDuration = 12 }, -- Mindbender
+  [104316] = { fallbackDuration = 12 }, -- Call Dreadstalkers
+  [264119] = { fallbackDuration = 15 }, -- Summon Vilefiend
+  [265187] = { fallbackDuration = 15 }, -- Summon Demonic Tyrant
+  [111898] = { fallbackDuration = 17 }, -- Grimoire: Felguard
+  [42650]  = { fallbackDuration = 30 }, -- Army of the Dead
+  [49206]  = { fallbackDuration = 25 }, -- Summon Gargoyle
+  [205636] = { fallbackDuration = 10 }, -- Force of Nature
+  [115313] = { fallbackDuration = 15 }, -- Jade Serpent Statue
+}
+
+local WILD_IMP_SUMMON_IDS = {
+  [104317] = true, -- Wild Imp
+  [104318] = true, -- Wild Imp (Demonic Empowerment variants)
+}
+
+ClassHUD._activeSummonsBySpell = ClassHUD._activeSummonsBySpell or {}
+ClassHUD._summonGuidToSpell = ClassHUD._summonGuidToSpell or {}
+ClassHUD._wildImpGuids = ClassHUD._wildImpGuids or {}
+ClassHUD._wildImpCount = ClassHUD._wildImpCount or 0
+ClassHUD._activeTotems = ClassHUD._activeTotems or {}
+ClassHUD._spellNameToID = ClassHUD._spellNameToID or {}
+ClassHUD._trackedBuffRegistry = ClassHUD._trackedBuffRegistry or {}
+ClassHUD._trackedBuffOrder = ClassHUD._trackedBuffOrder or {}
+
 local INACTIVE_BAR_COLOR = { r = 0.25, g = 0.25, b = 0.25, a = 0.6 }
 local HARMFUL_GLOW_THRESHOLD = 5
 local HARMFUL_GLOW_AURA_CHECK_INTERVAL = 0.1
@@ -41,6 +72,49 @@ local function ExtractAuraSpellID(payload)
     end
   end
   return nil
+end
+
+local function Contains(list, value)
+  if type(list) ~= "table" then return false end
+  for i = 1, #list do
+    if list[i] == value then
+      return true
+    end
+  end
+  return false
+end
+
+local function DetermineSpellDuration(spellID, fallback)
+  if C_Spell and C_Spell.GetSpellInfo then
+    local info = C_Spell.GetSpellInfo(spellID)
+    if info then
+      if info.duration and info.duration > 0 then
+        return info.duration
+      end
+      if info.durationMS and info.durationMS > 0 then
+        return info.durationMS / 1000
+      end
+      if info.auraDuration and info.auraDuration > 0 then
+        return info.auraDuration
+      end
+    end
+  end
+  return fallback
+end
+
+local function IsMine(sourceGUID, sourceFlags)
+  local playerGUID = UnitGUID and UnitGUID("player")
+  if playerGUID and sourceGUID == playerGUID then
+    return true
+  end
+  if bit_band and sourceFlags and bit_band(sourceFlags, AFFILIATION_MINE) ~= 0 then
+    return true
+  end
+  local petGUID = UnitGUID and UnitGUID("pet")
+  if petGUID and sourceGUID == petGUID then
+    return true
+  end
+  return false
 end
 
 local function ClearFrameAuraWatchers(frame)
@@ -1001,7 +1075,475 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
 end
 
 
+local function EnsureSummonFrame(self, spellID)
+  if not self.trackedBuffFrames then
+    self.trackedBuffFrames = {}
+  end
+  if not self._trackedBuffRegistry then
+    self._trackedBuffRegistry = {}
+  end
+  if not self._trackedBuffOrder then
+    self._trackedBuffOrder = {}
+  end
 
+  local registry = self._trackedBuffRegistry
+  local def = registry[spellID]
+  local frame = def and def.iconFrame
+
+  if not frame or not frame._manualSummon then
+    frame = CreateBuffFrame(spellID)
+    frame.buffID = spellID
+    frame._manualSummon = true
+    frame._trackedEntry = nil
+    frame._trackedAuraCandidates = nil
+    frame._auraUnitList = nil
+    frame._manualSummonSpellID = spellID
+    frame._updateKind = "trackedIcon"
+    frame._layoutActive = false
+    frame._last = frame._last or {}
+    ClassHUD:ClearFrameAuraWatchers(frame)
+
+    def = def or {}
+    def.iconFrame = frame
+    def.entry = def.entry or nil
+    def.iconCandidates = nil
+    def.manualSummon = true
+    registry[spellID] = def
+  end
+
+  if not Contains(self._trackedBuffOrder, spellID) then
+    table.insert(self._trackedBuffOrder, spellID)
+  end
+
+  if not Contains(self.trackedBuffFrames, frame) then
+    table.insert(self.trackedBuffFrames, frame)
+  end
+
+  return frame, def
+end
+
+function ClassHUD:GetSummonDuration(spellID)
+  local def = SUMMON_SPELLS[spellID]
+  if not def then return nil end
+
+  local duration = DetermineSpellDuration(def.durationSpellID or spellID, def.fallbackDuration)
+  if duration and duration > 0 then
+    return duration
+  end
+
+  return def.fallbackDuration
+end
+
+function ClassHUD:UpdateSummonFrame(spellID, suppressLayout)
+  local active = self._activeSummonsBySpell and self._activeSummonsBySpell[spellID]
+  if not active then return end
+
+  local frame = EnsureSummonFrame(self, spellID)
+  if not frame then return end
+
+  local duration = active.duration
+  if (not duration or duration <= 0) and active.expiration and active.startTime then
+    duration = math.max(0, active.expiration - active.startTime)
+  end
+
+  local displayID = active.iconSpellID or spellID
+
+  if active.expiration and duration and duration > 0 then
+    local aura = {
+      duration = duration,
+      expirationTime = active.expiration,
+      modRate = 1,
+    }
+    frame.buffID = displayID
+    PopulateBuffIconFrame(frame, displayID, aura, nil)
+  else
+    frame.buffID = displayID
+    PopulateBuffIconFrame(frame, displayID, nil, nil)
+  end
+
+  frame._manualSummon = true
+  frame._layoutActive = true
+  frame:Show()
+
+  if not suppressLayout then
+    self:ApplyTrackedBuffLayout()
+  end
+end
+
+function ClassHUD:ScheduleSummonExpiryCheck(spellID)
+  local active = self._activeSummonsBySpell and self._activeSummonsBySpell[spellID]
+  if not active or not active.expiration then return end
+
+  if active.timer then
+    self:CancelTimer(active.timer)
+    active.timer = nil
+  end
+
+  local delay = active.expiration - GetTime()
+  if delay and delay > 0 then
+    active.timer = self:ScheduleTimer("CheckSummonExpiration", delay + 0.05, spellID)
+  else
+    self:CheckSummonExpiration(spellID)
+  end
+end
+
+function ClassHUD:CheckSummonExpiration(spellID)
+  local active = self._activeSummonsBySpell and self._activeSummonsBySpell[spellID]
+  if not active then return end
+
+  active.timer = nil
+  if active.expiration and active.expiration > GetTime() then
+    self:ScheduleSummonExpiryCheck(spellID)
+    return
+  end
+
+  self:DeactivateSummonSpell(spellID)
+end
+
+function ClassHUD:DeactivateSummonSpell(spellID)
+  local active = self._activeSummonsBySpell and self._activeSummonsBySpell[spellID]
+  if not active then return end
+
+  if active.timer then
+    self:CancelTimer(active.timer)
+    active.timer = nil
+  end
+
+  if active.guids then
+    for guid in pairs(active.guids) do
+      self._summonGuidToSpell[guid] = nil
+      active.guids[guid] = nil
+    end
+  end
+
+  local registry = self._trackedBuffRegistry
+  local def = registry and registry[spellID]
+  local frame = def and def.iconFrame
+  if frame and frame._manualSummon then
+    ClassHUD:ClearFrameAuraWatchers(frame)
+    CooldownFrame_Clear(frame.cooldown)
+    frame.cooldown:Hide()
+    frame.count:SetText("")
+    frame.count:Hide()
+    ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+    frame._layoutActive = false
+    frame:Hide()
+  end
+
+  self._activeSummonsBySpell[spellID] = nil
+  self:ApplyTrackedBuffLayout()
+end
+
+function ClassHUD:HandleTrackedSummon(spellID, destGUID)
+  if not SUMMON_SPELLS[spellID] then return end
+
+  local duration = self:GetSummonDuration(spellID)
+  if not duration or duration <= 0 then return end
+
+  local now = GetTime()
+  local active = self._activeSummonsBySpell[spellID]
+  if not active then
+    active = {
+      spellID = spellID,
+      iconSpellID = (SUMMON_SPELLS[spellID] and SUMMON_SPELLS[spellID].displaySpellID) or spellID,
+      startTime = now,
+      duration = duration,
+      expiration = now + duration,
+      guids = {},
+      count = 0,
+    }
+    self._activeSummonsBySpell[spellID] = active
+  else
+    active.duration = math.max(duration, active.duration or 0)
+    if not active.startTime then
+      active.startTime = now
+    end
+    local newExpiration = now + duration
+    if not active.expiration or newExpiration > active.expiration then
+      active.expiration = newExpiration
+    end
+  end
+
+  active.count = (active.count or 0) + 1
+  active.iconSpellID = active.iconSpellID or spellID
+  active.guids = active.guids or {}
+  if destGUID then
+    active.guids[destGUID] = true
+    self._summonGuidToSpell[destGUID] = spellID
+  end
+
+  self:UpdateSummonFrame(spellID)
+  self:ScheduleSummonExpiryCheck(spellID)
+end
+
+function ClassHUD:HandleSummonedUnitDeath(destGUID)
+  if not destGUID then return end
+
+  local spellID = self._summonGuidToSpell and self._summonGuidToSpell[destGUID]
+  if not spellID then return end
+
+  self._summonGuidToSpell[destGUID] = nil
+
+  local active = self._activeSummonsBySpell and self._activeSummonsBySpell[spellID]
+  if not active then return end
+
+  if active.guids then
+    active.guids[destGUID] = nil
+  end
+
+  if active.count and active.count > 0 then
+    active.count = active.count - 1
+  end
+
+  if not active.guids or next(active.guids) == nil then
+    active.expiration = active.expiration or GetTime()
+    self:DeactivateSummonSpell(spellID)
+  end
+end
+
+function ClassHUD:RefreshTemporaryBuffs(suppressLayout)
+  if not self._activeSummonsBySpell then return end
+
+  local now = GetTime()
+  local any = false
+  for spellID, active in pairs(self._activeSummonsBySpell) do
+    if active.expiration and active.expiration <= now then
+      self:DeactivateSummonSpell(spellID)
+    else
+      self:UpdateSummonFrame(spellID, true)
+      any = true
+    end
+  end
+  if any and not suppressLayout then
+    self:ApplyTrackedBuffLayout()
+  end
+end
+
+function ClassHUD:ResetSummonTracking()
+  if self._activeSummonsBySpell then
+    local pending = {}
+    for spellID in pairs(self._activeSummonsBySpell) do
+      pending[#pending + 1] = spellID
+    end
+    for i = 1, #pending do
+      self:DeactivateSummonSpell(pending[i])
+    end
+    wipe(self._activeSummonsBySpell)
+  else
+    self._activeSummonsBySpell = {}
+  end
+
+  if self._summonGuidToSpell then
+    wipe(self._summonGuidToSpell)
+  else
+    self._summonGuidToSpell = {}
+  end
+
+  if self._wildImpGuids then
+    wipe(self._wildImpGuids)
+  else
+    self._wildImpGuids = {}
+  end
+
+  self._wildImpCount = 0
+
+  if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
+    self:UpdateCooldown(IMPLOSION_SPELL_ID)
+  end
+end
+
+function ClassHUD:HandleWildImpSummon(destGUID)
+  if not destGUID then return end
+
+  self._wildImpGuids = self._wildImpGuids or {}
+  if not self._wildImpGuids[destGUID] then
+    self._wildImpGuids[destGUID] = true
+    self._wildImpCount = (self._wildImpCount or 0) + 1
+    if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
+      self:UpdateCooldown(IMPLOSION_SPELL_ID)
+    end
+  end
+end
+
+function ClassHUD:HandleWildImpDespawn(destGUID)
+  if not destGUID or not self._wildImpGuids or not self._wildImpGuids[destGUID] then return end
+
+  self._wildImpGuids[destGUID] = nil
+  if self._wildImpCount and self._wildImpCount > 0 then
+    self._wildImpCount = self._wildImpCount - 1
+  else
+    self._wildImpCount = 0
+  end
+
+  if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
+    self:UpdateCooldown(IMPLOSION_SPELL_ID)
+  end
+end
+
+local function FindSpellFrameByName(self, name)
+  if not name or not self.spellFrames then return nil end
+
+  local cache = self._spellNameToID
+  local cachedID = cache and cache[name]
+  if cachedID and self.spellFrames[cachedID] then
+    return self.spellFrames[cachedID], cachedID
+  end
+
+  if not cache then
+    cache = {}
+    self._spellNameToID = cache
+  end
+
+  for spellID, frame in pairs(self.spellFrames) do
+    local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(spellID)
+    local spellName = info and info.name
+    if spellName == name then
+      cache[name] = spellID
+      return frame, spellID
+    end
+  end
+
+  cache[name] = nil
+  return nil
+end
+
+local function EnsureTotemCooldown(frame)
+  if frame.totemCooldown then return frame.totemCooldown end
+
+  local parent = frame.overlay or frame
+  local cooldown = CreateFrame("Cooldown", nil, parent, "CooldownFrameTemplate")
+  cooldown:SetAllPoints(frame.icon)
+  cooldown:SetHideCountdownNumbers(true)
+  cooldown:SetDrawBling(false)
+  cooldown:SetDrawEdge(false)
+  cooldown.noCooldownCount = true
+  cooldown:SetSwipeColor(0.2, 0.8, 1, 0.55)
+
+  local level = parent:GetFrameLevel() - 1
+  if level < 1 then level = 1 end
+  cooldown:SetFrameLevel(level)
+  cooldown:Hide()
+
+  frame.totemCooldown = cooldown
+  return cooldown
+end
+
+function ClassHUD:ApplyTotemOverlay(state)
+  if not state or not state.frame then return end
+
+  local frame = state.frame
+  local cooldown = EnsureTotemCooldown(frame)
+  local duration = state.duration or 0
+  local startTime = state.startTime or GetTime()
+
+  if duration > 0 then
+    cooldown:SetCooldown(startTime, duration)
+    cooldown:Show()
+    frame._totemGlowActive = nil
+  else
+    cooldown:Hide()
+    frame._totemGlowActive = true
+    SetFrameGlow(frame, true)
+  end
+
+  frame._totemActive = true
+  frame._totemSlot = state.slot
+end
+
+function ClassHUD:ClearTotemOverlay(state)
+  if not state or not state.frame then return end
+
+  local frame = state.frame
+  if frame.totemCooldown then
+    CooldownFrame_Clear(frame.totemCooldown)
+    frame.totemCooldown:Hide()
+  end
+
+  if frame._totemGlowActive then
+    frame._totemGlowActive = nil
+    SetFrameGlow(frame, false)
+  end
+
+  frame._totemActive = nil
+  frame._totemSlot = nil
+end
+
+function ClassHUD:UpdateTotemSlot(slot)
+  if not slot then
+    for index = 1, 4 do
+      self:UpdateTotemSlot(index)
+    end
+    return
+  end
+
+  if not GetTotemInfo then return end
+
+  local haveTotem, name, startTime, duration = GetTotemInfo(slot)
+
+  if haveTotem and name and name ~= "" then
+    local frame, spellID = FindSpellFrameByName(self, name)
+    if frame and spellID then
+      local state = self._activeTotems[slot] or {}
+      state.slot = slot
+      state.name = name
+      state.spellID = spellID
+      state.frame = frame
+      state.startTime = (startTime and startTime > 0) and startTime or GetTime()
+      state.duration = duration
+      state.expiration = (duration and duration > 0) and (state.startTime + duration) or nil
+      self._activeTotems[slot] = state
+
+      self:ApplyTotemOverlay(state)
+    else
+      local previous = self._activeTotems[slot]
+      if previous then
+        self:ClearTotemOverlay(previous)
+        self._activeTotems[slot] = nil
+      end
+    end
+  else
+    local previous = self._activeTotems[slot]
+    if previous then
+      self:ClearTotemOverlay(previous)
+      self._activeTotems[slot] = nil
+      if previous.spellID and self.UpdateCooldown then
+        self:UpdateCooldown(previous.spellID)
+      end
+    end
+  end
+end
+
+function ClassHUD:RefreshAllTotems()
+  for slot = 1, 4 do
+    self:UpdateTotemSlot(slot)
+  end
+end
+
+function ClassHUD:ResetTotemTracking()
+  if self._activeTotems then
+    for slot, state in pairs(self._activeTotems) do
+      if state then
+        self:ClearTotemOverlay(state)
+      end
+      self._activeTotems[slot] = nil
+    end
+  else
+    self._activeTotems = {}
+  end
+
+  if self._spellNameToID then
+    wipe(self._spellNameToID)
+  else
+    self._spellNameToID = {}
+  end
+end
+
+function ClassHUD:GetManualCountForSpell(spellID)
+  if spellID == IMPLOSION_SPELL_ID then
+    return self._wildImpCount or 0
+  end
+  return nil
+end
 
 
 local function UpdateTrackedIconFrame(frame)
@@ -1011,6 +1553,10 @@ local function UpdateTrackedIconFrame(frame)
   if not cache then
     cache = {}
     frame._last = cache
+  end
+
+  if frame._manualSummon then
+    return frame._layoutActive or false
   end
 
   local buffID = frame.buffID
@@ -1358,6 +1904,7 @@ function ClassHUD:BuildTrackedBuffFrames()
   self.trackedBuffFrames = iconFrames
   self.trackedBarFrames  = barFrames
 
+  self:RefreshTemporaryBuffs(true)
   self:ApplyTrackedBuffLayout()
 end
 
@@ -1488,6 +2035,19 @@ local function UpdateSpellFrame(frame)
     elseif not chargesShown then
       countText = nil
       countShown = false
+    end
+  end
+
+  if not chargesShown then
+    local manualCount = ClassHUD.GetManualCountForSpell and ClassHUD:GetManualCountForSpell(sid)
+    if manualCount ~= nil then
+      if manualCount > 0 then
+        countText = tostring(manualCount)
+        countShown = true
+      else
+        countText = nil
+        countShown = false
+      end
     end
   end
 
@@ -1669,6 +2229,9 @@ local function UpdateSpellFrame(frame)
   end
 
   local shouldGlow = UpdateGlow(frame, aura, sid, data) or false
+  if frame._totemGlowActive then
+    shouldGlow = true
+  end
   if cache.glow ~= shouldGlow then
     SetFrameGlow(frame, shouldGlow)
     cache.glow = shouldGlow
@@ -1681,6 +2244,27 @@ end
 -- Public API (kalles fra ClassHUD.lua events)
 -- ==================================================
 ClassHUD.UpdateTrackedBarFrame = UpdateTrackedBarFrame
+
+function ClassHUD:HandleCombatLogEvent()
+  if not CombatLogGetCurrentEventInfo then return end
+
+  local _, subevent, _, sourceGUID, _, sourceFlags, _, destGUID, _, _, _, spellID = CombatLogGetCurrentEventInfo()
+
+  if subevent == "SPELL_SUMMON" then
+    if IsMine(sourceGUID, sourceFlags) then
+      if SUMMON_SPELLS[spellID] then
+        self:HandleTrackedSummon(spellID, destGUID)
+      elseif WILD_IMP_SUMMON_IDS[spellID] then
+        self:HandleWildImpSummon(destGUID)
+      end
+    end
+  elseif subevent == "UNIT_DIED" or subevent == "UNIT_DESTROYED" or subevent == "UNIT_DISSIPATES" then
+    if destGUID then
+      self:HandleSummonedUnitDeath(destGUID)
+      self:HandleWildImpDespawn(destGUID)
+    end
+  end
+end
 
 function ClassHUD:UpdateCooldown(spellID)
   if not self.spellFrames then return end
@@ -1892,6 +2476,10 @@ function ClassHUD:BuildFramesForSpec()
   end
   wipe(activeFrames)
 
+  if self.ResetTotemTracking then
+    self:ResetTotemTracking()
+  end
+
   if self.spellFrames then
     for _, frame in pairs(self.spellFrames) do
       frame.snapshotEntry = nil
@@ -2101,5 +2689,9 @@ function ClassHUD:BuildFramesForSpec()
 
   if self.Layout then
     self:Layout()
+  end
+
+  if self.RefreshAllTotems then
+    self:RefreshAllTotems()
   end
 end
