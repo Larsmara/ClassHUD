@@ -267,32 +267,6 @@ local function UpdateGlow(frame, aura, sid, data)
 end
 
 
-local function UpdateCooldownText(frame, gcdActive)
-  local hasCooldown = frame._cooldownEnd ~= nil
-
-  frame._gcdActive = (gcdActive and not hasCooldown) or false
-
-  if frame._gcdActive then
-    if frame.cooldownText:IsShown() or frame._cooldownTextValue then
-      frame.cooldownText:SetText("")
-      frame.cooldownText:Hide()
-      frame._cooldownTextValue = nil
-    end
-    return
-  end
-
-  if not hasCooldown then
-    if frame.cooldownText:IsShown() or frame._cooldownTextValue then
-      frame.cooldownText:SetText("")
-      frame.cooldownText:Hide()
-      frame._cooldownTextValue = nil
-    end
-  end
-end
-
-
-
-
 -- ==================================================
 -- Frame factory
 -- ==================================================
@@ -309,14 +283,25 @@ local function CreateSpellFrame(spellID)
 
   -- Cooldown
   frame.cooldown = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
-  frame.cooldown:SetAllPoints(frame)
+  frame.cooldown:SetAllPoints(frame.icon)
   frame.cooldown:SetHideCountdownNumbers(true)
+  frame.cooldown:SetDrawBling(false)
+  frame.cooldown:SetDrawEdge(false)
   frame.cooldown.noCooldownCount = true
+
+  frame.cooldown2 = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
+  frame.cooldown2:SetAllPoints(frame.icon)
+  frame.cooldown2:SetHideCountdownNumbers(true)
+  frame.cooldown2:SetDrawBling(false)
+  frame.cooldown2:SetDrawEdge(false)
+  frame.cooldown2.noCooldownCount = true
+  frame.cooldown2:SetFrameLevel(frame.cooldown:GetFrameLevel() + 1)
+  frame.cooldown2:Hide()
 
   -- Overlay-frame (alltid over cooldown)
   frame.overlay = CreateFrame("Frame", nil, frame)
   frame.overlay:SetAllPoints(frame)
-  frame.overlay:SetFrameLevel(frame.cooldown:GetFrameLevel() + 1)
+  frame.overlay:SetFrameLevel(frame.cooldown2:GetFrameLevel() + 1)
 
   -- Flytt tekstene til overlay
   frame.count = frame.overlay:CreateFontString(nil, "OVERLAY")
@@ -334,9 +319,6 @@ local function CreateSpellFrame(spellID)
   frame.cooldownText:Hide()
 
 
-  frame._cooldownEnd = nil
-  frame._cooldownTextValue = nil
-  frame._gcdActive = false
   frame._harmfulGlowExpiration = nil
   frame._harmfulGlowWatching = false
   frame._harmfulGlowThreshold = HARMFUL_GLOW_THRESHOLD
@@ -399,10 +381,6 @@ local function CreateSpellFrame(spellID)
     end
   end)
 
-  ClassHUD:RegisterCooldownTextFrame(frame)
-
-
-
   return frame
 end
 
@@ -430,6 +408,8 @@ local function CreateBuffFrame(buffID)
   f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
   f.cooldown:SetAllPoints(true)
   f.cooldown:SetHideCountdownNumbers(true) -- vi viser vår egen tekst
+  f.cooldown:SetDrawBling(false)
+  f.cooldown:SetDrawEdge(false)
   f.cooldown.noCooldownCount = true
 
   -- overlay så tekst havner over cooldown swipe/edge
@@ -458,9 +438,6 @@ local function CreateBuffFrame(buffID)
   f.cooldownText:Hide()
 
   f.buffID = buffID
-  f._cooldownEnd = nil
-  f._cooldownTextValue = nil
-  f._gcdActive = false
 
   trackedBuffPool[buffID] = f
   return f
@@ -760,7 +737,8 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
   frame.icon:SetTexture(iconID or C_Spell.GetSpellTexture(buffID) or 134400)
 
   if aura and aura.expirationTime and aura.duration and aura.duration > 0 then
-    CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
+    frame.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration, aura.modRate or 1)
+    frame.cooldown:Show()
 
     -- sørg for at overlay er over cooldown
     if frame.overlay and frame.cooldown then
@@ -769,13 +747,9 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
         frame.overlay:SetFrameLevel(need)
       end
     end
-
-    frame._cooldownEnd = aura.expirationTime
-    ClassHUD:RegisterCooldownTextFrame(frame)
   else
     CooldownFrame_Clear(frame.cooldown)
-    frame._cooldownEnd = nil
-    ClassHUD:UnregisterCooldownTextFrame(frame)
+    frame.cooldown:Hide()
   end
 
   local stacks = aura and (aura.applications or aura.stackCount or aura.charges)
@@ -908,7 +882,10 @@ function ClassHUD:BuildTrackedBuffFrames()
   if self.trackedBuffFrames then
     for _, frame in ipairs(self.trackedBuffFrames) do
       frame:Hide()
-      ClassHUD:UnregisterCooldownTextFrame(frame)
+      if frame.cooldown then
+        CooldownFrame_Clear(frame.cooldown)
+        frame.cooldown:Hide()
+      end
     end
   end
   if self.trackedBarFrames then
@@ -1083,7 +1060,9 @@ local function UpdateSpellFrame(frame)
   local chargesValue, maxCharges
   local countText, countShown = nil, false
   local cdStart, cdDuration, cdModRate = nil, nil, nil
+  local cooldownEnd = nil
   local shouldDesaturate = false
+  local chargeStart, chargeDuration, chargeModRate = nil, nil, nil
 
   if chargesInfo and chargesInfo.maxCharges and chargesInfo.maxCharges > 1 then
     chargesValue = chargesInfo.currentCharges or 0
@@ -1091,28 +1070,35 @@ local function UpdateSpellFrame(frame)
     chargesShown = true
     countText = tostring(chargesValue)
     countShown = true
+
     if chargesValue < maxCharges and chargesInfo.cooldownDuration and chargesInfo.cooldownDuration > 0 then
-      cdStart = chargesInfo.cooldownStartTime
-      cdDuration = chargesInfo.cooldownDuration
-      cdModRate = chargesInfo.cooldownModRate or 1
+      chargeStart = chargesInfo.cooldownStartTime
+      chargeDuration = chargesInfo.cooldownDuration
+      chargeModRate = chargesInfo.cooldownModRate or 1
+
+      if chargesValue <= 0 then
+        cdStart = chargeStart
+        cdDuration = chargeDuration
+        cdModRate = chargeModRate
+        cooldownEnd = chargeStart + chargeDuration
+      end
     end
+
     shouldDesaturate = (chargesValue <= 0)
-  else
-    local cd = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(sid)
-    if cd and cd.startTime and cd.duration and cd.duration > 1.5 then
-      cdStart = cd.startTime
-      cdDuration = cd.duration
-      cdModRate = cd.modRate or 1
-      shouldDesaturate = true
+  end
+
+  local baseCooldown = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(sid)
+  if baseCooldown and baseCooldown.startTime and baseCooldown.duration and baseCooldown.duration > 1.5 then
+    local baseEnd = baseCooldown.startTime + baseCooldown.duration
+    if not cooldownEnd or baseEnd > cooldownEnd then
+      cdStart = baseCooldown.startTime
+      cdDuration = baseCooldown.duration
+      cdModRate = baseCooldown.modRate or 1
+      cooldownEnd = baseEnd
     end
+    shouldDesaturate = true
   end
 
-  local cooldownEnd = nil
-  if cdStart and cdDuration then
-    cooldownEnd = cdStart + cdDuration
-  end
-
-  local gcdActive = false
   local gcd = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(61304)
   if gcd and gcd.startTime and gcd.duration and gcd.duration > 0 then
     local gcdEnd = gcd.startTime + gcd.duration
@@ -1120,8 +1106,7 @@ local function UpdateSpellFrame(frame)
       cdStart = gcd.startTime
       cdDuration = gcd.duration
       cdModRate = gcd.modRate or 1
-      cooldownEnd = nil
-      gcdActive = true
+      cooldownEnd = gcdEnd
     end
   end
 
@@ -1134,7 +1119,6 @@ local function UpdateSpellFrame(frame)
       cdDuration = aura.duration
       cdModRate = aura.modRate or cdModRate or 1
       cooldownEnd = aura.expirationTime
-      gcdActive = false
     end
     if stacks > 1 and not chargesShown then
       countText = tostring(stacks)
@@ -1153,7 +1137,8 @@ local function UpdateSpellFrame(frame)
         or cache.cooldownDuration ~= cdDuration
         or cache.cooldownModRate ~= modRate
     if changed then
-      CooldownFrame_Set(frame.cooldown, cdStart, cdDuration, true, false, modRate)
+      frame.cooldown:SetCooldown(cdStart, cdDuration, modRate)
+      frame.cooldown:Show()
     end
     cache.cooldownStart = cdStart
     cache.cooldownDuration = cdDuration
@@ -1162,6 +1147,7 @@ local function UpdateSpellFrame(frame)
   else
     if cache.hasCooldown then
       CooldownFrame_Clear(frame.cooldown)
+      frame.cooldown:Hide()
     end
     cache.cooldownStart = nil
     cache.cooldownDuration = nil
@@ -1169,12 +1155,38 @@ local function UpdateSpellFrame(frame)
     cache.hasCooldown = false
   end
 
+  local hasChargeCooldown = chargeStart and chargeDuration and chargeDuration > 0
+      and maxCharges and maxCharges > 0
+      and chargesValue ~= nil and chargesValue < maxCharges
+  local chargeRate = chargeModRate or 1
+  if hasChargeCooldown then
+    local changed = not cache.hasChargeCooldown
+        or cache.chargeCooldownStart ~= chargeStart
+        or cache.chargeCooldownDuration ~= chargeDuration
+        or cache.chargeCooldownModRate ~= chargeRate
+    if changed then
+      frame.cooldown2:SetCooldown(chargeStart, chargeDuration, chargeRate)
+      frame.cooldown2:Show()
+    end
+    cache.chargeCooldownStart = chargeStart
+    cache.chargeCooldownDuration = chargeDuration
+    cache.chargeCooldownModRate = chargeRate
+    cache.hasChargeCooldown = true
+  else
+    if cache.hasChargeCooldown then
+      CooldownFrame_Clear(frame.cooldown2)
+      frame.cooldown2:Hide()
+    end
+    cache.chargeCooldownStart = nil
+    cache.chargeCooldownDuration = nil
+    cache.chargeCooldownModRate = nil
+    cache.hasChargeCooldown = false
+  end
+
   if cache.swipeR ~= swipeR or cache.swipeG ~= swipeG or cache.swipeB ~= swipeB or cache.swipeA ~= swipeA then
     frame.cooldown:SetSwipeColor(swipeR, swipeG, swipeB, swipeA)
     cache.swipeR, cache.swipeG, cache.swipeB, cache.swipeA = swipeR, swipeG, swipeB, swipeA
   end
-
-  frame._cooldownEnd = cooldownEnd
 
   if countShown then
     if cache.countText ~= countText then
@@ -1268,9 +1280,6 @@ local function UpdateSpellFrame(frame)
   else
     cache.glow = shouldGlow
   end
-
-  UpdateCooldownText(frame, gcdActive)
-  ClassHUD:RefreshCooldownTextFrame(frame)
 end
 
 -- ==================================================
