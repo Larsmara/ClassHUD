@@ -48,10 +48,32 @@ local function GetNPCIDFromGUID(guid)
   return nil
 end
 
-local function UpdateWildImpIndicator(self)
+local function TableCount(tbl)
+  local count = 0
+  if tbl then
+    for _ in pairs(tbl) do
+      count = count + 1
+    end
+  end
+  return count
+end
+
+local function UpdateWildImpIndicator(self, count)
+  if count == nil then
+    count = TableCount(self and self._wildImpGuids)
+  end
+
+  self._wildImpCount = count or 0
+
   if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
     self:UpdateCooldown(IMPLOSION_SPELL_ID)
   end
+end
+
+local function SyncWildImpCount(self)
+  local count = TableCount(self and self._wildImpGuids)
+  UpdateWildImpIndicator(self, count)
+  return count
 end
 
 local function RemoveWildImp(self, guid)
@@ -60,13 +82,7 @@ local function RemoveWildImp(self, guid)
   if not map or not map[guid] then return false end
 
   map[guid] = nil
-  if self._wildImpCount and self._wildImpCount > 0 then
-    self._wildImpCount = self._wildImpCount - 1
-  else
-    self._wildImpCount = 0
-  end
-
-  UpdateWildImpIndicator(self)
+  SyncWildImpCount(self)
   return true
 end
 
@@ -169,8 +185,7 @@ function ClassHUD:ClearWildImpTracking()
   else
     self._wildImpGuids = {}
   end
-  self._wildImpCount = 0
-  UpdateWildImpIndicator(self)
+  SyncWildImpCount(self)
 end
 
 local INACTIVE_BAR_COLOR = { r = 0.25, g = 0.25, b = 0.25, a = 0.6 }
@@ -1558,34 +1573,52 @@ function ClassHUD:HandleWildImpSummon(destGUID)
       spawnTime = GetTime(),
       npcID = WILD_IMP_NPC_ID,
     }
-    self._wildImpCount = (self._wildImpCount or 0) + 1
   end
 
-  UpdateWildImpIndicator(self)
+  SyncWildImpCount(self)
 end
 
 function ClassHUD:HandleWildImpDespawn(destGUID)
   if not destGUID then return end
+  if not self:IsWildImpTrackingEnabled() then return end
+
+  if WILD_IMP_NPC_ID then
+    local npcID = GetNPCIDFromGUID(destGUID)
+    if npcID ~= WILD_IMP_NPC_ID then
+      return
+    end
+  end
+
   RemoveWildImp(self, destGUID)
 end
 
-function ClassHUD:HandleWildImpFelFirebolt(sourceGUID)
-  if not sourceGUID then return end
+function ClassHUD:HandleWildImpFelFirebolt(destGUID, sourceGUID)
+  if not destGUID and not sourceGUID then return end
   if not self:IsWildImpTrackingEnabled() then return end
 
   local map = self._wildImpGuids
   if not map then return end
 
-  local entry = map[sourceGUID]
+  local guid = nil
+  if destGUID and map[destGUID] then
+    guid = destGUID
+  elseif sourceGUID and map[sourceGUID] then
+    guid = sourceGUID
+  end
+
+  if not guid then return end
+
+  local entry = map[guid]
   if not entry then return end
 
   local remaining = (entry.charges or 0) - 1
   if remaining <= 0 then
-    RemoveWildImp(self, sourceGUID)
+    RemoveWildImp(self, guid)
     return
   end
 
   entry.charges = remaining
+  SyncWildImpCount(self)
 end
 
 local function FindSpellFrameByName(self, name)
@@ -2508,7 +2541,7 @@ function ClassHUD:HandleCombatLogEvent()
         self:ClearWildImpTracking()
       end
     elseif spellID == FEL_FIREBOLT_SPELL_ID then
-      self:HandleWildImpFelFirebolt(sourceGUID)
+      self:HandleWildImpFelFirebolt(destGUID, sourceGUID)
     end
   elseif subevent == "UNIT_DIED" or subevent == "UNIT_DESTROYED" or subevent == "UNIT_DISSIPATES" then
     if destGUID then
