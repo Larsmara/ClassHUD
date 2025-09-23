@@ -41,14 +41,15 @@ local WILD_IMP_SUMMON_IDS = {
   [104317] = true, -- Wild Imp
 }
 
-local function GetNPCIDFromGUID(guid)
-  if not guid then return nil end
-  local _, _, _, _, _, npcID = strsplit("-", guid)
-  if npcID then
-    return tonumber(npcID)
-  end
-  return nil
-end
+local DEBUG_LOG_EVENTS = {
+  SPELL_SUMMON = true,
+  SPELL_CAST_SUCCESS = true,
+  SPELL_CAST_START = true,
+  SPELL_DAMAGE = true,
+  UNIT_DIED = true,
+  UNIT_DESTROYED = true,
+  UNIT_DISSIPATES = true,
+}
 
 local function TableCount(tbl)
   local count = 0
@@ -1565,7 +1566,7 @@ function ClassHUD:HandleTrackedSummon(spellID, destGUID)
   end
 
   if def.npcID and destGUID then
-    local npcID = GetNPCIDFromGUID(destGUID)
+    local npcID = self:GetNpcIDFromGUID(destGUID)
     if npcID ~= def.npcID then
       return
     end
@@ -1815,7 +1816,7 @@ function ClassHUD:HandleWildImpSummon(destGUID)
   if not self:IsWildImpTrackingEnabled() then return end
 
   if WILD_IMP_NPC_ID then
-    local npcID = GetNPCIDFromGUID(destGUID)
+    local npcID = self:GetNpcIDFromGUID(destGUID)
     if npcID ~= WILD_IMP_NPC_ID then
       return
     end
@@ -1842,7 +1843,7 @@ function ClassHUD:HandleWildImpDespawn(destGUID)
   if not self:IsWildImpTrackingEnabled() then return end
 
   if WILD_IMP_NPC_ID then
-    local npcID = GetNPCIDFromGUID(destGUID)
+    local npcID = self:GetNpcIDFromGUID(destGUID)
     if npcID ~= WILD_IMP_NPC_ID then
       return
     end
@@ -2812,7 +2813,12 @@ ClassHUD.UpdateTrackedBarFrame = UpdateTrackedBarFrame
 function ClassHUD:HandleCombatLogEvent()
   if not CombatLogGetCurrentEventInfo then return end
 
-  local _, subevent, _, sourceGUID, _, sourceFlags, _, destGUID, _, _, _, spellID = CombatLogGetCurrentEventInfo()
+  local _, subevent, _, sourceGUID, _, sourceFlags, _, destGUID, _, _, _, spellID, spellName = CombatLogGetCurrentEventInfo()
+  local npcID = destGUID and self:GetNpcIDFromGUID(destGUID)
+
+  if DEBUG_LOG_EVENTS[subevent] and self.LogDebug then
+    self:LogDebug(subevent, spellID, spellName, sourceGUID, destGUID, npcID)
+  end
 
   if subevent == "SPELL_SUMMON" then
     if IsMine(sourceGUID, sourceFlags) then
@@ -2822,7 +2828,6 @@ function ClassHUD:HandleCombatLogEvent()
         handledSummon = true
       end
 
-      local npcID = destGUID and GetNPCIDFromGUID(destGUID)
       if npcID == WILD_IMP_NPC_ID or (not handledSummon and WILD_IMP_SUMMON_IDS[spellID]) then
         self:HandleWildImpSummon(destGUID)
       end
