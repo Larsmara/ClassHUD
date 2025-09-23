@@ -49,6 +49,8 @@ ClassHUD._trackedBarFrames = ClassHUD._trackedBarFrames or {}
 ClassHUD._trackedAuraIDs = ClassHUD._trackedAuraIDs or {}
 ClassHUD._trackedLayoutSnapshot = ClassHUD._trackedLayoutSnapshot or nil
 ClassHUD._barTickerToken = ClassHUD._barTickerToken or nil
+ClassHUD._cooldownTextFrames = ClassHUD._cooldownTextFrames or {}
+ClassHUD._cooldownTickerToken = ClassHUD._cooldownTickerToken or nil
 ClassHUD._auraWatchersBySpellID = ClassHUD._auraWatchersBySpellID or {}
 ClassHUD._auraWatchersByUnit = ClassHUD._auraWatchersByUnit or {
   player = {},
@@ -239,6 +241,7 @@ function ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
 end
 
 local BAR_TICK_INTERVAL = 0.10
+local COOLDOWN_TICK_INTERVAL = 0.10
 
 local function CancelTicker(self, field)
   local token = self[field]
@@ -334,6 +337,144 @@ function ClassHUD:TickTrackedBars()
   end
 
   EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, frames)
+end
+
+function ClassHUD:RegisterCooldownTextFrame(frame)
+  if not frame or not frame.cooldownText then return end
+
+  self._cooldownTextFrames = self._cooldownTextFrames or {}
+  self._cooldownTextFrames[frame] = true
+
+  EnsureTicker(self, "_cooldownTickerToken", "TickCooldownText", COOLDOWN_TICK_INTERVAL, self._cooldownTextFrames)
+end
+
+function ClassHUD:UnregisterCooldownTextFrame(frame)
+  local frames = self._cooldownTextFrames
+  if not frames then return end
+
+  frames[frame] = nil
+
+  EnsureTicker(self, "_cooldownTickerToken", "TickCooldownText", COOLDOWN_TICK_INTERVAL, frames)
+end
+
+function ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
+  if not frame or not frame.cooldownText then return end
+
+  local cache = frame._last
+  if not cache then
+    cache = {}
+    frame._last = cache
+  end
+
+  if not showNumbers then
+    if cache.cooldownTextShown then
+      frame.cooldownText:Hide()
+      cache.cooldownTextShown = false
+    end
+    if cache.cooldownTextValue then
+      frame.cooldownText:SetText("")
+      cache.cooldownTextValue = nil
+    end
+    self:UnregisterCooldownTextFrame(frame)
+    return
+  end
+
+  if remaining and remaining > 0 then
+    local formatted = ClassHUD.FormatSeconds(remaining)
+    if cache.cooldownTextValue ~= formatted then
+      frame.cooldownText:SetText(formatted or "")
+      cache.cooldownTextValue = formatted
+    end
+    if not cache.cooldownTextShown then
+      frame.cooldownText:Show()
+      cache.cooldownTextShown = true
+    end
+    self:RegisterCooldownTextFrame(frame)
+  else
+    if cache.cooldownTextShown then
+      frame.cooldownText:Hide()
+      cache.cooldownTextShown = false
+    end
+    if cache.cooldownTextValue then
+      frame.cooldownText:SetText("")
+      cache.cooldownTextValue = nil
+    end
+    self:UnregisterCooldownTextFrame(frame)
+  end
+end
+
+function ClassHUD:TickCooldownText()
+  local frames = self._cooldownTextFrames
+  if not frames or not next(frames) then
+    EnsureTicker(self, "_cooldownTickerToken", "TickCooldownText", COOLDOWN_TICK_INTERVAL, frames or {})
+    return
+  end
+
+  local showNumbers = true
+  if self.db and self.db.profile and self.db.profile.cooldowns then
+    local setting = self.db.profile.cooldowns.showText
+    if setting ~= nil then
+      showNumbers = setting
+    end
+  end
+
+  if not showNumbers then
+    for frame in pairs(frames) do
+      frames[frame] = nil
+      if frame and frame.cooldownText then
+        frame.cooldownText:SetText("")
+        frame.cooldownText:Hide()
+        if frame._last then
+          frame._last.cooldownTextShown = false
+          frame._last.cooldownTextValue = nil
+        end
+      end
+    end
+    EnsureTicker(self, "_cooldownTickerToken", "TickCooldownText", COOLDOWN_TICK_INTERVAL, frames)
+    return
+  end
+
+  local now = GetTime()
+
+  for frame in pairs(frames) do
+    local keep = false
+
+    if frame and frame.cooldownText then
+      local cache = frame._last
+      if cache and cache.hasCooldown and cache.cooldownEnd then
+        local remaining = cache.cooldownEnd - now
+        if remaining > 0 then
+          local formatted = ClassHUD.FormatSeconds(remaining)
+          if cache.cooldownTextValue ~= formatted then
+            frame.cooldownText:SetText(formatted or "")
+            cache.cooldownTextValue = formatted
+          end
+          if not cache.cooldownTextShown then
+            frame.cooldownText:Show()
+            cache.cooldownTextShown = true
+          end
+          keep = true
+        end
+      end
+
+      if not keep then
+        if frame.cooldownText:GetText() ~= "" then
+          frame.cooldownText:SetText("")
+        end
+        frame.cooldownText:Hide()
+        if frame._last then
+          frame._last.cooldownTextValue = nil
+          frame._last.cooldownTextShown = false
+        end
+      end
+    end
+
+    if not keep then
+      frames[frame] = nil
+    end
+  end
+
+  EnsureTicker(self, "_cooldownTickerToken", "TickCooldownText", COOLDOWN_TICK_INTERVAL, frames)
 end
 
 ---@class ClassHUDUI
@@ -505,6 +646,9 @@ local defaults = {
       resourceClass = true,
       resource      = { r = 0.00, g = 0.55, b = 1.00 },
       power         = { r = 1.00, g = 0.85, b = 0.10 },
+    },
+    cooldowns        = {
+      showText = true,
     },
   }
 }

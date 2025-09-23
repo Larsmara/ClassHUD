@@ -284,6 +284,20 @@ local function EnsureAttachment(name)
 end
 
 
+local function ShouldShowCooldownNumbers()
+  local db = ClassHUD.db
+  if not db or not db.profile then
+    return true
+  end
+
+  local settings = db.profile.cooldowns
+  if settings and settings.showText ~= nil then
+    return settings.showText
+  end
+
+  return true
+end
+
 local function CollectAuraSpellIDs(entry, primaryID)
   return ClassHUD:GetAuraCandidatesForEntry(entry, primaryID)
 end
@@ -431,8 +445,10 @@ local function CreateSpellFrame(spellID)
   frame.cooldownText = frame.overlay:CreateFontString(nil, "OVERLAY")
   frame.cooldownText:ClearAllPoints()
   frame.cooldownText:SetPoint("BOTTOM", frame, "BOTTOM", 0, 2)
-  local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.spellFontSize or 12)
-  frame.cooldownText:SetFont(fontPath, fontSize, "OUTLINE")
+  local cooldownFontPath, cooldownFontSize = ClassHUD:FetchFont(12)
+  frame.cooldownText:SetFont(cooldownFontPath, cooldownFontSize, "OUTLINE")
+  frame.cooldownText:SetJustifyH("CENTER")
+  frame.cooldownText:SetJustifyV("MIDDLE")
   frame.cooldownText:Hide()
 
 
@@ -550,7 +566,8 @@ local function CreateBuffFrame(buffID)
   f.cooldownText = f.overlay:CreateFontString(nil, "OVERLAY")
   f.cooldownText:ClearAllPoints()
   f.cooldownText:SetPoint("BOTTOM", f, "BOTTOM", 0, 2)
-  f.cooldownText:SetFont(fontPath, fontSize, "OUTLINE")
+  local cooldownFontPath, cooldownFontSize = ClassHUD:FetchFont(12)
+  f.cooldownText:SetFont(cooldownFontPath, cooldownFontSize, "OUTLINE")
   f.cooldownText:SetJustifyH("CENTER")
   f.cooldownText:SetJustifyV("MIDDLE")
   f.cooldownText:Hide()
@@ -918,6 +935,12 @@ end
 local function PopulateBuffIconFrame(frame, buffID, aura, entry)
   frame:SetParent(EnsureAttachment("TRACKED_ICONS") or UI.anchor)
 
+  local cache = frame._last
+  if not cache then
+    cache = {}
+    frame._last = cache
+  end
+
   local iconID = entry and entry.iconID
   if not iconID then
     local info = C_Spell.GetSpellInfo(buffID)
@@ -929,6 +952,13 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
     frame.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration, aura.modRate or 1)
     frame.cooldown:Show()
 
+    cache.cooldownStart = aura.expirationTime - aura.duration
+    cache.cooldownDuration = aura.duration
+    cache.cooldownModRate = aura.modRate or 1
+    cache.cooldownEnd = aura.expirationTime
+    cache.hasCooldown = true
+    cache.hasChargeCooldown = false
+
     -- sørg for at overlay er over cooldown
     if frame.overlay and frame.cooldown then
       local need = frame.cooldown:GetFrameLevel() + 1
@@ -939,6 +969,13 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
   else
     CooldownFrame_Clear(frame.cooldown)
     frame.cooldown:Hide()
+
+    cache.cooldownStart = nil
+    cache.cooldownDuration = nil
+    cache.cooldownModRate = nil
+    cache.cooldownEnd = nil
+    cache.hasCooldown = false
+    cache.hasChargeCooldown = false
   end
 
   local stacks = aura and (aura.applications or aura.stackCount or aura.charges)
@@ -949,6 +986,16 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
     frame.count:SetText("")
     frame.count:Hide()
   end
+
+  local showNumbers = ShouldShowCooldownNumbers()
+  local remaining = nil
+  if showNumbers and cache.hasCooldown and cache.cooldownEnd then
+    remaining = cache.cooldownEnd - GetTime()
+    if remaining and remaining <= 0 then
+      remaining = nil
+    end
+  end
+  ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
 
   frame:Show()
 end
@@ -1009,9 +1056,23 @@ local function UpdateTrackedIconFrame(frame)
           frame.overlay:SetFrameLevel(need)
         end
       end
+
+      cache.cooldownStart = aura.expirationTime - aura.duration
+      cache.cooldownDuration = aura.duration
+      cache.cooldownModRate = aura.modRate or 1
+      cache.cooldownEnd = aura.expirationTime
+      cache.hasCooldown = true
+      cache.hasChargeCooldown = false
     else
       CooldownFrame_Clear(frame.cooldown)
       frame.cooldown:Hide()
+
+      cache.cooldownStart = nil
+      cache.cooldownDuration = nil
+      cache.cooldownModRate = nil
+      cache.cooldownEnd = nil
+      cache.hasCooldown = false
+      cache.hasChargeCooldown = false
     end
 
     local stacks = aura.applications or aura.stackCount or aura.charges
@@ -1023,6 +1084,16 @@ local function UpdateTrackedIconFrame(frame)
       frame.count:Hide()
     end
 
+    local showNumbers = ShouldShowCooldownNumbers()
+    local remaining = nil
+    if showNumbers and cache.hasCooldown and cache.cooldownEnd then
+      remaining = cache.cooldownEnd - GetTime()
+      if remaining and remaining <= 0 then
+        remaining = nil
+      end
+    end
+    ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
+
     frame:Show()
     frame._layoutActive = true
     return true
@@ -1032,6 +1103,13 @@ local function UpdateTrackedIconFrame(frame)
   frame.cooldown:Hide()
   frame.count:SetText("")
   frame.count:Hide()
+  cache.cooldownStart = nil
+  cache.cooldownDuration = nil
+  cache.cooldownModRate = nil
+  cache.cooldownEnd = nil
+  cache.hasCooldown = false
+  cache.hasChargeCooldown = false
+  ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
   frame:Hide()
   frame._layoutActive = false
   return false
@@ -1365,7 +1443,6 @@ local function UpdateSpellFrame(frame)
       end
     end
 
-    shouldDesaturate = (chargesValue <= 0)
   end
 
   local baseCooldown = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(sid)
@@ -1377,7 +1454,6 @@ local function UpdateSpellFrame(frame)
       cdModRate = baseCooldown.modRate or 1
       cooldownEnd = baseEnd
     end
-    shouldDesaturate = true
   end
 
   local gcd = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(61304)
@@ -1498,18 +1574,56 @@ local function UpdateSpellFrame(frame)
   end
 
   local usable, noMana = C_Spell and C_Spell.IsSpellUsable and C_Spell.IsSpellUsable(sid)
-  if not usable and not noMana then
-    shouldDesaturate = true
+  local resourceLimited = false
+  if usable == false and noMana then
+    resourceLimited = true
   end
 
   local lacksResources = ClassHUD:LacksResources(sid)
   cache.lacksResources = lacksResources
   if lacksResources then
+    resourceLimited = true
+  end
+
+  local cooldownEndTime = cooldownEnd or (cdStart and cdDuration and (cdStart + cdDuration)) or nil
+  if hasCooldown then
+    cache.cooldownEnd = cooldownEndTime
+  else
+    cache.cooldownEnd = nil
+  end
+
+  if hasChargeCooldown and chargeStart and chargeDuration then
+    cache.chargeCooldownEnd = chargeStart + chargeDuration
+  else
+    cache.chargeCooldownEnd = nil
+  end
+
+  local now = GetTime()
+  local chargesDepleted = chargesShown and (chargesValue or 0) <= 0
+  local onCooldown = false
+  if hasCooldown and cooldownEndTime then
+    onCooldown = (cooldownEndTime - now) > 0
+  end
+
+  local showNumbers = ShouldShowCooldownNumbers()
+  local cooldownTextRemaining = nil
+  if showNumbers and hasCooldown and cooldownEndTime then
+    local remaining = cooldownEndTime - now
+    if remaining > 0 then
+      cooldownTextRemaining = remaining
+    end
+  end
+  ClassHUD:ApplyCooldownText(frame, showNumbers, cooldownTextRemaining)
+
+  shouldDesaturate = false
+  if onCooldown and (not chargesShown or chargesDepleted) then
+    shouldDesaturate = true
+  end
+  if resourceLimited then
     shouldDesaturate = true
   end
 
   local tracksAura = harmfulTracksAura or (auraCandidates and #auraCandidates > 0)
-  local auraActive = not not aura
   if tracksAura then
     ClassHUD:AddFrameToConcern(frame, "aura")
   else
@@ -1521,19 +1635,7 @@ local function UpdateSpellFrame(frame)
     vertexR, vertexG, vertexB = 1, 1, 0.3
   end
 
-  local finalDesaturate
-  if tracksAura then
-    if auraActive then
-      finalDesaturate = false
-      vertexR, vertexG, vertexB = 1, 1, 1
-    else
-      finalDesaturate = true
-      vertexR, vertexG, vertexB = 0.5, 0.5, 0.5
-    end
-  else
-    finalDesaturate = shouldDesaturate
-    vertexR, vertexG, vertexB = 1, 1, 1
-  end
+  local finalDesaturate = shouldDesaturate
 
   local inRange = nil
   if UnitExists("target") and not UnitIsDead("target") then
