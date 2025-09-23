@@ -205,6 +205,14 @@ local function PayloadContainsTrackedAura(self, unit, list)
   return false
 end
 
+local function AuraUpdateListHasEntries(list)
+  if type(list) ~= "table" then
+    return false
+  end
+
+  return next(list) ~= nil
+end
+
 function ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
   local unitWatchers = self._auraWatchersByUnit and self._auraWatchersByUnit[unit]
   if not unitWatchers or not next(unitWatchers) then
@@ -234,6 +242,11 @@ function ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
       or updateInfo.removedSpellIDs
 
   if PayloadContainsTrackedAura(self, unit, removedList) then
+    return true
+  end
+
+  if AuraUpdateListHasEntries(updateInfo.removedAuraInstanceIDs)
+      or AuraUpdateListHasEntries(updateInfo.updatedAuraInstanceIDs) then
     return true
   end
 

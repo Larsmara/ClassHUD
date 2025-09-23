@@ -1420,6 +1420,7 @@ local function UpdateSpellFrame(frame)
   local countText, countShown = nil, false
   local cdStart, cdDuration, cdModRate = nil, nil, nil
   local cooldownEnd = nil
+  local cooldownSource = nil
   local shouldDesaturate = false
   local chargeStart, chargeDuration, chargeModRate = nil, nil, nil
 
@@ -1440,6 +1441,7 @@ local function UpdateSpellFrame(frame)
         cdDuration = chargeDuration
         cdModRate = chargeModRate
         cooldownEnd = chargeStart + chargeDuration
+        cooldownSource = "charges"
       end
     end
 
@@ -1453,6 +1455,7 @@ local function UpdateSpellFrame(frame)
       cdDuration = baseCooldown.duration
       cdModRate = baseCooldown.modRate or 1
       cooldownEnd = baseEnd
+      cooldownSource = "spell"
     end
   end
 
@@ -1464,6 +1467,7 @@ local function UpdateSpellFrame(frame)
       cdDuration = gcd.duration
       cdModRate = gcd.modRate or 1
       cooldownEnd = gcdEnd
+      cooldownSource = "gcd"
     end
   end
 
@@ -1476,6 +1480,7 @@ local function UpdateSpellFrame(frame)
       cdDuration = aura.duration
       cdModRate = aura.modRate or cdModRate or 1
       cooldownEnd = aura.expirationTime
+      cooldownSource = "aura"
     end
     if stacks > 1 and not chargesShown then
       countText = tostring(stacks)
@@ -1484,6 +1489,10 @@ local function UpdateSpellFrame(frame)
       countText = nil
       countShown = false
     end
+  end
+
+  if cooldownSource == "gcd" then
+    swipeR, swipeG, swipeB, swipeA = 0, 0, 0, 0.15
   end
 
   local hasCooldown = cdStart and cdDuration and cdDuration > 0
@@ -1605,6 +1614,8 @@ local function UpdateSpellFrame(frame)
     onCooldown = (cooldownEndTime - now) > 0
   end
 
+  local isGCDCooldown = cooldownSource == "gcd"
+
   local showNumbers = ShouldShowCooldownNumbers()
   local cooldownTextRemaining = nil
   if showNumbers and hasCooldown and cooldownEndTime then
@@ -1616,7 +1627,7 @@ local function UpdateSpellFrame(frame)
   ClassHUD:ApplyCooldownText(frame, showNumbers, cooldownTextRemaining)
 
   shouldDesaturate = false
-  if onCooldown and (not chargesShown or chargesDepleted) then
+  if onCooldown and not isGCDCooldown and (not chargesShown or chargesDepleted) then
     shouldDesaturate = true
   end
   if resourceLimited then
@@ -1696,6 +1707,13 @@ function ClassHUD:HandleUnitAuraUpdate(unit, updateInfo)
   local spellWatchers = self._auraWatchersBySpellID
   local any = false
 
+  local function markAllForUnit()
+    for frame in pairs(unitWatchers) do
+      MarkFrameForAuraUpdate(frame)
+    end
+    any = true
+  end
+
   local function queueFromList(list)
     if type(list) ~= "table" then return end
     local iterated = false
@@ -1733,6 +1751,13 @@ function ClassHUD:HandleUnitAuraUpdate(unit, updateInfo)
     end
   end
 
+  local function handleInstanceList(list)
+    if type(list) ~= "table" then return end
+    if next(list) ~= nil then
+      markAllForUnit()
+    end
+  end
+
   if type(updateInfo) == "table" and not updateInfo.isFullUpdate then
     queueFromList(updateInfo.addedAuras)
     queueFromList(updateInfo.updatedAuras)
@@ -1741,15 +1766,13 @@ function ClassHUD:HandleUnitAuraUpdate(unit, updateInfo)
     queueFromList(updateInfo.updatedAuraSpellIDs)
     queueFromList(updateInfo.removedAuraSpellIDs)
     queueFromList(updateInfo.removedSpellIDs)
+    handleInstanceList(updateInfo.removedAuraInstanceIDs)
+    handleInstanceList(updateInfo.updatedAuraInstanceIDs)
     if not any then
-      for frame in pairs(unitWatchers) do
-        MarkFrameForAuraUpdate(frame)
-      end
+      markAllForUnit()
     end
   else
-    for frame in pairs(unitWatchers) do
-      MarkFrameForAuraUpdate(frame)
-    end
+    markAllForUnit()
   end
 end
 
