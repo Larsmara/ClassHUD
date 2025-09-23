@@ -6,7 +6,11 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 
 ClassHUD._lastSpecID = ClassHUD._lastSpecID or 0
 
+local C_Spell, C_UnitAuras, GetTime, floor, tostring, ipairs, pairs = C_Spell, C_UnitAuras, GetTime, floor, tostring, ipairs, pairs
+
 local DEFAULT_TRACKED_BAR_COLOR = { r = 0.25, g = 0.65, b = 1.00, a = 1 }
+
+local TMP = {}
 
 local function CopyColorTemplate(template)
   return {
@@ -218,7 +222,8 @@ function ClassHUD:ResolveTrackedBarDisplay(entry, primaryID, candidates)
   local displaySpellID, displayName, iconID
 
   if candidates then
-    for _, spellID in ipairs(candidates) do
+    for i = 1, #candidates do
+      local spellID = candidates[i]
       if type(spellID) == "number" and spellID > 0 then
         local info = C_Spell.GetSpellInfo(spellID)
         if info and info.name then
@@ -292,13 +297,16 @@ end
 ---@return string
 function ClassHUD.FormatSeconds(seconds)
   if seconds >= 60 then
-    local mins = math.floor(seconds / 60)
-    local secs = math.floor(seconds % 60)
-    return string.format("%d:%02d", mins, secs)
+    local mins = floor(seconds / 60)
+    local secs = floor(seconds % 60)
+    if secs < 10 then
+      return mins .. ":0" .. secs
+    end
+    return mins .. ":" .. secs
   elseif seconds >= 10 then
-    return tostring(math.floor(seconds + 0.5))
+    return tostring(floor(seconds + 0.5))
   else
-    return tostring(math.floor(seconds)) -- alltid heltall, ingen desimal
+    return tostring(floor(seconds)) -- alltid heltall, ingen desimal
   end
 end
 
@@ -320,7 +328,8 @@ function ClassHUD:GetAuraForSpell(spellID, units)
   end
 
   if C_UnitAuras.GetAuraDataBySpellID then
-    for _, unit in ipairs(units) do
+    for i = 1, #units do
+      local unit = units[i]
       if unit ~= "player" and UnitExists(unit) then
         local aura = C_UnitAuras.GetAuraDataBySpellID(unit, spellID)
         if aura and (aura.isFromPlayer or aura.sourceUnit == "player" or aura.sourceUnit == "pet") then
@@ -337,40 +346,109 @@ end
 ---@param entry table|nil
 ---@param spellID number
 ---@return number[] candidates
-function ClassHUD:GetAuraCandidatesForEntry(entry, spellID)
-  local candidates = {}
+function ClassHUD:_AssembleAuraCandidates(entry, spellID)
+  if not entry then return nil end
 
-  if entry and entry.categories then
+  local candidates = entry._candidates
+  if type(candidates) ~= "table" then
+    candidates = {}
+    entry._candidates = candidates
+  else
+    for i = #candidates, 1, -1 do
+      candidates[i] = nil
+    end
+  end
+
+  local count = 0
+
+  if entry.categories then
     for _, catData in pairs(entry.categories) do
-      if catData.overrideSpellID then
-        table.insert(candidates, catData.overrideSpellID)
+      local overrideID = catData.overrideSpellID
+      if overrideID then
+        count = count + 1
+        candidates[count] = overrideID
       end
-      if catData.linkedSpellIDs then
-        for _, lsid in ipairs(catData.linkedSpellIDs) do
-          table.insert(candidates, lsid)
+
+      local linked = catData.linkedSpellIDs
+      if linked then
+        for i = 1, #linked do
+          count = count + 1
+          candidates[count] = linked[i]
         end
       end
-      if catData.spellID then
-        table.insert(candidates, catData.spellID)
+
+      local catSpellID = catData.spellID
+      if catSpellID then
+        count = count + 1
+        candidates[count] = catSpellID
       end
     end
   end
 
-  -- 🔑 Alltid legg til original spellID som fallback
   if spellID then
-    local already = false
-    for _, id in ipairs(candidates) do
-      if id == spellID then
-        already = true
+    local seen = false
+    for i = 1, count do
+      if candidates[i] == spellID then
+        seen = true
         break
       end
     end
-    if not already then
-      table.insert(candidates, spellID)
+
+    if not seen then
+      count = count + 1
+      candidates[count] = spellID
     end
   end
 
   return candidates
+end
+
+function ClassHUD:GetAuraCandidatesForEntry(entry, spellID)
+  if entry then
+    local cached = entry._candidates
+    if type(cached) == "table" then
+      local baseSpellID = entry.spellID or spellID
+      if spellID and baseSpellID and spellID ~= baseSpellID then
+        for i = #TMP, 1, -1 do
+          TMP[i] = nil
+        end
+
+        local count = #cached
+        for i = 1, count do
+          TMP[i] = cached[i]
+        end
+
+        local seen = false
+        for i = 1, count do
+          if TMP[i] == spellID then
+            seen = true
+            break
+          end
+        end
+
+        if not seen then
+          TMP[count + 1] = spellID
+        end
+
+        return TMP
+      end
+
+      return cached
+    end
+    local baseSpellID = entry.spellID or spellID
+    return self:_AssembleAuraCandidates(entry, baseSpellID)
+  end
+
+  if not spellID then
+    return nil
+  end
+
+  for i = #TMP, 1, -1 do
+    TMP[i] = nil
+  end
+
+  TMP[1] = spellID
+  return TMP
 end
 
 ---Finds an active aura from a list of candidate spellIDs.
@@ -380,7 +458,8 @@ end
 function ClassHUD:FindAuraFromCandidates(candidates, units)
   if not candidates then return nil end
 
-  for _, auraID in ipairs(candidates) do
+  for i = 1, #candidates do
+    local auraID = candidates[i]
     local aura, unit = self:GetAuraForSpell(auraID, units)
     if aura then
       return aura, auraID, unit
@@ -433,7 +512,8 @@ function ClassHUD:FindAuraByName(castSpellID, units)
   local spellName = info.name
 
   units = units or { "target" }
-  for _, unit in ipairs(units) do
+  for idx = 1, #units do
+    local unit = units[idx]
     local i = 1
     while true do
       local aura = C_UnitAuras.GetAuraDataByIndex(unit, i, "HARMFUL")
@@ -454,7 +534,8 @@ function ClassHUD:LacksResources(spellID)
 
   if type(costs) ~= "table" then return false end
 
-  for _, c in ipairs(costs) do
+  for i = 1, #costs do
+    local c = costs[i]
     -- Feltnavn varierer litt mellom patches
     local ptype = c.type or c.powerType
     local cost  = c.cost or c.minCost or 0
