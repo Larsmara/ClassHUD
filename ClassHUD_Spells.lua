@@ -18,16 +18,16 @@ local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
 local IMPLOSION_SPELL_ID = 196277
 
 local SUMMON_SPELLS = {
-  [34433]  = { fallbackDuration = 15 }, -- Shadowfiend
-  [123040] = { fallbackDuration = 12 }, -- Mindbender
-  [104316] = { fallbackDuration = 12 }, -- Call Dreadstalkers
-  [264119] = { fallbackDuration = 15 }, -- Summon Vilefiend
-  [265187] = { fallbackDuration = 15 }, -- Summon Demonic Tyrant
-  [111898] = { fallbackDuration = 17 }, -- Grimoire: Felguard
-  [42650]  = { fallbackDuration = 30 }, -- Army of the Dead
-  [49206]  = { fallbackDuration = 25 }, -- Summon Gargoyle
-  [205636] = { fallbackDuration = 10 }, -- Force of Nature
-  [115313] = { fallbackDuration = 15 }, -- Jade Serpent Statue
+  [34433]  = { fallbackDuration = 15, class = "PRIEST" },      -- Shadowfiend
+  [123040] = { fallbackDuration = 12, class = "PRIEST" },      -- Mindbender
+  [104316] = { fallbackDuration = 12, class = "WARLOCK" },     -- Call Dreadstalkers
+  [264119] = { fallbackDuration = 15, class = "WARLOCK" },     -- Summon Vilefiend
+  [265187] = { fallbackDuration = 15, class = "WARLOCK" },     -- Summon Demonic Tyrant
+  [111898] = { fallbackDuration = 17, class = "WARLOCK" },     -- Grimoire: Felguard
+  [42650]  = { fallbackDuration = 30, class = "DEATHKNIGHT" }, -- Army of the Dead
+  [49206]  = { fallbackDuration = 25, class = "DEATHKNIGHT" }, -- Summon Gargoyle
+  [205636] = { fallbackDuration = 10, class = "DRUID" },       -- Force of Nature
+  [115313] = { fallbackDuration = 15, class = "MONK" },        -- Jade Serpent Statue
 }
 
 local WILD_IMP_SUMMON_IDS = {
@@ -43,6 +43,102 @@ ClassHUD._activeTotems = ClassHUD._activeTotems or {}
 ClassHUD._spellNameToID = ClassHUD._spellNameToID or {}
 ClassHUD._trackedBuffRegistry = ClassHUD._trackedBuffRegistry or {}
 ClassHUD._trackedBuffOrder = ClassHUD._trackedBuffOrder or {}
+
+local function GetPlayerClassToken(self)
+  if self and self.GetPlayerClassSpec then
+    local class = select(1, self:GetPlayerClassSpec())
+    if class and class ~= "" then
+      return class
+    end
+  end
+  if UnitClass then
+    local _, token = UnitClass("player")
+    return token
+  end
+  return nil
+end
+
+function ClassHUD:IsTemporarySummonTrackingEnabled()
+  if not (self and self.db and self.db.profile) then
+    return true
+  end
+  local enabled = self.db.profile.trackSummons
+  if enabled == nil then
+    return true
+  end
+  return not not enabled
+end
+
+function ClassHUD:IsSummonSpellEnabled(spellID)
+  if not self:IsTemporarySummonTrackingEnabled() then
+    return false
+  end
+  if not spellID then
+    return true
+  end
+
+  local profile = self.db and self.db.profile
+  if not profile then
+    return true
+  end
+
+  profile.summonTracking = profile.summonTracking or {}
+  local class = GetPlayerClassToken(self)
+  if not class then
+    return true
+  end
+
+  profile.summonTracking[class] = profile.summonTracking[class] or {}
+  local value = profile.summonTracking[class][spellID]
+  if value == nil then
+    return true
+  end
+  return not not value
+end
+
+function ClassHUD:IsWildImpTrackingEnabled()
+  if not self:IsTemporarySummonTrackingEnabled() then
+    return false
+  end
+  if not (self and self.db and self.db.profile) then
+    return true
+  end
+  local enabled = self.db.profile.trackWildImps
+  if enabled == nil then
+    return true
+  end
+  return not not enabled
+end
+
+function ClassHUD:IsTotemTrackingEnabled()
+  if not (self and self.db and self.db.profile) then
+    return true
+  end
+  local enabled = self.db.profile.trackTotems
+  if enabled == nil then
+    return true
+  end
+  return not not enabled
+end
+
+function ClassHUD:GetTotemOverlayStyle()
+  if not (self and self.db and self.db.profile) then
+    return "SWIPE"
+  end
+  return self.db.profile.totemOverlayStyle or "SWIPE"
+end
+
+function ClassHUD:ClearWildImpTracking()
+  if self._wildImpGuids then
+    wipe(self._wildImpGuids)
+  else
+    self._wildImpGuids = {}
+  end
+  self._wildImpCount = 0
+  if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
+    self:UpdateCooldown(IMPLOSION_SPELL_ID)
+  end
+end
 
 local INACTIVE_BAR_COLOR = { r = 0.25, g = 0.25, b = 0.25, a = 0.6 }
 local HARMFUL_GLOW_THRESHOLD = 5
@@ -1236,6 +1332,10 @@ end
 
 function ClassHUD:HandleTrackedSummon(spellID, destGUID)
   if not SUMMON_SPELLS[spellID] then return end
+  if not self:IsSummonSpellEnabled(spellID) then
+    self:DeactivateSummonSpell(spellID)
+    return
+  end
 
   local duration = self:GetSummonDuration(spellID)
   if not duration or duration <= 0 then return end
@@ -1304,6 +1404,13 @@ end
 function ClassHUD:RefreshTemporaryBuffs(suppressLayout)
   if not self._activeSummonsBySpell then return end
 
+  if not self:IsTemporarySummonTrackingEnabled() then
+    if next(self._activeSummonsBySpell) ~= nil then
+      self:ResetSummonTracking()
+    end
+    return
+  end
+
   local now = GetTime()
   local any = false
   for spellID, active in pairs(self._activeSummonsBySpell) do
@@ -1339,21 +1446,12 @@ function ClassHUD:ResetSummonTracking()
     self._summonGuidToSpell = {}
   end
 
-  if self._wildImpGuids then
-    wipe(self._wildImpGuids)
-  else
-    self._wildImpGuids = {}
-  end
-
-  self._wildImpCount = 0
-
-  if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
-    self:UpdateCooldown(IMPLOSION_SPELL_ID)
-  end
+  self:ClearWildImpTracking()
 end
 
 function ClassHUD:HandleWildImpSummon(destGUID)
   if not destGUID then return end
+  if not self:IsWildImpTrackingEnabled() then return end
 
   self._wildImpGuids = self._wildImpGuids or {}
   if not self._wildImpGuids[destGUID] then
@@ -1431,19 +1529,36 @@ end
 function ClassHUD:ApplyTotemOverlay(state)
   if not state or not state.frame then return end
 
+  if not self:IsTotemTrackingEnabled() then
+    self:ClearTotemOverlay(state)
+    return
+  end
+
   local frame = state.frame
-  local cooldown = EnsureTotemCooldown(frame)
   local duration = state.duration or 0
   local startTime = state.startTime or GetTime()
+  local style = self:GetTotemOverlayStyle()
+  local useSwipe = style ~= "GLOW" and duration and duration > 0
 
-  if duration > 0 then
+  if useSwipe then
+    local cooldown = EnsureTotemCooldown(frame)
     cooldown:SetCooldown(startTime, duration)
     cooldown:Show()
     frame._totemGlowActive = nil
+    SetFrameGlow(frame, false)
   else
-    cooldown:Hide()
-    frame._totemGlowActive = true
-    SetFrameGlow(frame, true)
+    if frame.totemCooldown then
+      CooldownFrame_Clear(frame.totemCooldown)
+      frame.totemCooldown:Hide()
+    end
+
+    if style == "GLOW" or not duration or duration <= 0 then
+      frame._totemGlowActive = true
+      SetFrameGlow(frame, true)
+    else
+      frame._totemGlowActive = nil
+      SetFrameGlow(frame, false)
+    end
   end
 
   frame._totemActive = true
@@ -1470,8 +1585,20 @@ end
 
 function ClassHUD:UpdateTotemSlot(slot)
   if not slot then
+    if not self:IsTotemTrackingEnabled() then
+      self:ResetTotemTracking()
+      return
+    end
     for index = 1, 4 do
       self:UpdateTotemSlot(index)
+    end
+    return
+  end
+
+  if not self:IsTotemTrackingEnabled() then
+    if self._activeTotems and self._activeTotems[slot] then
+      self:ClearTotemOverlay(self._activeTotems[slot])
+      self._activeTotems[slot] = nil
     end
     return
   end
@@ -1514,6 +1641,10 @@ function ClassHUD:UpdateTotemSlot(slot)
 end
 
 function ClassHUD:RefreshAllTotems()
+  if not self:IsTotemTrackingEnabled() then
+    self:ResetTotemTracking()
+    return
+  end
   for slot = 1, 4 do
     self:UpdateTotemSlot(slot)
   end
@@ -1540,6 +1671,9 @@ end
 
 function ClassHUD:GetManualCountForSpell(spellID)
   if spellID == IMPLOSION_SPELL_ID then
+    if not self:IsWildImpTrackingEnabled() then
+      return 0
+    end
     return self._wildImpCount or 0
   end
   return nil

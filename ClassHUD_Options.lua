@@ -20,6 +20,86 @@ local optionsState = {
   newLinkSpellID = "",
 }
 
+local SUMMON_CLASS_CONFIG = {
+  { class = "PRIEST",      label = "Priest Summons",      spells = { 34433, 123040 } },
+  { class = "WARLOCK",     label = "Warlock Summons",     spells = { 104316, 264119, 265187, 111898 } },
+  { class = "DEATHKNIGHT", label = "Death Knight Summons", spells = { 42650, 49206 } },
+  { class = "DRUID",       label = "Druid Summons",       spells = { 205636 } },
+  { class = "MONK",        label = "Monk Summons",        spells = { 115313 } },
+}
+
+local TOTEM_OVERLAY_OPTIONS = {
+  SWIPE = "Cooldown swipe",
+  GLOW  = "Glow",
+}
+
+local function PlayerMatchesClass(addon, class)
+  if not class then return false end
+  local playerClass = select(1, addon:GetPlayerClassSpec())
+  if not playerClass or playerClass == "" then
+    playerClass = UnitClass and select(2, UnitClass("player")) or nil
+  end
+  return playerClass == class
+end
+
+local function PlayerMatchesSpec(addon, class, specID)
+  if not class then return false end
+  local playerClass, playerSpec = addon:GetPlayerClassSpec()
+  if not playerClass or playerClass == "" then
+    playerClass = UnitClass and select(2, UnitClass("player")) or nil
+  end
+  if playerClass ~= class then
+    return false
+  end
+  if specID and specID ~= 0 then
+    return playerSpec == specID
+  end
+  return true
+end
+
+local function EnsureSummonConfig(addon, class)
+  addon.db.profile.summonTracking = addon.db.profile.summonTracking or {}
+  addon.db.profile.summonTracking[class] = addon.db.profile.summonTracking[class] or {}
+  return addon.db.profile.summonTracking[class]
+end
+
+local function BuildSummonSpellArgs(addon, classConfig)
+  local args = {}
+  for index, spellID in ipairs(classConfig.spells) do
+    local info = C_Spell.GetSpellInfo(spellID)
+    local name = (info and info.name) or ("Spell " .. spellID)
+    local icon = info and info.iconID and ("|T" .. info.iconID .. ":16|t ") or ""
+    args["spell" .. spellID] = {
+      type = "toggle",
+      name = icon .. name .. " (" .. spellID .. ")",
+      order = index,
+      get = function()
+        local config = EnsureSummonConfig(addon, classConfig.class)
+        local value = config[spellID]
+        if value == nil then
+          return true
+        end
+        return value
+      end,
+      set = function(_, val)
+        local config = EnsureSummonConfig(addon, classConfig.class)
+        config[spellID] = not not val
+        if not val and addon.DeactivateSummonSpell then
+          addon:DeactivateSummonSpell(spellID)
+        end
+        if addon.RefreshTemporaryBuffs then
+          addon:RefreshTemporaryBuffs(true)
+        end
+        NotifyOptionsChanged()
+      end,
+      disabled = function()
+        return addon.db.profile.trackSummons == false
+      end,
+    }
+  end
+  return args
+end
+
 local function NotifyOptionsChanged()
   if ACR then ACR:NotifyChange("ClassHUD") end
 end
@@ -1524,11 +1604,11 @@ function ClassHUD_BuildOptions(addon)
               },
             },
           },
-          trackedBuffs = {
-            type = "group",
-            name = "Tracked Buffs & Bars",
-            order = 3,
-            args = {
+      trackedBuffs = {
+        type = "group",
+        name = "Tracked Buffs & Bars",
+        order = 3,
+        args = {
               description = {
                 type = "description",
                 name = "Configure which Blizzard tracked buffs and cooldown bars appear in the HUD.",
@@ -1629,10 +1709,97 @@ function ClassHUD_BuildOptions(addon)
           -- },
         },
       },
+      summonsTotems = {
+        type = "group",
+        name = "Summons & Totems",
+        order = 5,
+        args = {
+          description = {
+            type = "description",
+            name = "Configure tracking for temporary summons, Wild Imps, and totem overlays.",
+            order = 1,
+          },
+          trackSummons = {
+            type = "toggle",
+            name = "Track temporary summons",
+            order = 2,
+            get = function()
+              return addon.db.profile.trackSummons ~= false
+            end,
+            set = function(_, val)
+              addon.db.profile.trackSummons = not not val
+              if not val then
+                if addon.ResetSummonTracking then addon:ResetSummonTracking() end
+              else
+                if addon.RefreshTemporaryBuffs then addon:RefreshTemporaryBuffs(true) end
+              end
+              NotifyOptionsChanged()
+            end,
+          },
+          trackWildImps = {
+            type = "toggle",
+            name = "Track Wild Imps as stack counter on Implosion",
+            order = 3,
+            hidden = function()
+              return not PlayerMatchesSpec(addon, "WARLOCK", 266)
+            end,
+            disabled = function()
+              return addon.db.profile.trackSummons == false
+            end,
+            get = function()
+              return addon.db.profile.trackWildImps ~= false
+            end,
+            set = function(_, val)
+              addon.db.profile.trackWildImps = not not val
+              if addon.ClearWildImpTracking then
+                addon:ClearWildImpTracking()
+              end
+              NotifyOptionsChanged()
+            end,
+          },
+          trackTotems = {
+            type = "toggle",
+            name = "Track totem uptime",
+            order = 4,
+            hidden = function()
+              return not PlayerMatchesClass(addon, "SHAMAN")
+            end,
+            get = function()
+              return addon.db.profile.trackTotems ~= false
+            end,
+            set = function(_, val)
+              addon.db.profile.trackTotems = not not val
+              if not val then
+                if addon.ResetTotemTracking then addon:ResetTotemTracking() end
+              else
+                if addon.RefreshAllTotems then addon:RefreshAllTotems() end
+              end
+              NotifyOptionsChanged()
+            end,
+          },
+          totemStyle = {
+            type = "select",
+            name = "Totem overlay style",
+            order = 5,
+            values = TOTEM_OVERLAY_OPTIONS,
+            hidden = function()
+              return not PlayerMatchesClass(addon, "SHAMAN") or addon.db.profile.trackTotems == false
+            end,
+            get = function()
+              return addon.db.profile.totemOverlayStyle or "SWIPE"
+            end,
+            set = function(_, value)
+              addon.db.profile.totemOverlayStyle = value
+              if addon.RefreshAllTotems then addon:RefreshAllTotems() end
+              NotifyOptionsChanged()
+            end,
+          },
+        },
+      },
       snapshot = {
         type = "group",
         name = "Snapshot",
-        order = 5,
+        order = 6,
         args = {
           refresh = {
             type = "execute",
@@ -1659,6 +1826,25 @@ function ClassHUD_BuildOptions(addon)
       },
     },
   }
+
+  local summonArgs = opts.args.summonsTotems and opts.args.summonsTotems.args
+  if summonArgs then
+    for index, classConfig in ipairs(SUMMON_CLASS_CONFIG) do
+      summonArgs["summons_" .. classConfig.class] = {
+        type = "group",
+        name = classConfig.label,
+        inline = true,
+        order = 10 + index,
+        hidden = function()
+          if addon.db.profile.trackSummons == false then
+            return true
+          end
+          return not PlayerMatchesClass(addon, classConfig.class)
+        end,
+        args = BuildSummonSpellArgs(addon, classConfig),
+      }
+    end
+  end
 
   BuildTopBarSpellsEditor(addon, topBarEditorContainer)
   BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",

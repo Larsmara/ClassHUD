@@ -660,6 +660,32 @@ local defaults = {
       resource      = { r = 0.00, g = 0.55, b = 1.00 },
       power         = { r = 1.00, g = 0.85, b = 0.10 },
     },
+    summonTracking   = {
+      PRIEST = {
+        [34433]  = true, -- Shadowfiend
+        [123040] = true, -- Mindbender
+      },
+      WARLOCK = {
+        [104316] = true, -- Call Dreadstalkers
+        [264119] = true, -- Summon Vilefiend
+        [265187] = true, -- Summon Demonic Tyrant
+        [111898] = true, -- Grimoire: Felguard
+      },
+      DEATHKNIGHT = {
+        [42650] = true, -- Army of the Dead
+        [49206]  = true, -- Summon Gargoyle
+      },
+      DRUID = {
+        [205636] = true, -- Force of Nature
+      },
+      MONK = {
+        [115313] = true, -- Jade Serpent Statue
+      },
+    },
+    trackSummons     = true,
+    trackWildImps    = true,
+    trackTotems      = true,
+    totemOverlayStyle = "SWIPE",
     cooldowns        = {
       showText = true,
     },
