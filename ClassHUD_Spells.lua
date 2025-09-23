@@ -17,7 +17,10 @@ local bit_band = bit and bit.band or (bit32 and bit32.band)
 local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
 local IMPLOSION_SPELL_ID = 196277
 local FEL_FIREBOLT_SPELL_ID = 104318
-local WILD_IMP_NPC_ID = 55659
+local WILD_IMP_NPC_IDS = {
+  [55659] = true,  -- Hand of Gul'dan / Nether Portal
+  [143622] = true, -- Inner Demons
+}
 local WILD_IMP_MAX_CHARGES = 5
 local WILD_IMP_AVERAGE_DURATION = 12
 local WILD_IMP_DISPLAY_SPELL_ID = 104317
@@ -1811,15 +1814,13 @@ function ClassHUD:UpdateWildImpBuffFrame(count)
   self:ApplyTrackedBuffLayout()
 end
 
-function ClassHUD:HandleWildImpSummon(destGUID)
+function ClassHUD:HandleWildImpSummon(destGUID, npcID)
   if not destGUID then return end
   if not self:IsWildImpTrackingEnabled() then return end
 
-  if WILD_IMP_NPC_ID then
-    local npcID = self:GetNpcIDFromGUID(destGUID)
-    if npcID ~= WILD_IMP_NPC_ID then
-      return
-    end
+  npcID = npcID or self:GetNpcIDFromGUID(destGUID)
+  if npcID and not WILD_IMP_NPC_IDS[npcID] then
+    return
   end
 
   self._wildImpGuids = self._wildImpGuids or {}
@@ -1827,26 +1828,25 @@ function ClassHUD:HandleWildImpSummon(destGUID)
   if entry then
     entry.charges = WILD_IMP_MAX_CHARGES
     entry.spawnTime = GetTime()
+    entry.npcID = npcID or entry.npcID
   else
     self._wildImpGuids[destGUID] = {
       charges = WILD_IMP_MAX_CHARGES,
       spawnTime = GetTime(),
-      npcID = WILD_IMP_NPC_ID,
+      npcID = npcID,
     }
   end
 
   SyncWildImpCount(self)
 end
 
-function ClassHUD:HandleWildImpDespawn(destGUID)
+function ClassHUD:HandleWildImpDespawn(destGUID, npcID)
   if not destGUID then return end
   if not self:IsWildImpTrackingEnabled() then return end
 
-  if WILD_IMP_NPC_ID then
-    local npcID = self:GetNpcIDFromGUID(destGUID)
-    if npcID ~= WILD_IMP_NPC_ID then
-      return
-    end
+  npcID = npcID or self:GetNpcIDFromGUID(destGUID)
+  if npcID and not WILD_IMP_NPC_IDS[npcID] then
+    return
   end
 
   RemoveWildImp(self, destGUID)
@@ -1870,6 +1870,14 @@ function ClassHUD:HandleWildImpFelFirebolt(destGUID, sourceGUID)
 
   local entry = map[guid]
   if not entry then return end
+
+  if not entry.npcID then
+    entry.npcID = self:GetNpcIDFromGUID(guid)
+  end
+
+  if entry.npcID and not WILD_IMP_NPC_IDS[entry.npcID] then
+    return
+  end
 
   local remaining = (entry.charges or 0) - 1
   if remaining <= 0 then
@@ -2813,7 +2821,7 @@ ClassHUD.UpdateTrackedBarFrame = UpdateTrackedBarFrame
 function ClassHUD:HandleCombatLogEvent()
   if not CombatLogGetCurrentEventInfo then return end
 
-  local _, subevent, _, sourceGUID, _, sourceFlags, _, destGUID, _, _, _, spellID, spellName = CombatLogGetCurrentEventInfo()
+  local _, subevent, _, sourceGUID, _, sourceFlags, _, destGUID, destName, _, _, spellID, spellName = CombatLogGetCurrentEventInfo()
   local npcID = destGUID and self:GetNpcIDFromGUID(destGUID)
 
   if DEBUG_LOG_EVENTS[subevent] and self.LogDebug then
@@ -2828,8 +2836,14 @@ function ClassHUD:HandleCombatLogEvent()
         handledSummon = true
       end
 
-      if npcID == WILD_IMP_NPC_ID or (not handledSummon and WILD_IMP_SUMMON_IDS[spellID]) then
-        self:HandleWildImpSummon(destGUID)
+      if (npcID and WILD_IMP_NPC_IDS[npcID]) or (not handledSummon and WILD_IMP_SUMMON_IDS[spellID]) then
+        self:HandleWildImpSummon(destGUID, npcID)
+        handledSummon = true
+      end
+
+      if self.debugEnabled and not handledSummon and (not npcID or not WILD_IMP_NPC_IDS[npcID]) and self.LogUntrackedSummon then
+        local npcName = destName or spellName
+        self:LogUntrackedSummon(npcID, npcName, spellID)
       end
     end
   elseif subevent == "SPELL_CAST_SUCCESS" then
@@ -2843,7 +2857,7 @@ function ClassHUD:HandleCombatLogEvent()
   elseif subevent == "UNIT_DIED" or subevent == "UNIT_DESTROYED" or subevent == "UNIT_DISSIPATES" then
     if destGUID then
       self:HandleSummonedUnitDeath(destGUID)
-      self:HandleWildImpDespawn(destGUID)
+      self:HandleWildImpDespawn(destGUID, npcID)
     end
   end
 end

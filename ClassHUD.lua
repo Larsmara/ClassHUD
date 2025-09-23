@@ -27,6 +27,7 @@ _G.ClassHUD = ClassHUD -- explicit global bridge so split files can always find 
 
 ClassHUDDebugLog = ClassHUDDebugLog or {}
 ClassHUD.debugEnabled = ClassHUD.debugEnabled or false
+ClassHUD._loggedUntrackedSummons = ClassHUD._loggedUntrackedSummons or {}
 
 local MAX_DEBUG_LOG_ENTRIES = 2000
 
@@ -78,6 +79,35 @@ function ClassHUD:LogDebug(subevent, spellID, spellName, sourceGUID, destGUID, n
       table.remove(ClassHUDDebugLog, 1)
     end
   end
+end
+
+function ClassHUD:LogUntrackedSummon(npcID, npcName, spellID)
+  if not self.debugEnabled then
+    return
+  end
+
+  self._loggedUntrackedSummons = self._loggedUntrackedSummons or {}
+
+  local key = string.format("%s:%s", FormatLogValue(npcID), FormatLogValue(npcName))
+  if self._loggedUntrackedSummons[key] then
+    return
+  end
+  self._loggedUntrackedSummons[key] = true
+
+  local message = string.format(
+    "[ClassHUD Debug] Untracked summon: npcID=%s, name=%s, spellID=%s",
+    FormatLogValue(npcID),
+    FormatLogValue(npcName),
+    FormatLogValue(spellID)
+  )
+
+  if self.Print then
+    self:Print(message)
+  else
+    print(message)
+  end
+
+  self:LogDebug("UNTRACKED_SUMMON", spellID, npcName, nil, nil, npcID)
 end
 
 -- Make shared libs available to submodules
