@@ -19,6 +19,130 @@ local HARMFUL_GLOW_AURA_CHECK_INTERVAL = 0.1
 local HARMFUL_GLOW_UNITS = { "target", "focus" }
 local TRACKED_UNITS = { "player", "pet" }
 
+local concernScratch = {}
+
+local function EnsureConcernBuckets()
+  local buckets = ClassHUD._framesByConcern
+  if not buckets then
+    buckets = {
+      cooldown = {},
+      range = {},
+      resource = {},
+      aura = {},
+    }
+    ClassHUD._framesByConcern = buckets
+  else
+    buckets.cooldown = buckets.cooldown or {}
+    buckets.range = buckets.range or {}
+    buckets.resource = buckets.resource or {}
+    buckets.aura = buckets.aura or {}
+  end
+  return buckets
+end
+
+local function AddFrameConcern(frame, concern)
+  if not frame or not concern then return end
+  local buckets = EnsureConcernBuckets()
+  local bucket = buckets[concern]
+  if not bucket then
+    bucket = {}
+    buckets[concern] = bucket
+  end
+  if not bucket[frame] then
+    bucket[frame] = true
+  end
+  frame._concerns = frame._concerns or {}
+  frame._concerns[concern] = true
+end
+
+local function RemoveFrameConcern(frame, concern)
+  if not frame or not concern then return end
+  local buckets = ClassHUD._framesByConcern
+  if buckets then
+    local bucket = buckets[concern]
+    if bucket then
+      bucket[frame] = nil
+    end
+  end
+  if frame._concerns then
+    frame._concerns[concern] = nil
+    if not next(frame._concerns) then
+      wipe(frame._concerns)
+    end
+  end
+end
+
+local function ClearFrameConcerns(frame)
+  if not frame or not frame._concerns then return end
+  local buckets = ClassHUD._framesByConcern
+  if buckets then
+    for concern in pairs(frame._concerns) do
+      local bucket = buckets[concern]
+      if bucket then
+        bucket[frame] = nil
+      end
+    end
+  end
+  wipe(frame._concerns)
+end
+
+local function ShouldTrackRange(spellID)
+  if not spellID then return false end
+  if C_Spell and C_Spell.IsSpellHarmful then
+    local ok, result = pcall(C_Spell.IsSpellHarmful, spellID)
+    if ok and result ~= nil then
+      return result
+    end
+  end
+  if IsHarmfulSpell then
+    local ok, result = pcall(IsHarmfulSpell, spellID)
+    if ok and result ~= nil then
+      return result
+    end
+  end
+  return false
+end
+
+local function SpellUsesResource(spellID)
+  if not spellID then return false end
+  local costs = (C_Spell and C_Spell.GetSpellPowerCost and C_Spell.GetSpellPowerCost(spellID))
+      or (GetSpellPowerCost and GetSpellPowerCost(spellID))
+  if type(costs) ~= "table" then return false end
+
+  for _, costInfo in ipairs(costs) do
+    local cost = costInfo.cost or costInfo.minCost or 0
+    if cost and cost > 0 then
+      return true
+    end
+  end
+
+  return false
+end
+
+function ClassHUD:ClearFrameConcerns(frame)
+  ClearFrameConcerns(frame)
+end
+
+function ClassHUD:RefreshFrameConcerns(frame)
+  if not frame then return end
+  ClearFrameConcerns(frame)
+  AddFrameConcern(frame, "cooldown")
+  if ShouldTrackRange(frame.spellID) then
+    AddFrameConcern(frame, "range")
+  end
+  if SpellUsesResource(frame.spellID) then
+    AddFrameConcern(frame, "resource")
+  end
+end
+
+function ClassHUD:AddFrameToConcern(frame, concern)
+  AddFrameConcern(frame, concern)
+end
+
+function ClassHUD:RemoveFrameFromConcern(frame, concern)
+  RemoveFrameConcern(frame, concern)
+end
+
 local function EnsureAttachment(name)
   if not UI.anchor then return nil end
   UI.attachments = UI.attachments or {}
@@ -66,100 +190,6 @@ function ClassHUD:RefreshSnapshotCache()
     if entry.categories then
       self.cdmSpells[spellID] = entry.categories
     end
-  end
-end
-
--- =====================
--- Helpers
--- =====================
-
-local function UpdateSpellIcon(frame, sid, entry)
-  local iconID = entry and entry.iconID
-  if not iconID then
-    local s = C_Spell.GetSpellInfo(sid)
-    iconID = s and s.iconID
-  end
-  frame.icon:SetTexture(iconID or 134400)
-end
-
-local function UpdateCooldown(frame, sid, gcdActive)
-  local cdStart, cdDuration
-  local shouldDesaturate = false
-
-  -- Charges
-  local ch = C_Spell.GetSpellCharges(sid)
-  local chargesShown = false
-  if ch and ch.maxCharges and ch.maxCharges > 1 then
-    local current = ch.currentCharges or 0
-    frame.count:SetText(current)
-    frame.count:Show()
-    chargesShown = true
-
-    if current < ch.maxCharges and ch.cooldownStartTime and ch.cooldownDuration and ch.cooldownDuration > 0 then
-      cdStart = ch.cooldownStartTime
-      cdDuration = ch.cooldownDuration
-    end
-
-    shouldDesaturate = (current <= 0)
-  else
-    frame.count:Hide()
-    local cd = C_Spell.GetSpellCooldown(sid)
-    if cd and cd.startTime and cd.duration and cd.duration > 1.5 then
-      cdStart = cd.startTime
-      cdDuration = cd.duration
-      shouldDesaturate = true
-    end
-  end
-
-  -- GCD overlay (spellID 61304)
-  local gcd = C_Spell.GetSpellCooldown(61304)
-  if gcd and gcd.startTime and gcd.duration and gcd.duration > 0 then
-    if not cdStart or (gcd.startTime + gcd.duration) > (cdStart + cdDuration) then
-      cdStart    = gcd.startTime
-      cdDuration = gcd.duration
-      gcdActive  = true
-      -- Viktig: ikke sett frame._cooldownEnd for GCD, da vil teksten dukke opp
-    end
-  end
-
-  if cdStart and cdDuration then
-    CooldownFrame_Set(frame.cooldown, cdStart, cdDuration, true)
-
-    if not gcdActive then
-      frame._cooldownEnd = cdStart + cdDuration
-    else
-      frame._cooldownEnd = nil
-    end
-  else
-    CooldownFrame_Clear(frame.cooldown)
-    frame._cooldownEnd = nil
-  end
-
-
-  frame.icon:SetDesaturated(shouldDesaturate)
-  return chargesShown, gcdActive
-end
-
-local function UpdateAuraOverlay(frame, aura, chargesShown)
-  if aura then
-    local stacks = aura.applications or aura.stackCount or aura.charges or 0
-    if aura.duration and aura.duration > 0 and aura.expirationTime then
-      frame.cooldown:SetSwipeColor(1, 0.85, 0.1, 0.9)
-      CooldownFrame_Set(frame.cooldown, aura.expirationTime - aura.duration, aura.duration, true)
-      frame._cooldownEnd = aura.expirationTime
-      frame.icon:SetVertexColor(1, 1, 0.3)
-    else
-      frame.cooldown:SetSwipeColor(0, 0, 0, 0.25)
-      frame.icon:SetVertexColor(1, 1, 1)
-    end
-
-    if stacks > 1 and not chargesShown then
-      frame.count:SetText(stacks)
-      frame.count:Show()
-    end
-  else
-    frame.cooldown:SetSwipeColor(0, 0, 0, 0.25)
-    frame.icon:SetVertexColor(1, 1, 1)
   end
 end
 
@@ -233,8 +263,7 @@ local function UpdateGlow(frame, aura, sid, data)
     end
   end
 
-  -- 4) Idempotent toggle (ikke spam Show/Hide)
-  SetFrameGlow(frame, shouldGlow)
+  return shouldGlow
 end
 
 
@@ -316,6 +345,7 @@ local function CreateSpellFrame(spellID)
   frame._harmfulGlowCheckUnits = HARMFUL_GLOW_UNITS
   frame.spellID = spellID
   frame.isGlowing = false
+  frame._last = frame._last or {}
 
   ClassHUD.spellFrames[spellID] = frame
 
@@ -1015,13 +1045,26 @@ local function UpdateSpellFrame(frame)
   local sid = frame.spellID
   if not sid then return end
 
+  local cache = frame._last
+  if not cache then
+    cache = {}
+    frame._last = cache
+  end
+
   local data  = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
   local entry = ClassHUD:GetSnapshotEntry(sid)
 
-  -- Ikon
-  UpdateSpellIcon(frame, sid, entry)
+  local iconID = entry and entry.iconID
+  if not iconID then
+    local info = C_Spell.GetSpellInfo(sid)
+    iconID = info and info.iconID
+  end
+  iconID = iconID or 134400
+  if cache.iconID ~= iconID then
+    frame.icon:SetTexture(iconID)
+    cache.iconID = iconID
+  end
 
-  -- Aura lookup (target/focus først for harmful)
   local auraID
   if data and data.buff then
     auraID = data.buff.overrideSpellID
@@ -1035,75 +1078,240 @@ local function UpdateSpellFrame(frame)
     aura = ClassHUD:FindAuraByName(sid, { "target", "focus" })
   end
 
-  -- Cooldown & charges
-  local chargesShown, gcdActive = UpdateCooldown(frame, sid, false)
-  UpdateAuraOverlay(frame, aura, chargesShown)
+  local chargesInfo = C_Spell and C_Spell.GetSpellCharges and C_Spell.GetSpellCharges(sid)
+  local chargesShown = false
+  local chargesValue, maxCharges
+  local countText, countShown = nil, false
+  local cdStart, cdDuration, cdModRate = nil, nil, nil
+  local shouldDesaturate = false
 
-  -- ---------------- FARGE / DESAT ----------------
-  local tracksAura, auraActive = ClassHUD:IsHarmfulAuraSpell(sid, entry)
+  if chargesInfo and chargesInfo.maxCharges and chargesInfo.maxCharges > 1 then
+    chargesValue = chargesInfo.currentCharges or 0
+    maxCharges = chargesInfo.maxCharges
+    chargesShown = true
+    countText = tostring(chargesValue)
+    countShown = true
+    if chargesValue < maxCharges and chargesInfo.cooldownDuration and chargesInfo.cooldownDuration > 0 then
+      cdStart = chargesInfo.cooldownStartTime
+      cdDuration = chargesInfo.cooldownDuration
+      cdModRate = chargesInfo.cooldownModRate or 1
+    end
+    shouldDesaturate = (chargesValue <= 0)
+  else
+    local cd = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(sid)
+    if cd and cd.startTime and cd.duration and cd.duration > 1.5 then
+      cdStart = cd.startTime
+      cdDuration = cd.duration
+      cdModRate = cd.modRate or 1
+      shouldDesaturate = true
+    end
+  end
 
-  if tracksAura then
-    if auraActive then
-      frame.icon:SetDesaturated(false)
-      frame.icon:SetVertexColor(1, 1, 1)
-    else
-      frame.icon:SetDesaturated(true)
-      frame.icon:SetVertexColor(0.5, 0.5, 0.5)
+  local cooldownEnd = nil
+  if cdStart and cdDuration then
+    cooldownEnd = cdStart + cdDuration
+  end
+
+  local gcdActive = false
+  local gcd = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(61304)
+  if gcd and gcd.startTime and gcd.duration and gcd.duration > 0 then
+    local gcdEnd = gcd.startTime + gcd.duration
+    if not cooldownEnd or gcdEnd > cooldownEnd then
+      cdStart = gcd.startTime
+      cdDuration = gcd.duration
+      cdModRate = gcd.modRate or 1
+      cooldownEnd = nil
+      gcdActive = true
+    end
+  end
+
+  local swipeR, swipeG, swipeB, swipeA = 0, 0, 0, 0.25
+  if aura then
+    local stacks = aura.applications or aura.stackCount or aura.charges or 0
+    if aura.duration and aura.duration > 0 and aura.expirationTime then
+      swipeR, swipeG, swipeB, swipeA = 1, 0.85, 0.1, 0.9
+      cdStart = aura.expirationTime - aura.duration
+      cdDuration = aura.duration
+      cdModRate = aura.modRate or cdModRate or 1
+      cooldownEnd = aura.expirationTime
+      gcdActive = false
+    end
+    if stacks > 1 and not chargesShown then
+      countText = tostring(stacks)
+      countShown = true
+    elseif not chargesShown then
+      countText = nil
+      countShown = false
+    end
+  end
+
+  local hasCooldown = cdStart and cdDuration and cdDuration > 0
+  local modRate = cdModRate or 1
+  if hasCooldown then
+    local changed = not cache.hasCooldown
+        or cache.cooldownStart ~= cdStart
+        or cache.cooldownDuration ~= cdDuration
+        or cache.cooldownModRate ~= modRate
+    if changed then
+      CooldownFrame_Set(frame.cooldown, cdStart, cdDuration, true, false, modRate)
+    end
+    cache.cooldownStart = cdStart
+    cache.cooldownDuration = cdDuration
+    cache.cooldownModRate = modRate
+    cache.hasCooldown = true
+  else
+    if cache.hasCooldown then
+      CooldownFrame_Clear(frame.cooldown)
+    end
+    cache.cooldownStart = nil
+    cache.cooldownDuration = nil
+    cache.cooldownModRate = nil
+    cache.hasCooldown = false
+  end
+
+  if cache.swipeR ~= swipeR or cache.swipeG ~= swipeG or cache.swipeB ~= swipeB or cache.swipeA ~= swipeA then
+    frame.cooldown:SetSwipeColor(swipeR, swipeG, swipeB, swipeA)
+    cache.swipeR, cache.swipeG, cache.swipeB, cache.swipeA = swipeR, swipeG, swipeB, swipeA
+  end
+
+  frame._cooldownEnd = cooldownEnd
+
+  if countShown then
+    if cache.countText ~= countText then
+      frame.count:SetText(countText or "")
+      cache.countText = countText
+    end
+    if not cache.countShown then
+      frame.count:Show()
+      cache.countShown = true
     end
   else
-    -- Vanlig usability/desaturate-logikk
-    local desaturate = false
+    if cache.countShown then
+      frame.count:Hide()
+      cache.countShown = false
+    end
+    if cache.countText then
+      frame.count:SetText("")
+      cache.countText = nil
+    end
+  end
 
-    local charges = C_Spell.GetSpellCharges(sid)
-    if charges and charges.maxCharges and charges.maxCharges > 0 then
-      if (charges.currentCharges or 0) <= 0 then
-        desaturate = true
-      end
+  if chargesShown then
+    cache.charges = chargesValue
+    cache.maxCharges = maxCharges
+  else
+    cache.charges = nil
+    cache.maxCharges = nil
+  end
+
+  local usable, noMana = C_Spell and C_Spell.IsSpellUsable and C_Spell.IsSpellUsable(sid)
+  if not usable and not noMana then
+    shouldDesaturate = true
+  end
+
+  local lacksResources = ClassHUD:LacksResources(sid)
+  cache.lacksResources = lacksResources
+  if lacksResources then
+    shouldDesaturate = true
+  end
+
+  local tracksAura, auraActive = ClassHUD:IsHarmfulAuraSpell(sid, entry)
+  if tracksAura then
+    ClassHUD:AddFrameToConcern(frame, "aura")
+  else
+    ClassHUD:RemoveFrameFromConcern(frame, "aura")
+  end
+
+  local vertexR, vertexG, vertexB = 1, 1, 1
+  if aura and aura.duration and aura.duration > 0 and aura.expirationTime then
+    vertexR, vertexG, vertexB = 1, 1, 0.3
+  end
+
+  local finalDesaturate
+  if tracksAura then
+    if auraActive then
+      finalDesaturate = false
+      vertexR, vertexG, vertexB = 1, 1, 1
     else
-      local cd = C_Spell.GetSpellCooldown(sid)
-      if cd and cd.startTime and cd.duration and cd.duration > 1.5 then
-        desaturate = true
-      end
+      finalDesaturate = true
+      vertexR, vertexG, vertexB = 0.5, 0.5, 0.5
     end
-
-    local usable, noMana = C_Spell.IsSpellUsable(sid)
-    if not usable and not noMana then
-      desaturate = true
-    end
-
-    if ClassHUD:LacksResources(sid) then
-      desaturate = true
-    end
-
-    frame.icon:SetDesaturated(desaturate)
-    frame.icon:SetVertexColor(1, 1, 1)
+  else
+    finalDesaturate = shouldDesaturate
+    vertexR, vertexG, vertexB = 1, 1, 1
   end
 
-  -- ===== Out-of-Range via vertexColor =====
-  do
-    if UnitExists("target") and not UnitIsDead("target") then
-      local inRange = C_Spell and C_Spell.IsSpellInRange and C_Spell.IsSpellInRange(sid, "target")
-      if inRange == false then
-        frame.icon:SetVertexColor(1, 0, 0)
-      end
+  local inRange = nil
+  if UnitExists("target") and not UnitIsDead("target") then
+    inRange = C_Spell and C_Spell.IsSpellInRange and C_Spell.IsSpellInRange(sid, "target")
+    if inRange == false then
+      vertexR, vertexG, vertexB = 1, 0, 0
     end
   end
-  -- ========================================
+  cache.inRange = inRange
 
-  -- Glow & tekst
-  UpdateGlow(frame, aura, sid, data)
+  finalDesaturate = not not finalDesaturate
+  if cache.desaturated ~= finalDesaturate then
+    frame.icon:SetDesaturated(finalDesaturate)
+    cache.desaturated = finalDesaturate
+  end
+
+  if cache.vertexR ~= vertexR or cache.vertexG ~= vertexG or cache.vertexB ~= vertexB then
+    frame.icon:SetVertexColor(vertexR, vertexG, vertexB)
+    cache.vertexR, cache.vertexG, cache.vertexB = vertexR, vertexG, vertexB
+  end
+
+  local shouldGlow = UpdateGlow(frame, aura, sid, data) or false
+  if cache.glow ~= shouldGlow then
+    SetFrameGlow(frame, shouldGlow)
+    cache.glow = shouldGlow
+  else
+    cache.glow = shouldGlow
+  end
+
   UpdateCooldownText(frame, gcdActive)
   ClassHUD:RefreshCooldownTextFrame(frame)
 end
-
 
 -- ==================================================
 -- Public API (kalles fra ClassHUD.lua events)
 -- ==================================================
 ClassHUD.UpdateTrackedBarFrame = UpdateTrackedBarFrame
 
-function ClassHUD:UpdateAllSpellFrames()
+local function UpdateFramesFromBucket(bucket, seen)
+  if not bucket then return end
+  wipe(concernScratch)
+  for frame in pairs(bucket) do
+    concernScratch[#concernScratch + 1] = frame
+  end
+  for i = 1, #concernScratch do
+    local frame = concernScratch[i]
+    concernScratch[i] = nil
+    if frame and (not seen or not seen[frame]) then
+      UpdateSpellFrame(frame)
+      if seen then
+        seen[frame] = true
+      end
+    end
+  end
+end
+
+function ClassHUD:UpdateAllSpellFrames(concern)
   self:RefreshSnapshotCache()
+
+  if concern then
+    local buckets = EnsureConcernBuckets()
+    if type(concern) == "string" then
+      UpdateFramesFromBucket(buckets[concern])
+      return
+    elseif type(concern) == "table" then
+      local seen = {}
+      for _, key in ipairs(concern) do
+        UpdateFramesFromBucket(buckets[key], seen)
+      end
+      return
+    end
+  end
 
   for _, f in ipairs(activeFrames) do
     UpdateSpellFrame(f)
@@ -1142,7 +1350,10 @@ function ClassHUD:UpdateAllFrames()
 end
 
 function ClassHUD:BuildFramesForSpec()
-  for _, f in ipairs(activeFrames) do f:Hide() end
+  for _, f in ipairs(activeFrames) do
+    self:ClearFrameConcerns(f)
+    f:Hide()
+  end
   wipe(activeFrames)
 
   if self.spellFrames then
@@ -1176,6 +1387,7 @@ function ClassHUD:BuildFramesForSpec()
       table.insert(activeFrames, frame)
       built[spellID] = true
     end
+    self:RefreshFrameConcerns(frame)
     return frame
   end
 
