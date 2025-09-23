@@ -22,7 +22,7 @@ local optionsState = {
 
 local SUMMON_CLASS_CONFIG = {
   { class = "PRIEST",      label = "Priest Summons",      spells = { 34433, 123040 } },
-  { class = "WARLOCK",     label = "Warlock Summons",     spells = { 104316, 264119, 265187, 111898 } },
+  { class = "WARLOCK",     label = "Warlock Summons",     spells = { 193332, 264119, 455476, 265187, 111898, 205180 } },
   { class = "DEATHKNIGHT", label = "Death Knight Summons", spells = { 42650, 49206 } },
   { class = "DRUID",       label = "Druid Summons",       spells = { 205636 } },
   { class = "MONK",        label = "Monk Summons",        spells = { 115313 } },

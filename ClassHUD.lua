@@ -666,10 +666,12 @@ local defaults = {
         [123040] = true, -- Mindbender
       },
       WARLOCK = {
-        [104316] = true, -- Call Dreadstalkers
+        [193332] = true, -- Call Dreadstalkers
         [264119] = true, -- Summon Vilefiend
+        [455476] = true, -- Summon Charhound
         [265187] = true, -- Summon Demonic Tyrant
         [111898] = true, -- Grimoire: Felguard
+        [205180] = true, -- Summon Darkglare
       },
       DEATHKNIGHT = {
         [42650] = true, -- Army of the Dead

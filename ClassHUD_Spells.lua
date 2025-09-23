@@ -16,14 +16,19 @@ local trackedBarPool = ClassHUD._trackedBarFramePool
 local bit_band = bit and bit.band or (bit32 and bit32.band)
 local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
 local IMPLOSION_SPELL_ID = 196277
+local FEL_FIREBOLT_SPELL_ID = 104318
+local WILD_IMP_NPC_ID = 55659
+local WILD_IMP_MAX_CHARGES = 5
 
 local SUMMON_SPELLS = {
   [34433]  = { fallbackDuration = 15, class = "PRIEST" },      -- Shadowfiend
   [123040] = { fallbackDuration = 12, class = "PRIEST" },      -- Mindbender
-  [104316] = { fallbackDuration = 12, class = "WARLOCK" },     -- Call Dreadstalkers
-  [264119] = { fallbackDuration = 15, class = "WARLOCK" },     -- Summon Vilefiend
-  [265187] = { fallbackDuration = 15, class = "WARLOCK" },     -- Summon Demonic Tyrant
-  [111898] = { fallbackDuration = 17, class = "WARLOCK" },     -- Grimoire: Felguard
+  [193332] = { duration = 20, fallbackDuration = 20, class = "WARLOCK", name = "Dreadstalkers", npcID = 98035, displaySpellID = 104316, demon = true }, -- Call Dreadstalkers
+  [264119] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Vilefiend", npcID = 135816, demon = true },        -- Summon Vilefiend
+  [111898] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Grimoire: Felguard", npcID = 17252, demon = true }, -- Grimoire: Felguard
+  [455476] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Charhound", npcID = 226639, demon = true },         -- Summon Charhound
+  [265187] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Demonic Tyrant", npcID = 135002, demon = true, tyrant = true, extendDuration = 15 }, -- Summon Demonic Tyrant
+  [205180] = { duration = 20, fallbackDuration = 20, class = "WARLOCK", name = "Darkglare", npcID = 103673, demon = true },        -- Summon Darkglare
   [42650]  = { fallbackDuration = 30, class = "DEATHKNIGHT" }, -- Army of the Dead
   [49206]  = { fallbackDuration = 25, class = "DEATHKNIGHT" }, -- Summon Gargoyle
   [205636] = { fallbackDuration = 10, class = "DRUID" },       -- Force of Nature
@@ -32,8 +37,38 @@ local SUMMON_SPELLS = {
 
 local WILD_IMP_SUMMON_IDS = {
   [104317] = true, -- Wild Imp
-  [104318] = true, -- Wild Imp (Demonic Empowerment variants)
 }
+
+local function GetNPCIDFromGUID(guid)
+  if not guid then return nil end
+  local _, _, _, _, _, npcID = strsplit("-", guid)
+  if npcID then
+    return tonumber(npcID)
+  end
+  return nil
+end
+
+local function UpdateWildImpIndicator(self)
+  if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
+    self:UpdateCooldown(IMPLOSION_SPELL_ID)
+  end
+end
+
+local function RemoveWildImp(self, guid)
+  if not guid then return false end
+  local map = self._wildImpGuids
+  if not map or not map[guid] then return false end
+
+  map[guid] = nil
+  if self._wildImpCount and self._wildImpCount > 0 then
+    self._wildImpCount = self._wildImpCount - 1
+  else
+    self._wildImpCount = 0
+  end
+
+  UpdateWildImpIndicator(self)
+  return true
+end
 
 ClassHUD._activeSummonsBySpell = ClassHUD._activeSummonsBySpell or {}
 ClassHUD._summonGuidToSpell = ClassHUD._summonGuidToSpell or {}
@@ -135,9 +170,7 @@ function ClassHUD:ClearWildImpTracking()
     self._wildImpGuids = {}
   end
   self._wildImpCount = 0
-  if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
-    self:UpdateCooldown(IMPLOSION_SPELL_ID)
-  end
+  UpdateWildImpIndicator(self)
 end
 
 local INACTIVE_BAR_COLOR = { r = 0.25, g = 0.25, b = 0.25, a = 0.6 }
@@ -1222,12 +1255,17 @@ function ClassHUD:GetSummonDuration(spellID)
   local def = SUMMON_SPELLS[spellID]
   if not def then return nil end
 
-  local duration = DetermineSpellDuration(def.durationSpellID or spellID, def.fallbackDuration)
+  if def.duration and def.duration > 0 then
+    return def.duration
+  end
+
+  local fallback = def.fallbackDuration or def.duration
+  local duration = DetermineSpellDuration(def.durationSpellID or spellID, fallback)
   if duration and duration > 0 then
     return duration
   end
 
-  return def.fallbackDuration
+  return fallback
 end
 
 function ClassHUD:UpdateSummonFrame(spellID, suppressLayout)
@@ -1331,10 +1369,18 @@ function ClassHUD:DeactivateSummonSpell(spellID)
 end
 
 function ClassHUD:HandleTrackedSummon(spellID, destGUID)
-  if not SUMMON_SPELLS[spellID] then return end
+  local def = SUMMON_SPELLS[spellID]
+  if not def then return end
   if not self:IsSummonSpellEnabled(spellID) then
     self:DeactivateSummonSpell(spellID)
     return
+  end
+
+  if def.npcID and destGUID then
+    local npcID = GetNPCIDFromGUID(destGUID)
+    if npcID ~= def.npcID then
+      return
+    end
   end
 
   local duration = self:GetSummonDuration(spellID)
@@ -1345,12 +1391,14 @@ function ClassHUD:HandleTrackedSummon(spellID, destGUID)
   if not active then
     active = {
       spellID = spellID,
-      iconSpellID = (SUMMON_SPELLS[spellID] and SUMMON_SPELLS[spellID].displaySpellID) or spellID,
+      iconSpellID = (def and def.displaySpellID) or spellID,
       startTime = now,
       duration = duration,
       expiration = now + duration,
       guids = {},
       count = 0,
+      demon = not not def.demon,
+      npcID = def.npcID,
     }
     self._activeSummonsBySpell[spellID] = active
   else
@@ -1372,8 +1420,47 @@ function ClassHUD:HandleTrackedSummon(spellID, destGUID)
     self._summonGuidToSpell[destGUID] = spellID
   end
 
-  self:UpdateSummonFrame(spellID)
+  self:UpdateSummonFrame(spellID, true)
   self:ScheduleSummonExpiryCheck(spellID)
+  if def.tyrant then
+    self:ExtendActiveSummonDurations(def.extendDuration or 15, spellID)
+  end
+  self:ApplyTrackedBuffLayout()
+end
+
+function ClassHUD:ExtendActiveSummonDurations(extension, excludeSpellID)
+  if not extension or extension <= 0 then return end
+  local list = self._activeSummonsBySpell
+  if not list then return end
+
+  local now = GetTime()
+  for spellID, active in pairs(list) do
+    if spellID ~= excludeSpellID and active then
+      local def = SUMMON_SPELLS[spellID]
+      if def and def.demon then
+        local expiration = active.expiration
+        if expiration and expiration > now then
+          expiration = expiration + extension
+        else
+          expiration = now + extension
+        end
+        active.expiration = expiration
+
+        if active.startTime then
+          local newDuration = expiration - active.startTime
+          if not active.duration or newDuration > active.duration then
+            active.duration = newDuration
+          end
+        else
+          active.startTime = now
+          active.duration = math.max(active.duration or 0, extension)
+        end
+
+        self:UpdateSummonFrame(spellID, true)
+        self:ScheduleSummonExpiryCheck(spellID)
+      end
+    end
+  end
 end
 
 function ClassHUD:HandleSummonedUnitDeath(destGUID)
@@ -1453,29 +1540,52 @@ function ClassHUD:HandleWildImpSummon(destGUID)
   if not destGUID then return end
   if not self:IsWildImpTrackingEnabled() then return end
 
-  self._wildImpGuids = self._wildImpGuids or {}
-  if not self._wildImpGuids[destGUID] then
-    self._wildImpGuids[destGUID] = true
-    self._wildImpCount = (self._wildImpCount or 0) + 1
-    if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
-      self:UpdateCooldown(IMPLOSION_SPELL_ID)
+  if WILD_IMP_NPC_ID then
+    local npcID = GetNPCIDFromGUID(destGUID)
+    if npcID ~= WILD_IMP_NPC_ID then
+      return
     end
   end
+
+  self._wildImpGuids = self._wildImpGuids or {}
+  local entry = self._wildImpGuids[destGUID]
+  if entry then
+    entry.charges = WILD_IMP_MAX_CHARGES
+    entry.spawnTime = GetTime()
+  else
+    self._wildImpGuids[destGUID] = {
+      charges = WILD_IMP_MAX_CHARGES,
+      spawnTime = GetTime(),
+      npcID = WILD_IMP_NPC_ID,
+    }
+    self._wildImpCount = (self._wildImpCount or 0) + 1
+  end
+
+  UpdateWildImpIndicator(self)
 end
 
 function ClassHUD:HandleWildImpDespawn(destGUID)
-  if not destGUID or not self._wildImpGuids or not self._wildImpGuids[destGUID] then return end
+  if not destGUID then return end
+  RemoveWildImp(self, destGUID)
+end
 
-  self._wildImpGuids[destGUID] = nil
-  if self._wildImpCount and self._wildImpCount > 0 then
-    self._wildImpCount = self._wildImpCount - 1
-  else
-    self._wildImpCount = 0
+function ClassHUD:HandleWildImpFelFirebolt(sourceGUID)
+  if not sourceGUID then return end
+  if not self:IsWildImpTrackingEnabled() then return end
+
+  local map = self._wildImpGuids
+  if not map then return end
+
+  local entry = map[sourceGUID]
+  if not entry then return end
+
+  local remaining = (entry.charges or 0) - 1
+  if remaining <= 0 then
+    RemoveWildImp(self, sourceGUID)
+    return
   end
 
-  if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
-    self:UpdateCooldown(IMPLOSION_SPELL_ID)
-  end
+  entry.charges = remaining
 end
 
 local function FindSpellFrameByName(self, name)
@@ -2391,6 +2501,14 @@ function ClassHUD:HandleCombatLogEvent()
       elseif WILD_IMP_SUMMON_IDS[spellID] then
         self:HandleWildImpSummon(destGUID)
       end
+    end
+  elseif subevent == "SPELL_CAST_SUCCESS" then
+    if spellID == IMPLOSION_SPELL_ID then
+      if IsMine(sourceGUID, sourceFlags) then
+        self:ClearWildImpTracking()
+      end
+    elseif spellID == FEL_FIREBOLT_SPELL_ID then
+      self:HandleWildImpFelFirebolt(sourceGUID)
     end
   elseif subevent == "UNIT_DIED" or subevent == "UNIT_DESTROYED" or subevent == "UNIT_DISSIPATES" then
     if destGUID then
