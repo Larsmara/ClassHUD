@@ -706,6 +706,12 @@ function ClassHUD:UpdateCDMSnapshot()
       end
     end
   end
+
+  for sid, entry in pairs(snapshot) do
+    if entry then
+      self:_AssembleAuraCandidates(entry, sid)
+    end
+  end
 end
 
 -- ===== Options bootstrap (registers with AceConfigRegistry directly) =====
