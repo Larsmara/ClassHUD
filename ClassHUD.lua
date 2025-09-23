@@ -49,6 +49,15 @@ ClassHUD._trackedBarFrames = ClassHUD._trackedBarFrames or {}
 ClassHUD._trackedAuraIDs = ClassHUD._trackedAuraIDs or {}
 ClassHUD._trackedLayoutSnapshot = ClassHUD._trackedLayoutSnapshot or nil
 ClassHUD._barTickerToken = ClassHUD._barTickerToken or nil
+ClassHUD._auraWatchersBySpellID = ClassHUD._auraWatchersBySpellID or {}
+ClassHUD._auraWatchersByUnit = ClassHUD._auraWatchersByUnit or {
+  player = {},
+  target = {},
+  focus = {},
+  pet = {},
+}
+ClassHUD._pendingAuraFrames = ClassHUD._pendingAuraFrames or {}
+ClassHUD._auraFlushTimer = ClassHUD._auraFlushTimer or nil
 
 function ClassHUD:RequestUpdate(kind)
   kind = kind or "any"
@@ -149,13 +158,25 @@ local function ExtractSpellIDFromAuraPayload(auraInfo)
   return nil
 end
 
-local function PayloadContainsTrackedAura(self, list)
+local function PayloadContainsTrackedAura(self, unit, list)
   if type(list) ~= "table" then
     return false
   end
 
-  local tracked = self._trackedAuraIDs
-  if not tracked or not next(tracked) then
+  local spellWatchers = self._auraWatchersBySpellID
+  local unitWatchers = self._auraWatchersByUnit and self._auraWatchersByUnit[unit]
+  if not spellWatchers or not unitWatchers or not next(unitWatchers) then
+    return false
+  end
+
+  local function HasRelevantWatchers(spellID)
+    local watchers = spellWatchers[spellID]
+    if not watchers then return false end
+    for frame in pairs(watchers) do
+      if unitWatchers[frame] then
+        return true
+      end
+    end
     return false
   end
 
@@ -163,7 +184,7 @@ local function PayloadContainsTrackedAura(self, list)
   for _, auraInfo in ipairs(list) do
     iterated = true
     local spellID = ExtractSpellIDFromAuraPayload(auraInfo)
-    if spellID and tracked[spellID] then
+    if spellID and HasRelevantWatchers(spellID) then
       return true
     end
   end
@@ -174,7 +195,7 @@ local function PayloadContainsTrackedAura(self, list)
 
   for _, auraInfo in pairs(list) do
     local spellID = ExtractSpellIDFromAuraPayload(auraInfo)
-    if spellID and tracked[spellID] then
+    if spellID and HasRelevantWatchers(spellID) then
       return true
     end
   end
@@ -183,6 +204,11 @@ local function PayloadContainsTrackedAura(self, list)
 end
 
 function ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
+  local unitWatchers = self._auraWatchersByUnit and self._auraWatchersByUnit[unit]
+  if not unitWatchers or not next(unitWatchers) then
+    return false
+  end
+
   if type(updateInfo) ~= "table" then
     return true -- legacy payload, always rebuild
   end
@@ -191,13 +217,13 @@ function ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
     return true
   end
 
-  if PayloadContainsTrackedAura(self, updateInfo.addedAuras)
-      or PayloadContainsTrackedAura(self, updateInfo.addedAuraSpellIDs) then
+  if PayloadContainsTrackedAura(self, unit, updateInfo.addedAuras)
+      or PayloadContainsTrackedAura(self, unit, updateInfo.addedAuraSpellIDs) then
     return true
   end
 
-  if PayloadContainsTrackedAura(self, updateInfo.updatedAuras)
-      or PayloadContainsTrackedAura(self, updateInfo.updatedAuraSpellIDs) then
+  if PayloadContainsTrackedAura(self, unit, updateInfo.updatedAuras)
+      or PayloadContainsTrackedAura(self, unit, updateInfo.updatedAuraSpellIDs) then
     return true
   end
 
@@ -205,7 +231,7 @@ function ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
       or updateInfo.removedAuraSpellIDs
       or updateInfo.removedSpellIDs
 
-  if PayloadContainsTrackedAura(self, removedList) then
+  if PayloadContainsTrackedAura(self, unit, removedList) then
     return true
   end
 
@@ -746,7 +772,7 @@ for _, ev in pairs({
   "UNIT_SPELLCAST_INTERRUPTED", "UNIT_SPELLCAST_FAILED",
 
   -- Spells
-  "UNIT_AURA", "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_CHARGES", "UNIT_SPELLCAST_SUCCEEDED",
+  "UNIT_AURA", "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_CHARGES", "SPELL_UPDATE_USABLE", "UNIT_SPELLCAST_SUCCEEDED",
 
   -- Target
   "PLAYER_TARGET_CHANGED",
@@ -841,15 +867,19 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     ClassHUD:UNIT_SPELLCAST_FAILED(unit, ...); return
   end
 
-  if event == "UNIT_AURA" and (unit == "player" or unit == "pet") then
+  if event == "UNIT_AURA" and (unit == "player" or unit == "pet" or unit == "target" or unit == "focus") then
     local updateInfo = ...
     local shouldUpdate = true
     if ClassHUD.ShouldProcessAuraUpdate then
       shouldUpdate = ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
     end
 
-    if shouldUpdate and ClassHUD.UpdateAllFrames then
-      ClassHUD:RequestUpdate("aura")
+    if shouldUpdate then
+      if ClassHUD.HandleUnitAuraUpdate then
+        ClassHUD:HandleUnitAuraUpdate(unit, updateInfo)
+      elseif ClassHUD.UpdateAllFrames then
+        ClassHUD:RequestUpdate("aura")
+      end
     end
 
     if ClassHUD.HandleEclipseEvent and unit == "player" then
@@ -859,13 +889,34 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     return
   end
 
-  if event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES" or event == "UNIT_SPELLCAST_SUCCEEDED" then
-    if ClassHUD.UpdateAllFrames then
+  if event == "SPELL_UPDATE_COOLDOWN" then
+    if ClassHUD.UpdateCooldown then
+      ClassHUD:UpdateCooldown(nil)
+    elseif ClassHUD.UpdateAllFrames then
+      ClassHUD:RequestUpdate("cooldown")
+    end
+    return
+  end
+
+  if event == "SPELL_UPDATE_CHARGES" or event == "SPELL_UPDATE_USABLE" then
+    local spellID = unit
+    if ClassHUD.UpdateCooldown then
+      ClassHUD:UpdateCooldown(spellID)
+    elseif ClassHUD.UpdateAllFrames then
+      ClassHUD:RequestUpdate("cooldown")
+    end
+    return
+  end
+
+  if event == "UNIT_SPELLCAST_SUCCEEDED" then
+    local spellID = select(2, ...)
+    if ClassHUD.UpdateCooldown then
+      ClassHUD:UpdateCooldown(spellID)
+    elseif ClassHUD.UpdateAllFrames then
       ClassHUD:RequestUpdate("cooldown")
     end
 
-    if event == "UNIT_SPELLCAST_SUCCEEDED" and ClassHUD.HandleEclipseEvent and unit == "player" then
-      local spellID = select(2, ...)
+    if ClassHUD.HandleEclipseEvent and unit == "player" then
       ClassHUD:HandleEclipseEvent(event, unit, spellID)
     end
 
