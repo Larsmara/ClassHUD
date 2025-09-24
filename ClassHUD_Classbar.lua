@@ -17,7 +17,7 @@ end
 -- ========= Advanced Class Resource System =========
 
 -- Map classes → special resource power types
-local CLASS_POWER_ID = {
+local CLASS_POWER_ID       = {
   MONK        = Enum.PowerType.Chi,
   PALADIN     = Enum.PowerType.HolyPower,
   WARLOCK     = Enum.PowerType.SoulShards,
@@ -29,12 +29,22 @@ local CLASS_POWER_ID = {
 }
 
 -- Specs that “unlock” the resource
-local REQUIRED_SPEC = {
+local REQUIRED_SPEC        = {
   MONK = 269, -- Windwalker
   MAGE = 62,  -- Arcane
 }
 
-ClassHUD.CLASS_POWER_ID = ClassHUD.CLASS_POWER_ID or {}
+-- ========= BALANCE DRUID: ECLIPSE =========
+local specID_BALANCE       = 102
+local ECLIPSE_SOLAR        = 48517
+local ECLIPSE_LUNAR        = 48518
+local LUNAR_CALLING_TALENT = 429523
+
+-- Wrath / Starfire IDs (kan variere, vi tar begge)
+local WRATH_IDS            = { [5176] = true, [190984] = true }
+local STARFIRE_IDS         = { [194153] = true, [197628] = true }
+
+ClassHUD.CLASS_POWER_ID    = ClassHUD.CLASS_POWER_ID or {}
 for classToken, powerType in pairs(CLASS_POWER_ID) do
   ClassHUD.CLASS_POWER_ID[classToken] = powerType
 end
@@ -61,7 +71,7 @@ function ClassHUD:IsClassBarSpecSupported(class, specID)
     return false
   end
   if class == "DRUID" then
-    return specID == 102 or specID == 103 or specID == 104
+    return true
   end
   return true
 end
@@ -92,13 +102,12 @@ function ClassHUD:IsClassBarEnabledForSpec(class, specID)
         return settings.eclipse
       end
       return false
-    elseif specID == 103 or specID == 104 then
+    else
+      -- for 103, 104, 105: combo toggle
       if settings and settings.combo ~= nil then
         return settings.combo
       end
       return true
-    else
-      return false
     end
   elseif class == "ROGUE" then
     if settings and settings.combo ~= nil then
@@ -308,12 +317,10 @@ local function ResolveSpecialPower()
 
   if class == "DRUID" then
     if specID == 102 then
-      return nil
+      return nil -- handled separately by Eclipse
     end
     if ptype == Enum.PowerType.ComboPoints then
-      if specID ~= 103 and specID ~= 104 then
-        return nil
-      end
+      -- Allow ALL specs in Cat Form
       if select(1, UnitPowerType("player")) ~= Enum.PowerType.Energy then
         return nil
       end
@@ -430,16 +437,6 @@ function ClassHUD:UpdateRunes()
   end
   HideAllSegments(max + 1)
 end
-
--- ========= BALANCE DRUID: ECLIPSE =========
-local specID_BALANCE       = 102
-local ECLIPSE_SOLAR        = 48517
-local ECLIPSE_LUNAR        = 48518
-local LUNAR_CALLING_TALENT = 429523
-
--- Wrath / Starfire IDs (kan variere, vi tar begge)
-local WRATH_IDS            = { [5176] = true, [190984] = true }
-local STARFIRE_IDS         = { [194153] = true, [197628] = true }
 
 local function HasLunarCalling()
   return C_Spell.IsPlayerSpell and C_Spell.IsPlayerSpell(LUNAR_CALLING_TALENT) or false

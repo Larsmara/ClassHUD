@@ -1716,13 +1716,17 @@ function ClassHUD_BuildOptions(addon)
                 type = "header",
                 name = "Restoration",
                 order = 8,
-                hidden = true,
+                hidden = function()
+                  return not PlayerMatchesSpec(addon, "DRUID", 105)
+                end,
               },
               restoCombo = {
                 type = "toggle",
                 name = "Enable Combo Points (Restoration)",
                 order = 9,
-                hidden = true,
+                hidden = function()
+                  return not PlayerMatchesSpec(addon, "DRUID", 105)
+                end,
                 get = function()
                   local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[105]
