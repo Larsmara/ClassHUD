@@ -19,11 +19,12 @@ local IMPLOSION_SPELL_ID = 196277
 local FEL_FIREBOLT_SPELL_ID = 104318
 local WILD_IMP_NPC_IDS = {
   [55659] = true,  -- Hand of Gul'dan / Nether Portal
-  [143622] = true, -- Inner Demons
+  [143622] = true, -- Inner Demons / Nether Portal
 }
 local WILD_IMP_MAX_CHARGES = 5
 local WILD_IMP_AVERAGE_DURATION = 12
 local WILD_IMP_DISPLAY_SPELL_ID = 104317
+local WILD_IMP_EXPIRY_CHECK_INTERVAL = 0.2
 local TOTEM_DURATION_UPDATE_INTERVAL = 0.1
 
 local SUMMON_SPELLS = {
@@ -42,7 +43,8 @@ local SUMMON_SPELLS = {
 }
 
 local WILD_IMP_SUMMON_IDS = {
-  [104317] = true, -- Wild Imp
+  [104317] = true, -- Wild Imp (Hand of Gul'dan)
+  [279910] = true, -- Wild Imp (Inner Demons / Nether Portal)
 }
 
 local DEBUG_LOG_EVENTS = {
@@ -99,8 +101,87 @@ local function RemoveWildImp(self, guid)
   if not map or not map[guid] then return false end
 
   map[guid] = nil
+  if not next(map) then
+    self:CancelWildImpExpiryCheck()
+  end
   SyncWildImpCount(self)
   return true
+end
+
+function ClassHUD:ScheduleWildImpExpiryCheck()
+  if not self or not self.ScheduleRepeatingTimer then return end
+  if self._wildImpExpiryTimer then return end
+
+  self._wildImpExpiryTimer = self:ScheduleRepeatingTimer("CheckWildImpExpiration", WILD_IMP_EXPIRY_CHECK_INTERVAL)
+end
+
+function ClassHUD:CancelWildImpExpiryCheck()
+  local handle = self and self._wildImpExpiryTimer
+  if not handle then return end
+
+  self._wildImpExpiryTimer = nil
+  if self.CancelTimer then
+    self:CancelTimer(handle)
+  end
+end
+
+function ClassHUD:CheckWildImpExpiration()
+  if not self:IsWildImpTrackingEnabled() then
+    self:CancelWildImpExpiryCheck()
+    return
+  end
+
+  local map = self._wildImpGuids
+  if not map or not next(map) then
+    self:CancelWildImpExpiryCheck()
+    return
+  end
+
+  local now = GetTime()
+  local toRemove = nil
+
+  for guid, entry in pairs(map) do
+    if guid and entry then
+      if not entry.npcID then
+        entry.npcID = self:GetNpcIDFromGUID(guid)
+      end
+
+      local npcID = entry.npcID
+      local charges = entry.charges or 0
+      local spawnTime = entry.spawnTime or now
+      if not entry.spawnTime then
+        entry.spawnTime = spawnTime
+      end
+
+      local shouldRemove = false
+
+      if npcID and not WILD_IMP_NPC_IDS[npcID] then
+        shouldRemove = true
+      elseif charges <= 0 then
+        shouldRemove = true
+      elseif (now - spawnTime) > WILD_IMP_AVERAGE_DURATION then
+        shouldRemove = true
+      end
+
+      if shouldRemove then
+        toRemove = toRemove or {}
+        toRemove[#toRemove + 1] = guid
+      end
+    else
+      toRemove = toRemove or {}
+      toRemove[#toRemove + 1] = guid
+    end
+  end
+
+  if toRemove then
+    for i = 1, #toRemove do
+      RemoveWildImp(self, toRemove[i])
+    end
+  end
+
+  if not self._wildImpGuids or not next(self._wildImpGuids) then
+    self:CancelWildImpExpiryCheck()
+  end
 end
 
 ClassHUD._activeSummonsBySpell = ClassHUD._activeSummonsBySpell or {}
@@ -244,6 +325,7 @@ function ClassHUD:ClearWildImpTracking()
   else
     self._wildImpGuids = {}
   end
+  self:CancelWildImpExpiryCheck()
   if self.HideWildImpBuffFrame then
     self:HideWildImpBuffFrame()
   end
@@ -1887,6 +1969,7 @@ function ClassHUD:HandleWildImpSummon(destGUID, npcID)
   end
 
   SyncWildImpCount(self)
+  self:ScheduleWildImpExpiryCheck()
 end
 
 function ClassHUD:HandleWildImpDespawn(destGUID, npcID)
@@ -2000,6 +2083,7 @@ function ClassHUD:MarkTotemFrameForUpdate(frame)
   end
 
   bucket[frame] = true
+  frame._nextTotemTimerUpdate = frame._nextTotemTimerUpdate or 0
 
   if not self._totemFlushTimer then
     self._totemFlushTimer = self:ScheduleTimer("FlushTotemChanges", TOTEM_DURATION_UPDATE_INTERVAL)
@@ -2012,6 +2096,7 @@ function ClassHUD:UnmarkTotemFrame(frame)
 
   if frame then
     bucket[frame] = nil
+    frame._nextTotemTimerUpdate = nil
   end
 
   if not next(bucket) and self._totemFlushTimer then
@@ -2037,6 +2122,7 @@ function ClassHUD:FlushTotemChanges()
     for frame in pairs(bucket) do
       bucket[frame] = nil
       if frame then
+        frame._nextTotemTimerUpdate = nil
         self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
       end
     end
@@ -2051,14 +2137,20 @@ function ClassHUD:FlushTotemChanges()
       local remaining = state.expiration - now
       if remaining and remaining > 0 then
         keepTicker = true
-        self:ApplyCooldownText(frame, true, remaining)
+        local nextUpdate = frame._nextTotemTimerUpdate or 0
+        if now >= nextUpdate then
+          self:ApplyCooldownText(frame, true, remaining)
+          frame._nextTotemTimerUpdate = now + TOTEM_DURATION_UPDATE_INTERVAL
+        end
       else
         bucket[frame] = nil
+        frame._nextTotemTimerUpdate = nil
         self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
       end
     else
       bucket[frame] = nil
       if frame then
+        frame._nextTotemTimerUpdate = nil
         self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
       end
     end
@@ -2130,12 +2222,17 @@ function ClassHUD:ApplyTotemOverlay(state)
   frame._activeTotemState = state
 
   if self:IsTotemDurationTextEnabled() and HasTotemDuration(state) then
-    local remaining = state.expiration - GetTime()
+    local now = GetTime()
+    local remaining = state.expiration - now
     if remaining and remaining > 0 then
       self:ApplyCooldownText(frame, true, remaining)
+      frame._nextTotemTimerUpdate = now + TOTEM_DURATION_UPDATE_INTERVAL
     else
       self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+      frame._nextTotemTimerUpdate = nil
     end
+  else
+    frame._nextTotemTimerUpdate = nil
   end
 
   self:MarkTotemFrameForUpdate(frame)
@@ -2159,6 +2256,7 @@ function ClassHUD:ClearTotemOverlay(state)
   frame._totemActive = nil
   frame._totemSlot = nil
   frame._activeTotemState = nil
+  frame._nextTotemTimerUpdate = nil
 
   if state.spellID and self and self.UpdateCooldown then
     self:UpdateCooldown(state.spellID)
@@ -3015,12 +3113,17 @@ function ClassHUD:HandleCombatLogEvent()
   if subevent == "SPELL_SUMMON" then
     if IsMine(sourceGUID, sourceFlags) then
       local handledSummon = false
+      if WILD_IMP_SUMMON_IDS[spellID] then
+        self:HandleWildImpSummon(destGUID, npcID)
+        handledSummon = true
+      end
+
       if SUMMON_SPELLS[spellID] then
         self:HandleTrackedSummon(spellID, destGUID)
         handledSummon = true
       end
 
-      if (npcID and WILD_IMP_NPC_IDS[npcID]) or (not handledSummon and WILD_IMP_SUMMON_IDS[spellID]) then
+      if not handledSummon and npcID and WILD_IMP_NPC_IDS[npcID] then
         self:HandleWildImpSummon(destGUID, npcID)
         handledSummon = true
       end
@@ -3035,13 +3138,17 @@ function ClassHUD:HandleCombatLogEvent()
       if IsMine(sourceGUID, sourceFlags) then
         self:ClearWildImpTracking()
       end
-    elseif spellID == FEL_FIREBOLT_SPELL_ID then
+    end
+  elseif subevent == "SPELL_DAMAGE" then
+    if spellID == FEL_FIREBOLT_SPELL_ID then
       self:HandleWildImpFelFirebolt(destGUID, sourceGUID)
     end
   elseif subevent == "UNIT_DIED" or subevent == "UNIT_DESTROYED" or subevent == "UNIT_DISSIPATES" then
     if destGUID then
       self:HandleSummonedUnitDeath(destGUID)
-      self:HandleWildImpDespawn(destGUID, npcID)
+      if npcID and WILD_IMP_NPC_IDS[npcID] then
+        self:HandleWildImpDespawn(destGUID, npcID)
+      end
     end
   end
 end
