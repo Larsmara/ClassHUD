@@ -25,6 +25,91 @@ local ClassHUD   = AceAddon:NewAddon("ClassHUD", "AceEvent-3.0", "AceConsole-3.0
 ClassHUD:SetDefaultModuleState(true)
 _G.ClassHUD = ClassHUD -- explicit global bridge so split files can always find it
 
+ClassHUDDebugLog = ClassHUDDebugLog or {}
+ClassHUD.debugEnabled = ClassHUD.debugEnabled or false
+ClassHUD._loggedUntrackedSummons = ClassHUD._loggedUntrackedSummons or {}
+
+local MAX_DEBUG_LOG_ENTRIES = 2000
+
+local function GetNpcIDFromGUID(guid)
+  if not guid then return nil end
+  local _, _, _, _, _, npcID = strsplit("-", guid)
+  if npcID then
+    return tonumber(npcID)
+  end
+  return nil
+end
+
+function ClassHUD:GetNpcIDFromGUID(guid)
+  return GetNpcIDFromGUID(guid)
+end
+
+local function FormatLogValue(value)
+  if value == nil or value == "" then
+    return "-"
+  end
+  return tostring(value)
+end
+
+function ClassHUD:LogDebug(subevent, spellID, spellName, sourceGUID, destGUID, npcID)
+  if not self.debugEnabled then
+    return
+  end
+
+  if not ClassHUDDebugLog then
+    ClassHUDDebugLog = {}
+  end
+
+  local line = string.format(
+    "%s %s spellID=%s name=%s src=%s dst=%s npc=%s",
+    date("%H:%M:%S"),
+    FormatLogValue(subevent),
+    FormatLogValue(spellID),
+    FormatLogValue(spellName),
+    FormatLogValue(sourceGUID),
+    FormatLogValue(destGUID),
+    FormatLogValue(npcID)
+  )
+
+  ClassHUDDebugLog[#ClassHUDDebugLog + 1] = line
+
+  local overflow = #ClassHUDDebugLog - MAX_DEBUG_LOG_ENTRIES
+  if overflow > 0 then
+    for _ = 1, overflow do
+      table.remove(ClassHUDDebugLog, 1)
+    end
+  end
+end
+
+function ClassHUD:LogUntrackedSummon(npcID, npcName, spellID)
+  if not self.debugEnabled then
+    return
+  end
+
+  self._loggedUntrackedSummons = self._loggedUntrackedSummons or {}
+
+  local key = string.format("%s:%s", FormatLogValue(npcID), FormatLogValue(npcName))
+  if self._loggedUntrackedSummons[key] then
+    return
+  end
+  self._loggedUntrackedSummons[key] = true
+
+  local message = string.format(
+    "[ClassHUD Debug] Untracked summon: npcID=%s, name=%s, spellID=%s",
+    FormatLogValue(npcID),
+    FormatLogValue(npcName),
+    FormatLogValue(spellID)
+  )
+
+  if self.Print then
+    self:Print(message)
+  else
+    print(message)
+  end
+
+  self:LogDebug("UNTRACKED_SUMMON", spellID, npcName, nil, nil, npcID)
+end
+
 -- Make shared libs available to submodules
 ClassHUD.LSM = LSM
 ClassHUD._flushTimer = nil
@@ -660,6 +745,38 @@ local defaults = {
       resource      = { r = 0.00, g = 0.55, b = 1.00 },
       power         = { r = 1.00, g = 0.85, b = 0.10 },
     },
+    summonTracking   = {
+      PRIEST = {
+        [34433]  = true, -- Shadowfiend
+        [123040] = true, -- Mindbender
+      },
+      WARLOCK = {
+        [193332] = true, -- Call Dreadstalkers
+        [264119] = true, -- Summon Vilefiend
+        [455476] = true, -- Summon Charhound
+        [265187] = true, -- Summon Demonic Tyrant
+        [111898] = true, -- Grimoire: Felguard
+        [205180] = true, -- Summon Darkglare
+      },
+      DEATHKNIGHT = {
+        [42650] = true, -- Army of the Dead
+        [49206]  = true, -- Summon Gargoyle
+      },
+      DRUID = {
+        [205636] = true, -- Force of Nature
+      },
+      MONK = {
+        [115313] = true, -- Jade Serpent Statue
+      },
+    },
+    trackSummons     = true,
+    trackWildImps    = true,
+    wildImpTrackingMode = "implosion",
+    trackTotems      = true,
+    totemOverlayStyle = "SWIPE",
+    totems = {
+      showDuration = true,
+    },
     cooldowns        = {
       showText = true,
     },
@@ -930,11 +1047,15 @@ for _, ev in pairs({
 
   -- Spells
   "UNIT_AURA", "SPELL_UPDATE_COOLDOWN", "SPELL_UPDATE_CHARGES", "SPELL_UPDATE_USABLE", "UNIT_SPELLCAST_SUCCEEDED",
+  "COMBAT_LOG_EVENT_UNFILTERED",
 
   -- Target
   "PLAYER_TARGET_CHANGED",
   "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED",
-  "SPELL_RANGE_CHECK_UPDATE"
+  "SPELL_RANGE_CHECK_UPDATE",
+
+  -- Totems
+  "PLAYER_TOTEM_UPDATE",
 }) do
   eventFrame:RegisterEvent(ev)
 end
@@ -942,22 +1063,28 @@ end
 eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   -- Full refresh after world load
   if event == "PLAYER_ENTERING_WORLD" then
+    if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
+    if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:FullUpdate()
     ClassHUD:ApplyAnchorPosition()
     local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
+    if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
   end
 
   -- Spec change
   if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
+    if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
+    if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     ClassHUD:RefreshRegisteredOptions()
     ClassHUD:UpdateAllFrames()
+    if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
   end
 
@@ -1080,6 +1207,23 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     return
   end
 
+  if event == "COMBAT_LOG_EVENT_UNFILTERED" then
+    if ClassHUD.HandleCombatLogEvent then
+      ClassHUD:HandleCombatLogEvent()
+    end
+    return
+  end
+
+  if event == "PLAYER_TOTEM_UPDATE" then
+    local slot = tonumber(unit)
+    if ClassHUD.UpdateTotemSlot then
+      ClassHUD:UpdateTotemSlot(slot)
+    elseif ClassHUD.RefreshAllTotems then
+      ClassHUD:RefreshAllTotems()
+    end
+    return
+  end
+
   -- Target
   if event == "PLAYER_TARGET_CHANGED"
       or event == "PLAYER_REGEN_DISABLED"
@@ -1096,16 +1240,56 @@ end)
 
 -- Replace your slash handler with this
 SLASH_CLASSHUD1 = "/chud"
+SLASH_CLASSHUD2 = "/classhud"
 SlashCmdList["CLASSHUD"] = function(msg)
-  if msg == "debug" then
-    local ACR = LibStub("AceConfigRegistry-3.0", true)
-    local ACD = LibStub("AceConfigDialog-3.0", true)
-    print("|cff00ff88ClassHUD Debug|r",
-      "ACR=", ACR and "ok" or "nil",
-      "ACD=", ACD and "ok" or "nil",
-      "registered=", (ACR and ACR:GetOptionsTable("ClassHUD")) and "yes" or "no")
+  msg = msg or ""
+  if strtrim then
+    msg = strtrim(msg)
+  else
+    msg = msg:match("^%s*(.-)%s*$")
+  end
+
+  local command, rest = msg:match("^(%S+)%s*(.*)$")
+  if command and command:lower() == "debug" then
+    local sub = rest and rest:lower() or ""
+    if sub == "on" then
+      ClassHUD.debugEnabled = true
+      print("Debug logging enabled.")
+    elseif sub == "off" then
+      ClassHUD.debugEnabled = false
+      print("Debug logging disabled.")
+    elseif sub == "clear" then
+      if ClassHUDDebugLog then
+        if wipe then
+          wipe(ClassHUDDebugLog)
+        else
+          for key in pairs(ClassHUDDebugLog) do
+            ClassHUDDebugLog[key] = nil
+          end
+        end
+      else
+        ClassHUDDebugLog = {}
+      end
+      print("Debug log cleared.")
+    elseif sub == "" then
+      local ACR = LibStub("AceConfigRegistry-3.0", true)
+      local ACD = LibStub("AceConfigDialog-3.0", true)
+      print("|cff00ff88ClassHUD Debug|r",
+        "ACR=", ACR and "ok" or "nil",
+        "ACD=", ACD and "ok" or "nil",
+        "registered=", (ACR and ACR:GetOptionsTable("ClassHUD")) and "yes" or "no")
+    else
+      print("Usage: /classhud debug on|off|clear")
+    end
     return
   end
+
+  if command and command ~= "" then
+    -- Any other sub-commands fall through to the options window for now
+    ClassHUD:OpenOptions()
+    return
+  end
+
   ClassHUD:OpenOptions()
 end
 

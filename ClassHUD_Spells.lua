@@ -13,6 +13,51 @@ local activeFrames = {}
 local trackedBuffPool = ClassHUD._trackedBuffFramePool
 local trackedBarPool = ClassHUD._trackedBarFramePool
 
+local bit_band = bit and bit.band or (bit32 and bit32.band)
+local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
+
+local SUMMON_SPELLS = {
+  -- Priest
+  [34433]  = { fallbackDuration = 15, class = "PRIEST" }, -- Shadowfiend
+  [123040] = { fallbackDuration = 12, class = "PRIEST" }, -- Mindbender
+
+  -- Warlock
+  [193332] = { duration = 12, fallbackDuration = 12, class = "WARLOCK", name = "Dreadstalkers", npcID = 98035, displaySpellID = 104316, demon = true },              -- Call Dreadstalkers
+  [264119] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Vilefiend", npcID = 135816, demon = true },                                          -- Summon Vilefiend
+  [455465] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Gloomhound", npcID = 226268, demon = true },                                         -- Summon Gloomhound (Mark of Shatug)
+  [455476] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Charhound", npcID = 226269, demon = true },                                          -- Summon Charhound (Mark of F’harg)
+  [111898] = { duration = 17, fallbackDuration = 17, class = "WARLOCK", name = "Grimoire: Felguard", npcID = 17252, demon = true },                                  -- Grimoire: Felguard
+  [265187] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Demonic Tyrant", npcID = 135002, demon = true, tyrant = true, extendDuration = 15 }, -- Summon Demonic Tyrant
+  [205180] = { duration = 20, fallbackDuration = 20, class = "WARLOCK", name = "Darkglare", npcID = 103673, demon = true },                                          -- Summon Darkglare
+
+  -- Death Knight
+  [42650]  = { fallbackDuration = 30, class = "DEATHKNIGHT" },                                                             -- Army of the Dead (classic ID)
+  [275430] = { fallbackDuration = 30, class = "DEATHKNIGHT" },                                                             -- Army of the Dead (alt ID)
+  [49206]  = { fallbackDuration = 25, class = "DEATHKNIGHT" },                                                             -- Summon Gargoyle
+  [317776] = { duration = 15, fallbackDuration = 15, class = "DEATHKNIGHT", name = "Army of the Damned", npcID = 163366 }, -- Magus of the Dead
+  [455395] = { duration = 15, fallbackDuration = 15, class = "DEATHKNIGHT", name = "Abomination", npcID = 149555 },        -- Raise Abomination
+
+  -- Druid
+  [205636] = { fallbackDuration = 10, class = "DRUID" }, -- Force of Nature
+
+  -- Monk
+  [115313] = { fallbackDuration = 15, class = "MONK" }, -- Jade Serpent Statue
+}
+
+local WILD_IMP_SUMMON_IDS = {
+  [104317] = true, -- Wild Imp (Hand of Gul'dan)
+  [279910] = true, -- Wild Imp (Inner Demons / Nether Portal)
+}
+
+local WILD_IMP_NPC_IDS = {
+  [55659] = true,  -- Hand of Gul'dan / Nether Portal
+  [143622] = true, -- Inner Demons / Nether Portal
+}
+
+ClassHUD.SUMMON_SPELLS = SUMMON_SPELLS
+ClassHUD.WILD_IMP_SUMMON_IDS = WILD_IMP_SUMMON_IDS
+ClassHUD.WILD_IMP_NPC_IDS = WILD_IMP_NPC_IDS
+
 local INACTIVE_BAR_COLOR = { r = 0.25, g = 0.25, b = 0.25, a = 0.6 }
 local HARMFUL_GLOW_THRESHOLD = 5
 local HARMFUL_GLOW_AURA_CHECK_INTERVAL = 0.1
@@ -41,6 +86,31 @@ local function ExtractAuraSpellID(payload)
     end
   end
   return nil
+end
+
+local function Contains(list, value)
+  if type(list) ~= "table" then return false end
+  for i = 1, #list do
+    if list[i] == value then
+      return true
+    end
+  end
+  return false
+end
+
+local function IsMine(sourceGUID, sourceFlags)
+  local playerGUID = UnitGUID and UnitGUID("player")
+  if playerGUID and sourceGUID == playerGUID then
+    return true
+  end
+  if bit_band and sourceFlags and bit_band(sourceFlags, AFFILIATION_MINE) ~= 0 then
+    return true
+  end
+  local petGUID = UnitGUID and UnitGUID("pet")
+  if petGUID and sourceGUID == petGUID then
+    return true
+  end
+  return false
 end
 
 local function ClearFrameAuraWatchers(frame)
@@ -298,6 +368,8 @@ local function ShouldShowCooldownNumbers()
   return true
 end
 
+ClassHUD.ShouldShowCooldownNumbers = ShouldShowCooldownNumbers
+
 local function CollectAuraSpellIDs(entry, primaryID)
   return ClassHUD:GetAuraCandidatesForEntry(entry, primaryID)
 end
@@ -334,6 +406,8 @@ local function SetFrameGlow(frame, shouldGlow)
     frame.isGlowing = false
   end
 end
+
+ClassHUD.SetFrameGlow = SetFrameGlow
 
 local function UpdateGlow(frame, aura, sid, data)
   -- 1) Samme semantikk som original: aura tilstede → glow
@@ -581,6 +655,7 @@ local function CreateBuffFrame(buffID)
   trackedBuffPool[buffID] = f
   return f
 end
+ClassHUD.CreateBuffFrame = CreateBuffFrame
 local function CreateTrackedBarFrame(buffID)
   if trackedBarPool[buffID] then
     return trackedBarPool[buffID]
@@ -749,26 +824,25 @@ function ClassHUD:UpdateTrackedLayoutSnapshot()
   local iconsContainer = EnsureAttachment("TRACKED_ICONS")
   local barsContainer  = EnsureAttachment("TRACKED_BARS")
 
-  local iconsHeight = iconsContainer and iconsContainer._height or 0
-  local iconsGap    = iconsContainer and iconsContainer._afterGap or nil
-  local barsHeight  = barsContainer and barsContainer._height or 0
-  local barsGap     = barsContainer and barsContainer._afterGap or nil
+  local iconsHeight    = iconsContainer and iconsContainer._height or 0
+  local iconsGap       = iconsContainer and iconsContainer._afterGap or nil
+  local barsHeight     = barsContainer and barsContainer._height or 0
+  local barsGap        = barsContainer and barsContainer._afterGap or nil
 
-  local changed = snapshot.iconsHeight ~= iconsHeight
+  local changed        = snapshot.iconsHeight ~= iconsHeight
       or snapshot.iconsGap ~= iconsGap
       or snapshot.barsHeight ~= barsHeight
       or snapshot.barsGap ~= barsGap
 
   snapshot.iconsHeight = iconsHeight
-  snapshot.iconsGap = iconsGap
-  snapshot.barsHeight = barsHeight
-  snapshot.barsGap = barsGap
+  snapshot.iconsGap    = iconsGap
+  snapshot.barsHeight  = barsHeight
+  snapshot.barsGap     = barsGap
 
   if changed and self.Layout then
     self:Layout()
   end
 end
-
 
 function ClassHUD:ApplyTrackedBuffLayout()
   local registry = self._trackedBuffRegistry or {}
@@ -801,8 +875,6 @@ function ClassHUD:ApplyTrackedBuffLayout()
   LayoutTrackedIcons(iconFrames, { topPadding = iconTopPadding })
   self:UpdateTrackedLayoutSnapshot()
 end
-
-
 
 local function LayoutTopBar(frames)
   local container = EnsureAttachment("TOP")
@@ -1000,9 +1072,22 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
   frame:Show()
 end
 
+ClassHUD.PopulateBuffIconFrame = PopulateBuffIconFrame
 
 
-
+function ClassHUD:GetManualCountForSpell(spellID)
+  local implosionSpellID = ClassHUD.IMPLOSION_SPELL_ID or 196277
+  if spellID == implosionSpellID then
+    if not self:IsWildImpTrackingEnabled() then
+      return 0
+    end
+    if self:GetWildImpTrackingMode() ~= "implosion" then
+      return nil
+    end
+    return self._wildImpCount or 0
+  end
+  return nil
+end
 
 local function UpdateTrackedIconFrame(frame)
   if not frame then return false end
@@ -1011,6 +1096,10 @@ local function UpdateTrackedIconFrame(frame)
   if not cache then
     cache = {}
     frame._last = cache
+  end
+
+  if frame._manualSummon then
+    return frame._layoutActive or false
   end
 
   local buffID = frame.buffID
@@ -1311,7 +1400,7 @@ function ClassHUD:BuildTrackedBuffFrames()
     local auraCandidates = CollectAuraSpellIDs(entry, buffID)
     local aura           = FindAuraFromCandidates(auraCandidates)
 
-    trackedIDs[buffID] = true
+    trackedIDs[buffID]   = true
     if auraCandidates then
       for _, candidateID in ipairs(auraCandidates) do
         if type(candidateID) == "number" then
@@ -1358,6 +1447,7 @@ function ClassHUD:BuildTrackedBuffFrames()
   self.trackedBuffFrames = iconFrames
   self.trackedBarFrames  = barFrames
 
+  self:RefreshTemporaryBuffs(true)
   self:ApplyTrackedBuffLayout()
 end
 
@@ -1374,10 +1464,10 @@ local function UpdateSpellFrame(frame)
     frame._last = cache
   end
 
-  local data  = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
-  local entry = ClassHUD:GetSnapshotEntry(sid)
-  local auraCandidates = ClassHUD:GetAuraCandidatesForEntry(entry, sid)
-  frame._auraCandidates = auraCandidates
+  local data              = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
+  local entry             = ClassHUD:GetSnapshotEntry(sid)
+  local auraCandidates    = ClassHUD:GetAuraCandidatesForEntry(entry, sid)
+  frame._auraCandidates   = auraCandidates
 
   local harmfulTracksAura = false
   if ClassHUD.IsHarmfulAuraSpell then
@@ -1444,7 +1534,6 @@ local function UpdateSpellFrame(frame)
         cooldownSource = "charges"
       end
     end
-
   end
 
   local baseCooldown = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(sid)
@@ -1488,6 +1577,19 @@ local function UpdateSpellFrame(frame)
     elseif not chargesShown then
       countText = nil
       countShown = false
+    end
+  end
+
+  if not chargesShown then
+    local manualCount = ClassHUD.GetManualCountForSpell and ClassHUD:GetManualCountForSpell(sid)
+    if manualCount ~= nil then
+      if manualCount > 0 then
+        countText = tostring(manualCount)
+        countShown = true
+      else
+        countText = nil
+        countShown = false
+      end
     end
   end
 
@@ -1624,7 +1726,34 @@ local function UpdateSpellFrame(frame)
       cooldownTextRemaining = remaining
     end
   end
-  ClassHUD:ApplyCooldownText(frame, showNumbers, cooldownTextRemaining)
+
+  local totemOverride = false
+  if ClassHUD.IsTotemDurationTextEnabled and ClassHUD:IsTotemDurationTextEnabled() then
+    local totemState = frame._activeTotemState
+    if not totemState then
+      totemState = ClassHUD:GetActiveTotemStateForSpell(sid)
+      frame._activeTotemState = totemState
+    end
+
+    if ClassHUD:HasTotemDuration(totemState) then
+      totemOverride = true
+      if ClassHUD.MarkTotemFrameForUpdate then
+        ClassHUD:MarkTotemFrameForUpdate(frame)
+      end
+    else
+      if ClassHUD.UnmarkTotemFrame then
+        ClassHUD:UnmarkTotemFrame(frame)
+      end
+    end
+  else
+    if ClassHUD.UnmarkTotemFrame then
+      ClassHUD:UnmarkTotemFrame(frame)
+    end
+  end
+
+  if not totemOverride then
+    ClassHUD:ApplyCooldownText(frame, showNumbers, cooldownTextRemaining)
+  end
 
   shouldDesaturate = false
   if onCooldown and not isGCDCooldown and (not chargesShown or chargesDepleted) then
@@ -1669,6 +1798,9 @@ local function UpdateSpellFrame(frame)
   end
 
   local shouldGlow = UpdateGlow(frame, aura, sid, data) or false
+  if frame._totemGlowActive then
+    shouldGlow = true
+  end
   if cache.glow ~= shouldGlow then
     SetFrameGlow(frame, shouldGlow)
     cache.glow = shouldGlow
@@ -1892,6 +2024,10 @@ function ClassHUD:BuildFramesForSpec()
   end
   wipe(activeFrames)
 
+  if self.ResetTotemTracking then
+    self:ResetTotemTracking()
+  end
+
   if self.spellFrames then
     for _, frame in pairs(self.spellFrames) do
       frame.snapshotEntry = nil
@@ -2101,5 +2237,9 @@ function ClassHUD:BuildFramesForSpec()
 
   if self.Layout then
     self:Layout()
+  end
+
+  if self.RefreshAllTotems then
+    self:RefreshAllTotems()
   end
 end
