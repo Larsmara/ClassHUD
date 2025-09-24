@@ -57,6 +57,29 @@ local function PlayerMatchesSpec(addon, class, specID)
   return true
 end
 
+local function PlayerHasClassbar(addon)
+  if not addon or not addon.db then return false end
+
+  local class = select(1, addon:GetPlayerClassSpec())
+  if not class or class == "" then
+    class = UnitClass and select(2, UnitClass("player")) or nil
+  end
+  if not class then return false end
+
+  local profileLayout = addon.db.profile and addon.db.profile.layout
+  if profileLayout and profileLayout.classbars and profileLayout.classbars[class] then
+    return true
+  end
+
+  local defaults = addon.db.defaults
+  local defaultLayout = defaults and defaults.profile and defaults.profile.layout
+  if defaultLayout and defaultLayout.classbars and defaultLayout.classbars[class] then
+    return true
+  end
+
+  return false
+end
+
 local function EnsureSummonConfig(addon, class)
   addon.db.profile.tracking = addon.db.profile.tracking or {}
   addon.db.profile.tracking.summons = addon.db.profile.tracking.summons or {}
@@ -472,23 +495,28 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
   local added = {}
 
   local function addOption(spellID, entry)
-    if added[spellID] then return end
-    added[spellID] = true
+    local id = tonumber(spellID) or spellID
+    if not id then return end
+
+    local key = tostring(id)
+    if added[key] then return end
+    added[key] = true
 
     local iconID = entry and entry.iconID
     local name = entry and entry.name
 
     if not name then
-      local info = C_Spell.GetSpellInfo(spellID)
+      local info = C_Spell.GetSpellInfo(id)
       iconID = iconID or (info and info.iconID)
-      name = info and info.name or ("Spell " .. spellID)
+      name = info and info.name or ("Spell " .. key)
     end
 
     local icon = iconID and ("|T" .. iconID .. ":16|t ") or ""
 
     local linkedBuffs = {}
     for buffID, linkedSpellID in pairs(linkTable) do
-      if linkedSpellID == spellID then
+      local resolved = tonumber(linkedSpellID) or linkedSpellID
+      if resolved == id then
         local buffInfo = C_Spell.GetSpellInfo(buffID)
         linkedBuffs[#linkedBuffs + 1] = (buffInfo and buffInfo.name) or ("Buff " .. buffID)
       end
@@ -500,22 +528,24 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
       linkNote = "|cff00ff00Linked Buffs:|r " .. table.concat(linkedBuffs, ", ")
     end
 
-    container["spell" .. spellID] = {
+    local displayID = (type(id) == "number") and id or key
+
+    container["spell" .. key] = {
       type = "select",
-      name = icon .. name .. " (" .. spellID .. ")",
+      name = icon .. name .. " (" .. displayID .. ")",
       desc = linkNote,
       order = order,
       values = PLACEMENTS,
       get = function()
-        local placement = GetSpellPlacement(addon, class, specID, spellID)
+        local placement = GetSpellPlacement(addon, class, specID, id)
         return placement or defaultPlacement
       end,
       set = function(_, value)
         local placementLists = EnsurePlacementLists(addon, class, specID)
         if value == defaultPlacement then
-          RemoveSpellFromLists(placementLists, spellID)
+          RemoveSpellFromLists(placementLists, id)
         else
-          SetSpellPlacement(addon, class, specID, spellID, value)
+          SetSpellPlacement(addon, class, specID, id, value)
         end
         addon:BuildFramesForSpec()
         BuildPlacementArgs(addon, container, category, defaultPlacement, emptyText)
@@ -535,10 +565,37 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
     local list = lists[placementName]
     if type(list) == "table" then
       for _, spellID in ipairs(list) do
-        local entry = snapshot and snapshot[spellID]
-        addOption(spellID, entry)
+        local resolved = tonumber(spellID) or spellID
+        local entry = snapshot and snapshot[resolved]
+        addOption(resolved, entry)
       end
     end
+  end
+
+  local function addLooseEntries(list)
+    if type(list) ~= "table" then return end
+    for key, value in pairs(list) do
+      local candidate
+      if type(value) == "number" or type(value) == "string" then
+        candidate = value
+      elseif type(key) == "number" or type(key) == "string" then
+        if type(value) ~= "number" and type(value) ~= "string" then
+          candidate = key
+        end
+      end
+
+      if candidate then
+        local resolved = tonumber(candidate) or candidate
+        local keyStr = tostring(resolved)
+        if not added[keyStr] then
+          addOption(resolved, snapshot and snapshot[resolved])
+        end
+      end
+    end
+  end
+
+  for _, placementName in ipairs(placementOrder) do
+    addLooseEntries(lists[placementName])
   end
 
   if order == 1 then
@@ -584,8 +641,6 @@ local function BuildTrackedBuffArgs(addon, container)
           entry = entry,
           icon = icon,
           name = name,
-          hasBuff = hasBuff and true or false,
-          hasBar = hasBar and true or false,
           order = order,
         }
       end
@@ -600,8 +655,6 @@ local function BuildTrackedBuffArgs(addon, container)
         entry = nil,
         icon = info and info.iconID and ("|T" .. info.iconID .. ":16|t ") or "",
         name = info and info.name or ("Spell " .. buffID),
-        hasBuff = true,
-        hasBar = false,
         order = math.huge,
       }
     end
@@ -615,8 +668,6 @@ local function BuildTrackedBuffArgs(addon, container)
         entry = nil,
         icon = info and info.iconID and ("|T" .. info.iconID .. ":16|t ") or "",
         name = info and info.name or ("Spell " .. buffID),
-        hasBuff = true,
-        hasBar = false,
         order = math.huge,
       }
     end
@@ -643,7 +694,7 @@ local function BuildTrackedBuffArgs(addon, container)
   if #list == 0 then
     container.empty = {
       type = "description",
-      name = "No tracked buffs or bars available for this specialization.",
+      name = "No tracked buffs available for this specialization.",
       order = 1,
     }
     return
@@ -664,9 +715,9 @@ local function BuildTrackedBuffArgs(addon, container)
       inline = true,
       order = order,
       args = {
-        showIcon = {
+        track = {
           type = "toggle",
-          name = "Show as Icon",
+          name = "Track Buff",
           order = 1,
           get = function()
             local cfg = getConfig(false)
@@ -680,88 +731,10 @@ local function BuildTrackedBuffArgs(addon, container)
             NotifyOptionsChanged()
           end,
         },
-        showBar = {
-          type = "toggle",
-          name = "Show as Bar",
-          order = 2,
-          hidden = function()
-            return not data.hasBar
-          end,
-          get = function()
-            local cfg = getConfig(false)
-            return cfg and cfg.showBar or false
-          end,
-          set = function(_, value)
-            local cfg = getConfig(true)
-            cfg.showBar = not not value
-            addon:BuildTrackedBuffFrames()
-            BuildTrackedBuffArgs(addon, container)
-            NotifyOptionsChanged()
-          end,
-        },
-        barShowIcon = {
-          type = "toggle",
-          name = "Show Icon",
-          order = 4,
-          hidden = function()
-            local cfg = getConfig(false)
-            return not (data.hasBar and cfg and cfg.showBar)
-          end,
-          get = function()
-            local cfg = getConfig(false)
-            return not cfg or cfg.barShowIcon ~= false
-          end,
-          set = function(_, value)
-            local cfg = getConfig(true)
-            cfg.barShowIcon = not not value
-            addon:BuildTrackedBuffFrames()
-            NotifyOptionsChanged()
-          end,
-        },
-        barColor = {
-          type = "color",
-          name = "Bar Color",
-          order = 5,
-          hasAlpha = true,
-          hidden = function()
-            local cfg = getConfig(false)
-            return not (data.hasBar and cfg and cfg.showBar)
-          end,
-          get = function()
-            local cfg = getConfig(false)
-            local color = (cfg and cfg.barColor) or addon:GetDefaultTrackedBarColor()
-            return color.r, color.g, color.b, color.a or 1
-          end,
-          set = function(_, r, g, b, a)
-            local cfg = getConfig(true)
-            cfg.barColor = { r = r, g = g, b = b, a = a or 1 }
-            addon:BuildTrackedBuffFrames()
-            NotifyOptionsChanged()
-          end,
-        },
-        barTimer = {
-          type = "toggle",
-          name = "Show Timer",
-          order = 6,
-          hidden = function()
-            local cfg = getConfig(false)
-            return not (data.hasBar and cfg and cfg.showBar)
-          end,
-          get = function()
-            local cfg = getConfig(false)
-            return not cfg or cfg.barShowTimer ~= false
-          end,
-          set = function(_, value)
-            local cfg = getConfig(true)
-            cfg.barShowTimer = not not value
-            addon:BuildTrackedBuffFrames()
-            NotifyOptionsChanged()
-          end,
-        },
         orderControl = {
           type = "range",
           name = "Order",
-          order = 7,
+          order = 2,
           min = 1,
           max = 50,
           step = 1,
@@ -1344,6 +1317,22 @@ function ClassHUD_BuildOptions(addon)
                   addon:BuildFramesForSpec()
                 end,
               },
+              grow = {
+                type = "select",
+                name = "Growth Direction",
+                order = 5,
+                values = {
+                  UP = "Up",
+                  DOWN = "Down",
+                },
+                get = function()
+                  return layout.topBar.grow or "UP"
+                end,
+                set = function(_, value)
+                  layout.topBar.grow = value
+                  addon:BuildFramesForSpec()
+                end,
+              },
             },
           },
           bottomLayout = {
@@ -1516,6 +1505,9 @@ function ClassHUD_BuildOptions(addon)
         type = "group",
         name = "Class Bar",
         order = 3,
+        hidden = function()
+          return not PlayerHasClassbar(addon)
+        end,
         args = {
           general = {
             type = "group",
@@ -1826,12 +1818,12 @@ function ClassHUD_BuildOptions(addon)
           },
       trackedBuffs = {
         type = "group",
-        name = "Tracked Buffs & Bars",
+        name = "Tracked Buffs",
         order = 3,
         args = {
               description = {
                 type = "description",
-                name = "Configure which Blizzard tracked buffs and cooldown bars appear in the HUD.",
+                name = "Configure which buffs appear on the tracked buff bar.",
                 order = 1,
               },
               addBuff = {
