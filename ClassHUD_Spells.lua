@@ -446,22 +446,28 @@ local function UpdateGlow(frame, aura, sid, data)
   -- 2) Manuelle buffLinks kan holde glow (som originalt "keepGlow")
   if allowExtraGlowLogic and not shouldGlow then
     local class, specID = ClassHUD:GetPlayerClassSpec()
-    local tracking = ClassHUD.db.profile.tracking or {}
-    local buffLinks = tracking.buffs and tracking.buffs.links or {}
-    local links = (buffLinks[class] and buffLinks[class][specID]) or {}
-    -- links: [buffID] = linkedSpellID
-    for buffID, linkedSpellID in pairs(links) do
-      if linkedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
-        shouldGlow = true
-        break
-      end
+    if ClassHUD.IterateBuffLinks then
+      ClassHUD:IterateBuffLinks(class, specID, function(buffID, linkedSpellID)
+        if linkedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
+          shouldGlow = true
+          return true
+        end
+      end)
     end
   end
 
   -- 3) Auto-mapping fallback (som i originalens "keepGlow")
   if allowExtraGlowLogic and not shouldGlow and ClassHUD.trackedBuffToSpell then
     for buffID, mappedSpellID in pairs(ClassHUD.trackedBuffToSpell) do
-      if mappedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
+      if type(mappedSpellID) == "table" then
+        for i = 1, #mappedSpellID do
+          if mappedSpellID[i] == sid and ClassHUD:GetAuraForSpell(buffID) then
+            shouldGlow = true
+            break
+          end
+        end
+        if shouldGlow then break end
+      elseif mappedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
         shouldGlow = true
         break
       end
@@ -1244,6 +1250,9 @@ function ClassHUD:BuildTrackedBuffFrames()
   for _, info in ipairs(ordered) do
     local buffID         = info.buffID
     local entry          = info.entry
+    if entry and not self:IsSnapshotEntryAvailable(entry) then
+      goto continue
+    end
     local auraCandidates = CollectAuraSpellIDs(entry, buffID)
     local aura           = FindAuraFromCandidates(auraCandidates)
 
@@ -1278,6 +1287,7 @@ function ClassHUD:BuildTrackedBuffFrames()
     registry[buffID].entry = entry
     registry[buffID].iconCandidates = iconCandidates
     orderList[#orderList + 1] = buffID
+    ::continue::
   end
 
   self.trackedBuffFrames = iconFrames
@@ -1301,6 +1311,11 @@ local function UpdateSpellFrame(frame)
 
   local data              = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
   local entry             = ClassHUD:GetSnapshotEntry(sid)
+  frame.snapshotEntry     = entry
+  if entry and not ClassHUD:IsSnapshotEntryAvailable(entry) then
+    frame:Hide()
+    return
+  end
   local auraCandidates    = ClassHUD:GetAuraCandidatesForEntry(entry, sid)
   frame._auraCandidates   = auraCandidates
 
@@ -1824,15 +1839,13 @@ function ClassHUD:RebuildTrackedBuffFrames()
     return
   end
 
-  local tracking = ClassHUD.db.profile.tracking or {}
-  local linkRoot = tracking.buffs and tracking.buffs.links or {}
-  local links = (linkRoot[class] and linkRoot[class][specID]) or {}
-
-  for buffID, spellID in pairs(links) do
-    local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
-    if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
-      aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
-    end
+  if ClassHUD.IterateBuffLinks then
+    ClassHUD:IterateBuffLinks(class, specID, function(buffID)
+      local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
+      if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
+        aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
+      end
+    end)
   end
 end
 
@@ -1882,9 +1895,14 @@ function ClassHUD:BuildFramesForSpec()
   local built = {}
 
   local function acquire(spellID)
+    local entry = snapshot[spellID]
+    if entry and not self:IsSnapshotEntryAvailable(entry) then
+      return nil
+    end
+
     local frame = CreateSpellFrame(spellID)
     frame:Show()
-    frame.snapshotEntry = snapshot[spellID]
+    frame.snapshotEntry = entry
     if not built[spellID] then
       table.insert(activeFrames, frame)
       built[spellID] = true
@@ -1931,10 +1949,12 @@ function ClassHUD:BuildFramesForSpec()
       local spellID = tonumber(array[index]) or array[index]
       if spellID and not built[spellID] and not hiddenSet[spellID] then
         local frame = acquire(spellID)
-        frame._customOrder = index
-        frame._customPlacement = placement
-        table.insert(target, frame)
-        built[spellID] = true
+        if frame then
+          frame._customOrder = index
+          frame._customPlacement = placement
+          table.insert(target, frame)
+          built[spellID] = true
+        end
       end
     end
   end
@@ -1967,9 +1987,11 @@ function ClassHUD:BuildFramesForSpec()
     local spellID = item.spellID
     if not built[spellID] and not hiddenSet[spellID] then
       local frame = acquire(spellID)
-      frame._customOrder = nil
-      table.insert(topFrames, frame)
-      built[spellID] = true
+      if frame then
+        frame._customOrder = nil
+        table.insert(topFrames, frame)
+        built[spellID] = true
+      end
     end
   end
 
@@ -1985,9 +2007,11 @@ function ClassHUD:BuildFramesForSpec()
     local spellID = item.spellID
     if not built[spellID] and not hiddenSet[spellID] then
       local frame = acquire(spellID)
-      frame._customOrder = nil
-      table.insert(bottomFrames, frame)
-      built[spellID] = true
+      if frame then
+        frame._customOrder = nil
+        table.insert(bottomFrames, frame)
+        built[spellID] = true
+      end
     end
   end
 
@@ -2041,11 +2065,21 @@ function ClassHUD:BuildFramesForSpec()
           if frame and frame.snapshotEntry then
             local spellName = C_Spell.GetSpellName(spellID)
             if spellName and string.find(desc, spellName, 1, true) then
-              self.trackedBuffToSpell[buffID] = spellID
+              self.trackedBuffToSpell[buffID] = self.trackedBuffToSpell[buffID] or {}
+              local map = self.trackedBuffToSpell[buffID]
+              local already = false
+              for i = 1, #map do
+                if map[i] == spellID then
+                  already = true
+                  break
+                end
+              end
+              if not already then
+                map[#map + 1] = spellID
+              end
 
-              local links = self.db.profile.tracking.buffs.links[class][specID]
-              if not links[buffID] then
-                links[buffID] = spellID
+              if self.AddBuffLink then
+                self:AddBuffLink(buffID, spellID, class, specID)
               end
               break
             end

@@ -145,6 +145,14 @@ ClassHUD._auraWatchersByUnit = ClassHUD._auraWatchersByUnit or {
 }
 ClassHUD._pendingAuraFrames = ClassHUD._pendingAuraFrames or {}
 ClassHUD._auraFlushTimer = ClassHUD._auraFlushTimer or nil
+ClassHUD._specRefreshTimer = ClassHUD._specRefreshTimer or nil
+ClassHUD._pendingSpecRefresh = ClassHUD._pendingSpecRefresh or false
+ClassHUD._pendingSpecRefreshReasons = ClassHUD._pendingSpecRefreshReasons or {}
+ClassHUD._combatRefreshQueued = ClassHUD._combatRefreshQueued or false
+ClassHUD._talentCache = ClassHUD._talentCache or { nodes = {}, entries = {}, dirty = true }
+ClassHUD._classBarVisible = ClassHUD._classBarVisible or false
+ClassHUD._classBarSupportType = ClassHUD._classBarSupportType or nil
+ClassHUD._classBarUseEclipse = ClassHUD._classBarUseEclipse or false
 
 function ClassHUD:RequestUpdate(kind)
   kind = kind or "any"
@@ -924,6 +932,586 @@ function ClassHUD:EnsureActiveSpecProfile()
   self:TrySeedPendingProfile()
 end
 
+-- ---------------------------------------------------------------------------
+-- Buff link helpers
+-- ---------------------------------------------------------------------------
+
+local function NormalizeBuffLinkBucket(bucket)
+  local normalized = {}
+  if type(bucket) ~= "table" then
+    return normalized
+  end
+
+  for buffID, value in pairs(bucket) do
+    local numericBuffID = tonumber(buffID) or buffID
+    if numericBuffID then
+      local entries = nil
+      if type(value) == "table" then
+        local seen = {}
+        for index = 1, #value do
+          local raw = value[index]
+          local spellID = tonumber(raw) or raw
+          if type(spellID) == "number" and not seen[spellID] then
+            entries = entries or {}
+            entries[#entries + 1] = spellID
+            seen[spellID] = true
+          end
+        end
+      else
+        local spellID = tonumber(value) or value
+        if type(spellID) == "number" then
+          entries = { spellID }
+        end
+      end
+
+      if entries and #entries > 0 then
+        normalized[numericBuffID] = entries
+      end
+    end
+  end
+
+  return normalized
+end
+
+local function EnsureBuffLinkRoot(self, create)
+  if not self.db or not self.db.profile then return nil end
+
+  self.db.profile.tracking = self.db.profile.tracking or {}
+  local tracking = self.db.profile.tracking
+  tracking.buffs = tracking.buffs or {}
+  tracking.buffs.links = tracking.buffs.links or {}
+  return tracking.buffs.links
+end
+
+function ClassHUD:GetBuffLinksForSpec(class, specID, create)
+  class = class or select(1, self:GetPlayerClassSpec())
+  specID = specID or select(2, self:GetPlayerClassSpec())
+  if not class or class == "" then return nil end
+  if not specID or specID == 0 then specID = select(2, self:GetPlayerClassSpec()) end
+
+  local root = EnsureBuffLinkRoot(self, create)
+  if not root then return nil end
+
+  root[class] = root[class] or {}
+  if not root[class][specID] then
+    if not create then return nil end
+    root[class][specID] = {}
+  end
+
+  local normalized = NormalizeBuffLinkBucket(root[class][specID])
+  root[class][specID] = normalized
+  return normalized
+end
+
+function ClassHUD:IterateBuffLinks(class, specID, handler)
+  if type(handler) ~= "function" then return end
+  local bucket = self:GetBuffLinksForSpec(class, specID, false)
+  if not bucket then return end
+
+  for buffID, list in pairs(bucket) do
+    if type(list) == "table" then
+      for index = 1, #list do
+        local spellID = list[index]
+        if type(spellID) == "number" then
+          if handler(buffID, spellID, list) then
+            return
+          end
+        end
+      end
+    elseif type(list) == "number" then
+      if handler(buffID, list, bucket) then
+        return
+      end
+    end
+  end
+end
+
+function ClassHUD:IsBuffLinkedToSpell(buffID, spellID, class, specID)
+  buffID = tonumber(buffID) or buffID
+  spellID = tonumber(spellID) or spellID
+  if not buffID or not spellID then return false end
+
+  local bucket = self:GetBuffLinksForSpec(class, specID, false)
+  if not bucket then return false end
+
+  local entry = bucket[buffID]
+  if type(entry) == "number" then
+    return entry == spellID
+  elseif type(entry) == "table" then
+    for index = 1, #entry do
+      if entry[index] == spellID then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+function ClassHUD:GetLinkedBuffIDsForSpell(spellID, class, specID)
+  spellID = tonumber(spellID) or spellID
+  if not spellID then return {} end
+
+  local results = {}
+  self:IterateBuffLinks(class, specID, function(buffID, linkedSpellID)
+    if linkedSpellID == spellID then
+      results[#results + 1] = buffID
+    end
+  end)
+
+  table.sort(results, function(a, b)
+    return (tonumber(a) or a) < (tonumber(b) or b)
+  end)
+
+  return results
+end
+
+function ClassHUD:AddBuffLink(buffID, spellID, class, specID)
+  buffID = tonumber(buffID) or buffID
+  spellID = tonumber(spellID) or spellID
+  if not buffID or not spellID then return false end
+
+  local bucket = self:GetBuffLinksForSpec(class, specID, true)
+  bucket[buffID] = bucket[buffID] or {}
+  local list = bucket[buffID]
+
+  if type(list) == "number" then
+    if list == spellID then return false end
+    list = { list }
+    bucket[buffID] = list
+  end
+
+  if type(list) ~= "table" then
+    list = {}
+    bucket[buffID] = list
+  end
+
+  for index = 1, #list do
+    if list[index] == spellID then
+      return false
+    end
+  end
+
+  list[#list + 1] = spellID
+  return true
+end
+
+function ClassHUD:RemoveBuffLink(buffID, spellID, class, specID)
+  buffID = tonumber(buffID) or buffID
+  spellID = tonumber(spellID) or spellID
+  if not buffID or not spellID then return false end
+
+  local bucket = self:GetBuffLinksForSpec(class, specID, false)
+  if not bucket then return false end
+
+  local entry = bucket[buffID]
+  if type(entry) == "number" then
+    if entry == spellID then
+      bucket[buffID] = nil
+      return true
+    end
+    return false
+  elseif type(entry) == "table" then
+    local changed = false
+    for index = #entry, 1, -1 do
+      if entry[index] == spellID then
+        table.remove(entry, index)
+        changed = true
+      end
+    end
+    if changed and #entry == 0 then
+      bucket[buffID] = nil
+    end
+    return changed
+  end
+
+  return false
+end
+
+function ClassHUD:ClearBuffLinksForBuff(buffID, class, specID)
+  buffID = tonumber(buffID) or buffID
+  if not buffID then return false end
+
+  local bucket = self:GetBuffLinksForSpec(class, specID, false)
+  if not bucket then return false end
+
+  if bucket[buffID] ~= nil then
+    bucket[buffID] = nil
+    return true
+  end
+
+  return false
+end
+
+function ClassHUD:RemoveSpellFromBuffLinks(spellID, class, specID)
+  spellID = tonumber(spellID) or spellID
+  if not spellID then return false end
+
+  local bucket = self:GetBuffLinksForSpec(class, specID, false)
+  if not bucket then return false end
+
+  local changed = false
+  local targets = {}
+
+  for buffID, list in pairs(bucket) do
+    if type(list) == "number" then
+      if list == spellID then
+        targets[#targets + 1] = { buffID = buffID }
+      end
+    elseif type(list) == "table" then
+      for index = #list, 1, -1 do
+        if list[index] == spellID then
+          table.remove(list, index)
+          changed = true
+        end
+      end
+      if #list == 0 then
+        targets[#targets + 1] = { buffID = buffID }
+      elseif changed then
+        bucket[buffID] = list
+      end
+    end
+  end
+
+  for i = 1, #targets do
+    bucket[targets[i].buffID] = nil
+    changed = true
+  end
+
+  return changed
+end
+
+-- ---------------------------------------------------------------------------
+-- Talent cache helpers
+-- ---------------------------------------------------------------------------
+
+function ClassHUD:MarkTalentStateDirty()
+  self._talentCache = self._talentCache or { nodes = {}, entries = {}, dirty = true }
+  self._talentCache.dirty = true
+end
+
+local function GetActiveTalentConfigID()
+  if C_ClassTalents and C_ClassTalents.GetActiveConfigID then
+    local active = C_ClassTalents.GetActiveConfigID()
+    if active then
+      return active
+    end
+  end
+
+  if C_ClassTalents and C_ClassTalents.GetLastSelectedSavedConfigID then
+    local specID = select(2, ClassHUD:GetPlayerClassSpec())
+    local configID = C_ClassTalents.GetLastSelectedSavedConfigID(specID)
+    if configID then
+      return configID
+    end
+  end
+
+  return nil
+end
+
+local function CollectTreeIDs(configID)
+  if not configID then return nil end
+
+  if C_Traits and C_Traits.GetConfigInfo then
+    local info = C_Traits.GetConfigInfo(configID)
+    if info and info.treeIDs then
+      return info.treeIDs
+    end
+  end
+
+  if C_ClassTalents and C_ClassTalents.GetTreeIDs then
+    local ids = C_ClassTalents.GetTreeIDs(configID)
+    if ids and #ids > 0 then
+      return ids
+    end
+  end
+
+  return nil
+end
+
+local function CollectNodeIDs(configID, treeID)
+  if not configID or not treeID then return nil end
+
+  if C_Traits and C_Traits.GetTreeNodes then
+    local ids = C_Traits.GetTreeNodes(treeID)
+    if ids and #ids > 0 then
+      return ids
+    end
+  end
+
+  if C_ClassTalents and C_ClassTalents.GetTreeNodes then
+    local ids = C_ClassTalents.GetTreeNodes(treeID)
+    if ids and #ids > 0 then
+      return ids
+    end
+  end
+
+  return nil
+end
+
+local function FetchNodeInfo(configID, nodeID)
+  if not configID or not nodeID then return nil end
+
+  if C_Traits and C_Traits.GetNodeInfo then
+    local info = C_Traits.GetNodeInfo(configID, nodeID)
+    if info then
+      return info
+    end
+  end
+
+  if C_ClassTalents and C_ClassTalents.GetNodeInfo then
+    return C_ClassTalents.GetNodeInfo(configID, nodeID)
+  end
+
+  return nil
+end
+
+function ClassHUD:GetActiveTalentCache()
+  self._talentCache = self._talentCache or { nodes = {}, entries = {}, dirty = true }
+  local cache = self._talentCache
+
+  if not cache.dirty then
+    return cache
+  end
+
+  cache.nodes = {}
+  cache.entries = {}
+  cache.configID = nil
+  cache.dirty = false
+
+  local configID = GetActiveTalentConfigID()
+  if not configID then
+    return cache
+  end
+
+  cache.configID = configID
+
+  local treeIDs = CollectTreeIDs(configID)
+  if not treeIDs then
+    return cache
+  end
+
+  for _, treeID in ipairs(treeIDs) do
+    local nodeIDs = CollectNodeIDs(configID, treeID)
+    if nodeIDs then
+      for _, nodeID in ipairs(nodeIDs) do
+        local info = FetchNodeInfo(configID, nodeID)
+        if info then
+          if info.ranksPurchased and info.ranksPurchased > 0 then
+            cache.nodes[nodeID] = true
+          end
+          if info.activeEntry and info.activeEntry.entryID then
+            cache.entries[info.activeEntry.entryID] = true
+          end
+          if info.entryIDsWithCommittedRanks then
+            for _, entryID in ipairs(info.entryIDsWithCommittedRanks) do
+              cache.entries[entryID] = true
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return cache
+end
+
+function ClassHUD:IsTalentNodeActive(nodeID)
+  if not nodeID then return false end
+  local cache = self:GetActiveTalentCache()
+  return cache and cache.nodes and cache.nodes[nodeID] or false
+end
+
+function ClassHUD:IsTalentEntryActive(entryID)
+  if not entryID then return false end
+  local cache = self:GetActiveTalentCache()
+  return cache and cache.entries and cache.entries[entryID] or false
+end
+
+local function MatchesAny(values, needle)
+  if not values then return false end
+  for index = 1, #values do
+    if values[index] == needle then
+      return true
+    end
+  end
+  return false
+end
+
+function ClassHUD:IsEntrySpecAllowed(entry)
+  if not entry or not entry.requiredSpecs or #entry.requiredSpecs == 0 then
+    return true
+  end
+
+  local _, specID = self:GetPlayerClassSpec()
+  if not specID or specID == 0 then
+    return true
+  end
+
+  return MatchesAny(entry.requiredSpecs, specID)
+end
+
+function ClassHUD:IsEntryTalentAllowed(entry)
+  if not entry then return true end
+
+  local requiresNodes = entry.requiredTalentNodes
+  local requiresEntries = entry.requiredTalentEntries
+
+  if (not requiresNodes or #requiresNodes == 0) and (not requiresEntries or #requiresEntries == 0) then
+    return true
+  end
+
+  local cache = self:GetActiveTalentCache()
+  if not cache then return true end
+
+  if requiresNodes then
+    for index = 1, #requiresNodes do
+      local nodeID = requiresNodes[index]
+      if nodeID and not cache.nodes[nodeID] then
+        return false
+      end
+    end
+  end
+
+  if requiresEntries then
+    for index = 1, #requiresEntries do
+      local entryID = requiresEntries[index]
+      if entryID and not cache.entries[entryID] then
+        return false
+      end
+    end
+  end
+
+  return true
+end
+
+function ClassHUD:IsSnapshotEntryAvailable(entry)
+  if not entry then return true end
+  if not self:IsEntrySpecAllowed(entry) then return false end
+  if not self:IsEntryTalentAllowed(entry) then return false end
+  return true
+end
+
+local function AppendRequirementIDs(result, value, seen)
+  if not value then return end
+  seen = seen or {}
+
+  if type(value) == "table" then
+    for _, raw in ipairs(value) do
+      local id = tonumber(raw) or raw
+      if type(id) == "number" and not seen[id] then
+        result[#result + 1] = id
+        seen[id] = true
+      end
+    end
+  else
+    local id = tonumber(value) or value
+    if type(id) == "number" and not seen[id] then
+      result[#result + 1] = id
+      seen[id] = true
+    end
+  end
+
+  return seen
+end
+
+local function ExtractRequirementList(raw, keys)
+  local result = {}
+  local seen = {}
+  if not raw or not keys then return result end
+
+  for _, key in ipairs(keys) do
+    seen = AppendRequirementIDs(result, raw[key], seen) or seen
+  end
+
+  return result
+end
+
+function ClassHUD:RequestSpecRefresh(reason)
+  self._pendingSpecRefresh = true
+  self._pendingSpecRefreshReasons = self._pendingSpecRefreshReasons or {}
+  if reason then
+    self._pendingSpecRefreshReasons[reason] = true
+  end
+
+  local timer = self._specRefreshTimer
+  if timer then
+    self:CancelTimer(timer)
+  end
+
+  self._specRefreshTimer = self:ScheduleTimer("HandleSpecRefresh", 0.25)
+end
+
+local function ShouldRefreshOptions(reasons)
+  if not reasons then return false end
+  return reasons.specChange or reasons.profileChange
+end
+
+function ClassHUD:HandleSpecRefresh()
+  local timer = self._specRefreshTimer
+  if timer then
+    self._specRefreshTimer = nil
+  end
+
+  if not self._pendingSpecRefresh then
+    return
+  end
+
+  if InCombatLockdown and InCombatLockdown() then
+    self._combatRefreshQueued = true
+    return
+  end
+
+  local reasons = self._pendingSpecRefreshReasons or {}
+  self._pendingSpecRefreshReasons = {}
+  self._pendingSpecRefresh = false
+  self._combatRefreshQueued = false
+
+  if reasons.specChange then
+    if self.ResetSummonTracking then self:ResetSummonTracking() end
+    if self.ResetTotemTracking then self:ResetTotemTracking() end
+  end
+
+  self:EnsureActiveSpecProfile()
+  self:TrySeedPendingProfile()
+  self:UpdateCDMSnapshot()
+
+  if self.BuildFramesForSpec then
+    self:BuildFramesForSpec()
+  end
+
+  if self.UpdateAllFrames then
+    self:UpdateAllFrames()
+  end
+
+  if self.EvaluateClassBarVisibility then
+    self:EvaluateClassBarVisibility()
+  end
+
+  if self.Layout then
+    self:Layout()
+  end
+
+  if self.UpdateHP then
+    self:UpdateHP()
+  end
+
+  if self.UpdatePrimaryResource then
+    self:UpdatePrimaryResource()
+  end
+
+  if self.UpdateSpecialPower then
+    self:UpdateSpecialPower()
+  end
+
+  if self.RefreshAllTotems then
+    self:RefreshAllTotems()
+  end
+
+  if (ShouldRefreshOptions(reasons) or self._opts) and self.RefreshRegisteredOptions then
+    self:RefreshRegisteredOptions()
+  end
+end
+
 function ClassHUD:OnProfileChanged()
   self:TrySeedPendingProfile()
   if self.ResetSummonTracking then self:ResetSummonTracking() end
@@ -997,6 +1585,7 @@ end
 
 -- Called by PLAYER_ENTERING_WORLD or when user changes options
 function ClassHUD:FullUpdate()
+  if self.EvaluateClassBarVisibility then self:EvaluateClassBarVisibility() end
   if self.Layout then self:Layout() end
   if self.UpdateHP then self:UpdateHP() end
   if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
@@ -1051,6 +1640,42 @@ function ClassHUD:UpdateCDMSnapshot()
             entry.desc        = desc or entry.desc
             entry.category    = entry.category or catName
             entry.lastUpdated = GetServerTime and GetServerTime() or time()
+          end
+
+          local specRequirements = ExtractRequirementList(raw, {
+            "specializationIDs",
+            "specializationID",
+            "specID",
+            "specIDs",
+            "requiredSpecializationIDs",
+          })
+          if specRequirements and #specRequirements > 0 then
+            entry.requiredSpecs = specRequirements
+          else
+            entry.requiredSpecs = nil
+          end
+
+          local talentNodes = ExtractRequirementList(raw, {
+            "requiredTalentNodeIDs",
+            "talentNodeIDs",
+            "requiredTalentNodes",
+            "requiredActiveTalentNodeIDs",
+          })
+          if talentNodes and #talentNodes > 0 then
+            entry.requiredTalentNodes = talentNodes
+          else
+            entry.requiredTalentNodes = nil
+          end
+
+          local talentEntries = ExtractRequirementList(raw, {
+            "requiredTalentEntryIDs",
+            "talentEntryIDs",
+            "requiredActiveTalentEntryIDs",
+          })
+          if talentEntries and #talentEntries > 0 then
+            entry.requiredTalentEntries = talentEntries
+          else
+            entry.requiredTalentEntries = nil
           end
 
           orderByCategory[catName] = (orderByCategory[catName] or 0) + 1
@@ -1157,6 +1782,7 @@ function ClassHUD:OnEnable()
   if not UI.resource and self.CreateResourceBar then self:CreateResourceBar() end
   if not UI.power and self.CreatePowerContainer then self:CreatePowerContainer() end
 
+  if self.EvaluateClassBarVisibility then self:EvaluateClassBarVisibility() end
   if self.Layout then self:Layout() end
   if self.ApplyBarSkins then self:ApplyBarSkins() end
 
@@ -1173,6 +1799,9 @@ for _, ev in pairs({
   -- World/spec
   "PLAYER_ENTERING_WORLD",
   "PLAYER_SPECIALIZATION_CHANGED",
+  "PLAYER_TALENT_UPDATE",
+  "TRAIT_CONFIG_UPDATED",
+  "ACTIVE_TALENT_GROUP_CHANGED",
 
   -- Health
   "UNIT_HEALTH", "UNIT_MAXHEALTH",
@@ -1207,29 +1836,37 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   -- Full refresh after world load
   if event == "PLAYER_ENTERING_WORLD" then
     ClassHUD:EnsureActiveSpecProfile()
+    ClassHUD:MarkTalentStateDirty()
     if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
+    ClassHUD:UpdateCDMSnapshot()
+    if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    if ClassHUD.UpdateAllFrames then ClassHUD:UpdateAllFrames() end
     ClassHUD:FullUpdate()
     ClassHUD:ApplyAnchorPosition()
-    local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
-    if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
-    if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
+    if ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
   end
 
   -- Spec change
   if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
+    ClassHUD:MarkTalentStateDirty()
     ClassHUD:EnsureActiveSpecProfile()
-    if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
-    if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
-    ClassHUD:UpdateCDMSnapshot()
-    if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
-    if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
-    ClassHUD:RefreshRegisteredOptions()
-    ClassHUD:UpdateAllFrames()
-    if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
+    ClassHUD:RequestSpecRefresh("specChange")
+    return
+  end
+
+  if event == "ACTIVE_TALENT_GROUP_CHANGED" then
+    ClassHUD:MarkTalentStateDirty()
+    ClassHUD:EnsureActiveSpecProfile()
+    ClassHUD:RequestSpecRefresh("specChange")
+    return
+  end
+
+  if event == "PLAYER_TALENT_UPDATE" or event == "TRAIT_CONFIG_UPDATED" then
+    ClassHUD:MarkTalentStateDirty()
+    ClassHUD:RequestSpecRefresh("talentChange")
     return
   end
 
@@ -1252,6 +1889,12 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   end
 
   if event == "UPDATE_SHAPESHIFT_FORM" then
+    if ClassHUD.EvaluateClassBarVisibility then
+      local _, changed = ClassHUD:EvaluateClassBarVisibility()
+      if changed and ClassHUD.Layout then
+        ClassHUD:Layout()
+      end
+    end
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.UpdateAllSpellFrames then
@@ -1370,9 +2013,18 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   end
 
   -- Target
+  if event == "PLAYER_REGEN_ENABLED" then
+    if ClassHUD._combatRefreshQueued or ClassHUD._pendingSpecRefresh then
+      ClassHUD:HandleSpecRefresh()
+    end
+    if ClassHUD.UpdateAllFrames then
+      ClassHUD:RequestUpdate("target")
+    end
+    return
+  end
+
   if event == "PLAYER_TARGET_CHANGED"
       or event == "PLAYER_REGEN_DISABLED"
-      or event == "PLAYER_REGEN_ENABLED"
       or event == "SPELL_RANGE_CHECK_UPDATE"
   then
     if ClassHUD.UpdateAllFrames then
@@ -1510,10 +2162,22 @@ SlashCmdList.CHUDMAP = function()
     return
   end
   print("|cff00ff88ClassHUD|r Auto-mapping (buff → spell):")
-  for buffID, spellID in pairs(ClassHUD.trackedBuffToSpell) do
+  for buffID, spellInfo in pairs(ClassHUD.trackedBuffToSpell) do
+    local list = {}
+    if type(spellInfo) == "table" then
+      for i = 1, #spellInfo do
+        local spellID = spellInfo[i]
+        list[#list + 1] = spellID
+      end
+    elseif spellInfo then
+      list[#list + 1] = spellInfo
+    end
+
     local bName = C_Spell.GetSpellName(buffID) or ("buff " .. buffID)
-    local sName = C_Spell.GetSpellName(spellID) or ("spell " .. spellID)
-    print(string.format("  %s (%d)  →  %s (%d)", bName, buffID, sName, spellID))
+    for _, spellID in ipairs(list) do
+      local sName = C_Spell.GetSpellName(spellID) or ("spell " .. spellID)
+      print(string.format("  %s (%d)  →  %s (%d)", bName, buffID, sName, spellID))
+    end
   end
 end
 

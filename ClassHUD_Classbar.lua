@@ -6,10 +6,29 @@ UI.attachments = UI.attachments or {}
 
 local function GetSpecSettings(class, specID)
   local db = ClassHUD.db
-if not db or not db.profile or not db.profile.layout or not db.profile.layout.classbars then return nil end
-local perClass = db.profile.layout.classbars[class]
-  if not perClass then return nil end
-  return perClass[specID]
+  if not db or not db.profile then return nil end
+
+  db.profile.layout = db.profile.layout or {}
+  db.profile.layout.classbars = db.profile.layout.classbars or {}
+
+  local layoutClassbars = db.profile.layout.classbars
+  local perClass = layoutClassbars[class]
+  local specSettings = perClass and perClass[specID] or nil
+
+  local legacyRoot = db.profile.classbars
+  if legacyRoot and legacyRoot[class] and legacyRoot[class][specID] then
+    perClass = perClass or {}
+    layoutClassbars[class] = perClass
+    specSettings = specSettings or {}
+    for key, value in pairs(legacyRoot[class][specID]) do
+      if specSettings[key] == nil then
+        specSettings[key] = value
+      end
+    end
+    perClass[specID] = specSettings
+  end
+
+  return specSettings
 end
 
 local function IsComboEnabled(class, specID)
@@ -32,6 +51,115 @@ local function IsMoonkinForm()
   local formID = GetShapeshiftFormID()
   if not formID or formID == 0 then return false end
   return formID == MOONKIN_FORM_ID or formID == INCARNATION_MOONKIN_FORM_ID
+end
+
+function ClassHUD:GetClassBarSupportType(class, specID)
+  class = class or select(1, self:GetPlayerClassSpec())
+  specID = specID or select(2, self:GetPlayerClassSpec())
+  if not class or not specID or specID == 0 then return nil end
+
+  if class == "DRUID" then
+    if specID == 102 then
+      return "ECLIPSE"
+    elseif specID == 103 then
+      return "COMBO"
+    else
+      return nil
+    end
+  elseif class == "ROGUE" then
+    if specID == 259 or specID == 260 or specID == 261 then
+      return "COMBO"
+    end
+  end
+
+  local powerType = CLASS_POWER_ID[class]
+  if not powerType then return nil end
+
+  if REQUIRED_SPEC[class] and REQUIRED_SPEC[class] ~= specID then
+    return nil
+  end
+
+  return "POWER"
+end
+
+function ClassHUD:HasClassBarForCurrentSpec()
+  local class, specID = self:GetPlayerClassSpec()
+  return self:GetClassBarSupportType(class, specID) ~= nil
+end
+
+function ClassHUD:IsClassBarVisible()
+  return not not self._classBarVisible
+end
+
+local function ShouldShowBalanceEclipse(class, specID)
+  local settings = GetSpecSettings(class, specID)
+  if settings and settings.eclipse == false then
+    return false
+  end
+  return true
+end
+
+function ClassHUD:EvaluateClassBarVisibility()
+  local layout = self.db and self.db.profile and self.db.profile.layout or nil
+  if not layout then
+    self._classBarVisible = false
+    self._classBarSupportType = nil
+    self._classBarUseEclipse = false
+    if UI.power then UI.power:Hide() end
+    DeactivateEclipseBar()
+    return false, false
+  end
+
+  layout.show = layout.show or {}
+  local showSetting = layout.show.power
+  if showSetting == nil then showSetting = true end
+
+  local class, specID = self:GetPlayerClassSpec()
+  local supportType = self:GetClassBarSupportType(class, specID)
+
+  local visible = false
+  local useEclipse = false
+
+  if showSetting and supportType then
+    if supportType == "ECLIPSE" then
+      if ShouldShowBalanceEclipse(class, specID) then
+        useEclipse = IsMoonkinForm()
+        visible = useEclipse
+      end
+    elseif supportType == "COMBO" then
+      if IsComboEnabled(class, specID) then
+        if class == "DRUID" then
+          visible = (select(1, UnitPowerType("player")) == Enum.PowerType.Energy)
+        else
+          visible = true
+        end
+      end
+    else
+      visible = true
+    end
+  end
+
+  if not visible then
+    useEclipse = false
+  end
+
+  local changed = (self._classBarVisible ~= visible)
+      or (self._classBarSupportType ~= supportType)
+      or (self._classBarUseEclipse ~= useEclipse)
+
+  self._classBarVisible = visible
+  self._classBarSupportType = supportType
+  self._classBarUseEclipse = useEclipse
+
+  if not visible and UI.power then
+    UI.power:Hide()
+  end
+
+  if not useEclipse then
+    DeactivateEclipseBar()
+  end
+
+  return visible, changed
 end
 
 -- ========= Advanced Class Resource System =========
@@ -217,23 +345,41 @@ function ClassHUD:UpdateEssenceSegments(ptype)
 end
 
 -- Resolve which special power to show
-local function ResolveSpecialPower()
-  local _, class = UnitClass("player")
-  local spec = GetSpecialization()
-  local specID = spec and GetSpecializationInfo(spec) or 0
+local function ResolveSpecialPower(self)
+  local supportType = self._classBarSupportType
+  if not supportType or supportType == "ECLIPSE" then
+    return nil
+  end
 
-  local ptype = CLASS_POWER_ID[class]
-  if not ptype then return nil end
+  local class, specID = self:GetPlayerClassSpec()
+  if not class or not specID then
+    local _, fallbackClass = UnitClass("player")
+    class = class or fallbackClass
+    local spec = GetSpecialization()
+    specID = specID or (spec and GetSpecializationInfo(spec) or 0)
+  end
 
-  if REQUIRED_SPEC[class] and specID ~= REQUIRED_SPEC[class] then return nil end
+  if not class or not specID or specID == 0 then
+    return nil
+  end
 
-  if ptype == Enum.PowerType.ComboPoints then
+  if supportType == "COMBO" then
     if not IsComboEnabled(class, specID) then
       return nil
     end
     if class == "DRUID" and select(1, UnitPowerType("player")) ~= Enum.PowerType.Energy then
       return nil
     end
+    return Enum.PowerType.ComboPoints, specID
+  end
+
+  local ptype = CLASS_POWER_ID[class]
+  if not ptype then
+    return nil
+  end
+
+  if REQUIRED_SPEC[class] and specID ~= REQUIRED_SPEC[class] then
+    return nil
   end
 
   return ptype, specID
@@ -241,14 +387,18 @@ end
 
 -- Main update entry
 function ClassHUD:UpdateSpecialPower()
-  if not (self.db and self.db.profile and self.db.profile.layout and self.db.profile.layout.show.power) then
+  if not self:IsClassBarVisible() then
     HideAllSegments(1)
     if UI.power then UI.power:Hide() end
     DeactivateEclipseBar()
     return
   end
 
-  local usingEclipse = self.InitBalanceEclipse and self:InitBalanceEclipse()
+  local usingEclipse = false
+  if self._classBarSupportType == "ECLIPSE" and self.InitBalanceEclipse then
+    usingEclipse = self:InitBalanceEclipse()
+  end
+
   if usingEclipse then
     HideAllSegments(1)
     if UI.power then UI.power:Show() end
@@ -257,7 +407,7 @@ function ClassHUD:UpdateSpecialPower()
 
   DeactivateEclipseBar()
 
-  local ptype, specID = ResolveSpecialPower()
+  local ptype, specID = ResolveSpecialPower(self)
   if not ptype then
     HideAllSegments(1)
     if UI.power then UI.power:Hide() end
@@ -584,20 +734,7 @@ function DeactivateEclipseBar()
 end
 
 function ClassHUD:ShouldUseEclipseBar()
-  local db = self.db and self.db.profile
-  if not db or not db.show or not db.show.power then return false end
-
-  local _, class = UnitClass("player")
-  if class ~= "DRUID" then return false end
-
-  local spec = GetSpecialization()
-  local specID = spec and GetSpecializationInfo(spec) or 0
-  if specID ~= specID_BALANCE then return false end
-
-  local settings = GetSpecSettings(class, specID)
-  if not (settings and settings.eclipse) then return false end
-
-  return IsMoonkinForm()
+  return self._classBarSupportType == "ECLIPSE" and self._classBarUseEclipse
 end
 
 function ClassHUD:EnsureEclipseBar()

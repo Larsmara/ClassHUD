@@ -255,7 +255,7 @@ function ClassHUD:Layout()
   do
     local container = containers.CLASS
     if container then
-      local showPower = layout.show.power
+      local showPower = self.IsClassBarVisible and self:IsClassBarVisible()
       local h = (showPower and layout.height.power) or 0
       container._height = h
       container:SetHeight(math.max(h, 1))

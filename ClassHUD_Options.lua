@@ -57,29 +57,6 @@ local function PlayerMatchesSpec(addon, class, specID)
   return true
 end
 
-local function PlayerHasClassbar(addon)
-  if not addon or not addon.db then return false end
-
-  local class = select(1, addon:GetPlayerClassSpec())
-  if not class or class == "" then
-    class = UnitClass and select(2, UnitClass("player")) or nil
-  end
-  if not class then return false end
-
-  local profileLayout = addon.db.profile and addon.db.profile.layout
-  if profileLayout and profileLayout.classbars and profileLayout.classbars[class] then
-    return true
-  end
-
-  local defaults = addon.db.defaults
-  local defaultLayout = defaults and defaults.profile and defaults.profile.layout
-  if defaultLayout and defaultLayout.classbars and defaultLayout.classbars[class] then
-    return true
-  end
-
-  return false
-end
-
 local function EnsureSummonConfig(addon, class)
   addon.db.profile.tracking = addon.db.profile.tracking or {}
   addon.db.profile.tracking.summons = addon.db.profile.tracking.summons or {}
@@ -89,6 +66,8 @@ local function EnsureSummonConfig(addon, class)
 end
 
 local function EnsureBuffTracking(addon, class, specID)
+  class = class or select(1, addon:GetPlayerClassSpec())
+  specID = specID or select(2, addon:GetPlayerClassSpec())
   addon.db.profile.tracking = addon.db.profile.tracking or {}
   addon.db.profile.tracking.buffs = addon.db.profile.tracking.buffs or {}
   local buffs = addon.db.profile.tracking.buffs
@@ -100,9 +79,15 @@ local function EnsureBuffTracking(addon, class, specID)
   buffs.tracked[class][specID] = buffs.tracked[class][specID] or {}
 
   buffs.links[class] = buffs.links[class] or {}
-  buffs.links[class][specID] = buffs.links[class][specID] or {}
+  local linkBucket = buffs.links[class][specID]
+  if addon.GetBuffLinksForSpec then
+    linkBucket = addon:GetBuffLinksForSpec(class, specID, true)
+  else
+    linkBucket = linkBucket or {}
+  end
+  buffs.links[class][specID] = linkBucket
 
-  return buffs.tracked[class][specID], buffs.links[class][specID]
+  return buffs.tracked[class][specID], linkBucket
 end
 
 local function EnsureTrackedBuffOrder(addon, class, specID)
@@ -146,7 +131,11 @@ local function RemoveTrackedBuff(addon, class, specID, buffID)
   local tracked, links = EnsureBuffTracking(addon, class, specID)
   local orderList = EnsureTrackedBuffOrder(addon, class, specID)
   tracked[buffID] = nil
-  links[buffID] = nil
+  if addon.ClearBuffLinksForBuff then
+    addon:ClearBuffLinksForBuff(buffID, class, specID)
+  else
+    links[buffID] = nil
+  end
   for index = #orderList, 1, -1 do
     local value = tonumber(orderList[index]) or orderList[index]
     if value == buffID then
@@ -375,18 +364,8 @@ local function BuildTopBarSpellsEditor(addon, container)
     local entry = snapshot and snapshot[spellID]
 
     -- Linked buffs
-    local _, linkTable = EnsureBuffTracking(addon, class, specID)
-
     local linkedArgs, idx = {}, 1
-    local buffIDs = {}
-    for buffID, linkedSpellID in pairs(linkTable) do
-      if linkedSpellID == spellID then
-        table.insert(buffIDs, buffID)
-      end
-    end
-    table.sort(buffIDs, function(a, b)
-      return (tonumber(a) or a) < (tonumber(b) or b)
-    end)
+    local buffIDs = addon.GetLinkedBuffIDsForSpell and addon:GetLinkedBuffIDsForSpell(spellID, class, specID) or {}
     for _, buffID in ipairs(buffIDs) do
       local b = C_Spell.GetSpellInfo(buffID)
       local bi = b and b.iconID and ("|T" .. b.iconID .. ":16|t ") or ""
@@ -397,7 +376,9 @@ local function BuildTopBarSpellsEditor(addon, container)
         desc  = "Click to remove this link",
         order = idx,
         func  = function()
-          linkTable[buffID] = nil
+          if addon.RemoveBuffLink then
+            addon:RemoveBuffLink(buffID, spellID, class, specID)
+          end
           BuildTopBarSpellsEditor(addon, container)
           addon:BuildFramesForSpec()
           local ACR = LibStub("AceConfigRegistry-3.0", true)
@@ -424,7 +405,9 @@ local function BuildTopBarSpellsEditor(addon, container)
           get   = function() return "" end,
           set   = function(_, val)
             local buffID = tonumber(val); if not buffID then return end
-            linkTable[buffID] = spellID
+            if addon.AddBuffLink then
+              addon:AddBuffLink(buffID, spellID, class, specID)
+            end
             BuildTopBarSpellsEditor(addon, container)
             addon:BuildFramesForSpec()
             local ACR = LibStub("AceConfigRegistry-3.0", true)
@@ -470,8 +453,8 @@ local function BuildTopBarSpellsEditor(addon, container)
             if type(hidden) == "table" then
               hidden[#hidden + 1] = spellID
             end
-            for bid, sid in pairs(linkTable) do
-              if sid == spellID then linkTable[bid] = nil end
+            if addon.RemoveSpellFromBuffLinks then
+              addon:RemoveSpellFromBuffLinks(spellID, class, specID)
             end
             BuildTopBarSpellsEditor(addon, container)
             addon:BuildFramesForSpec()
@@ -491,7 +474,6 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
 
   local class, specID = addon:GetPlayerClassSpec()
   local lists = EnsurePlacementLists(addon, class, specID)
-  local _, linkTable = EnsureBuffTracking(addon, class, specID)
 
   local snapshot = addon:GetSnapshotForSpec(class, specID, false)
   local entries = SortEntries(snapshot, category)
@@ -518,9 +500,9 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
     local icon = iconID and ("|T" .. iconID .. ":16|t ") or ""
 
     local linkedBuffs = {}
-    for buffID, linkedSpellID in pairs(linkTable) do
-      local resolved = tonumber(linkedSpellID) or linkedSpellID
-      if resolved == id then
+    if addon.GetLinkedBuffIDsForSpell then
+      local buffIDs = addon:GetLinkedBuffIDsForSpell(id, class, specID)
+      for _, buffID in ipairs(buffIDs) do
         local buffInfo = C_Spell.GetSpellInfo(buffID)
         linkedBuffs[#linkedBuffs + 1] = (buffInfo and buffInfo.name) or ("Buff " .. buffID)
       end
@@ -780,7 +762,15 @@ local function BuildBuffLinkArgs(addon, container)
   local _, links = EnsureBuffTracking(addon, class, specID)
   local order = 1
 
-  if not next(links) then
+  local hasLinks = false
+  for buffID, entry in pairs(links) do
+    if type(entry) == "number" or (type(entry) == "table" and #entry > 0) then
+      hasLinks = true
+      break
+    end
+  end
+
+  if not hasLinks then
     container.empty = {
       type = "description",
       name =
@@ -791,10 +781,24 @@ local function BuildBuffLinkArgs(addon, container)
   end
 
   local sorted = {}
-  for buffID, spellID in pairs(links) do
-    table.insert(sorted, { buffID = buffID, spellID = spellID })
+  for buffID, entry in pairs(links) do
+    if type(entry) == "number" then
+      table.insert(sorted, { buffID = buffID, spellID = entry, index = 1 })
+    elseif type(entry) == "table" then
+      for idx = 1, #entry do
+        local spellID = entry[idx]
+        if type(spellID) == "number" then
+          table.insert(sorted, { buffID = buffID, spellID = spellID, index = idx })
+        end
+      end
+    end
   end
-  table.sort(sorted, function(a, b) return a.buffID < b.buffID end)
+  table.sort(sorted, function(a, b)
+    if a.buffID == b.buffID then
+      return (a.spellID or 0) < (b.spellID or 0)
+    end
+    return a.buffID < b.buffID
+  end)
 
   for _, map in ipairs(sorted) do
     local buffInfo = C_Spell.GetSpellInfo(map.buffID)
@@ -807,7 +811,8 @@ local function BuildBuffLinkArgs(addon, container)
       spellInfo and spellInfo.name or "Spell",
       map.spellID)
 
-    container["link" .. map.buffID] = {
+    local key = string.format("link%s_%s_%d", map.buffID, map.spellID, map.index or 1)
+    container[key] = {
       type = "group",
       name = name,
       inline = true,
@@ -822,9 +827,12 @@ local function BuildBuffLinkArgs(addon, container)
           set = function(_, value)
             local newID = tonumber(value)
             if newID and newID ~= map.buffID then
-              local current = links[map.buffID]
-              links[map.buffID] = nil
-              links[newID] = current
+              if addon.RemoveBuffLink then
+                addon:RemoveBuffLink(map.buffID, map.spellID, class, specID)
+              end
+              if addon.AddBuffLink then
+                addon:AddBuffLink(newID, map.spellID, class, specID)
+              end
               addon:BuildFramesForSpec()
               BuildBuffLinkArgs(addon, container)
               NotifyOptionsChanged()
@@ -840,7 +848,12 @@ local function BuildBuffLinkArgs(addon, container)
           set = function(_, value)
             local newID = tonumber(value)
             if newID then
-              links[map.buffID] = newID
+              if addon.RemoveBuffLink then
+                addon:RemoveBuffLink(map.buffID, map.spellID, class, specID)
+              end
+              if addon.AddBuffLink then
+                addon:AddBuffLink(map.buffID, newID, class, specID)
+              end
               addon:BuildFramesForSpec()
               BuildBuffLinkArgs(addon, container)
               NotifyOptionsChanged()
@@ -853,7 +866,9 @@ local function BuildBuffLinkArgs(addon, container)
           confirm = true,
           order = 3,
           func = function()
-            links[map.buffID] = nil
+            if addon.RemoveBuffLink then
+              addon:RemoveBuffLink(map.buffID, map.spellID, class, specID)
+            end
             addon:BuildFramesForSpec()
             BuildBuffLinkArgs(addon, container)
             NotifyOptionsChanged()
@@ -1497,7 +1512,7 @@ function ClassHUD_BuildOptions(addon)
         name = "Class Bar",
         order = 3,
         hidden = function()
-          return not PlayerHasClassbar(addon)
+          return not (addon.HasClassBarForCurrentSpec and addon:HasClassBarForCurrentSpec())
         end,
         args = {
           general = {
