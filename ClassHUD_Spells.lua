@@ -893,7 +893,7 @@ local function LayoutTopBar(frames)
   local spacingX = topBar.spacingX or 4
   local spacingY = topBar.spacingY or 4
   local yOffset  = topBar.yOffset or 0
-  local grow     = topBar.grow or "DOWN"
+  local grow     = topBar.grow or "UP"
 
   container:SetWidth(width)
 
@@ -2210,30 +2210,6 @@ function ClassHUD:BuildFramesForSpec()
       built[spellID] = true
     end
   end
-
-  -- Auto-grow for Top-bar basert på plassering
-  do
-    local order = (self.db.profile.layout and self.db.profile.layout.barOrder) or {}
-    local topIndex
-    for i, key in ipairs(order) do
-      if key == "TOP" then
-        topIndex = i
-        break
-      end
-    end
-    if topIndex and topIndex > 1 then
-      self.db.profile.layout = self.db.profile.layout or {}
-      local topBar = self.db.profile.layout.topBar or {}
-      topBar.grow = "DOWN"
-      self.db.profile.layout.topBar = topBar
-    else
-      self.db.profile.layout = self.db.profile.layout or {}
-      local topBar = self.db.profile.layout.topBar or {}
-      topBar.grow = "UP"
-      self.db.profile.layout.topBar = topBar
-    end
-  end
-
 
   local function sortFrames(list)
     table.sort(list, function(a, b)

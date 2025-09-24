@@ -466,6 +466,10 @@ local function BuildTopBarSpellsEditor(addon, container)
           func    = function()
             local lists = EnsurePlacementLists(addon, class, specID)
             RemoveSpellFromLists(lists, spellID)
+            local hidden = lists.HIDDEN
+            if type(hidden) == "table" then
+              hidden[#hidden + 1] = spellID
+            end
             for bid, sid in pairs(linkTable) do
               if sid == spellID then linkTable[bid] = nil end
             end
