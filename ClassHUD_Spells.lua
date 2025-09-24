@@ -625,6 +625,13 @@ local function CreateBuffFrame(buffID)
   f.overlay:SetAllPoints(true)
   f.overlay:SetFrameLevel(f.cooldown:GetFrameLevel() + 1)
 
+  f.pandemicHighlight = f.overlay:CreateTexture(nil, "OVERLAY")
+  f.pandemicHighlight:SetAllPoints(true)
+  f.pandemicHighlight:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+  f.pandemicHighlight:SetBlendMode("ADD")
+  f.pandemicHighlight:SetVertexColor(0.2, 0.8, 1.0, 0.9)
+  f.pandemicHighlight:Hide()
+
   local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.spellFontSize or 12)
 
   -- CHARGES / STACKS: øverst (samme som spells)
@@ -982,6 +989,15 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
     frame._last = cache
   end
 
+  if frame.pandemicHighlight then
+    frame.pandemicHighlight:Hide()
+  end
+
+  if frame.icon then
+    frame.icon:SetDesaturated(false)
+    frame.icon:SetVertexColor(1, 1, 1)
+  end
+
   local iconID = entry and entry.iconID
   if not iconID then
     local info = C_Spell.GetSpellInfo(buffID)
@@ -1058,6 +1074,8 @@ function ClassHUD:GetManualCountForSpell(spellID)
   return nil
 end
 
+local TRACKED_SOUND_THROTTLE = 0.75
+
 local function UpdateTrackedIconFrame(frame)
   if not frame then return false end
 
@@ -1079,6 +1097,12 @@ local function UpdateTrackedIconFrame(frame)
   end
 
   local entry = frame._trackedEntry
+  local config = frame._trackedConfig
+  local showIcon = true
+  if config and config.showIcon == false then
+    showIcon = false
+  end
+
   local candidates = frame._trackedAuraCandidates
   if not candidates then
     candidates = CollectAuraSpellIDs(entry, buffID)
@@ -1093,20 +1117,92 @@ local function UpdateTrackedIconFrame(frame)
     aura = select(1, FindAuraFromCandidates(candidates, units))
   end
 
-  if aura then
-    local iconID = entry and entry.iconID
-    if not iconID then
-      local info = C_Spell.GetSpellInfo(buffID)
-      iconID = info and info.iconID
+  frame._layoutActive = showIcon
+
+  if not showIcon then
+    if frame.pandemicHighlight then
+      frame.pandemicHighlight:Hide()
     end
-    iconID = iconID or C_Spell.GetSpellTexture(buffID) or 134400
-    if cache.iconID ~= iconID then
-      frame.icon:SetTexture(iconID)
-      cache.iconID = iconID
+    CooldownFrame_Clear(frame.cooldown)
+    frame.cooldown:Hide()
+    frame.count:SetText("")
+    frame.count:Hide()
+    ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+    frame:Hide()
+    cache.wasActive = aura and true or false
+    cache.wasOnCooldown = false
+    cache.hasCooldown = false
+    cache.hasChargeCooldown = false
+    return false
+  end
+
+  local iconID = entry and entry.iconID
+  if not iconID then
+    local info = C_Spell.GetSpellInfo(buffID)
+    iconID = info and info.iconID
+  end
+  iconID = iconID or C_Spell.GetSpellTexture(buffID) or 134400
+  if cache.iconID ~= iconID then
+    frame.icon:SetTexture(iconID)
+    cache.iconID = iconID
+  end
+
+  local now = GetTime()
+  local auraActive = aura and true or false
+  local auraDuration, auraExpiration, auraRemaining = nil, nil, nil
+  if aura and aura.duration and aura.duration > 0 and aura.expirationTime then
+    auraDuration = aura.duration
+    auraExpiration = aura.expirationTime
+    auraRemaining = auraExpiration - now
+    if auraRemaining and auraRemaining <= 0 then
+      auraRemaining = nil
+    end
+  end
+
+  local spellID = ClassHUD:GetTrackedSpellForBuff(buffID)
+  local cooldownStart, cooldownDuration, cooldownModRate, cooldownEnd = nil, nil, nil, nil
+  local onCooldown = false
+
+  if spellID then
+    local charges = C_Spell and C_Spell.GetSpellCharges and C_Spell.GetSpellCharges(spellID)
+    if charges and charges.cooldownDuration and charges.cooldownDuration > 0 then
+      local chargesEnd = (charges.cooldownStartTime or 0) + charges.cooldownDuration
+      if (charges.currentCharges or 0) <= 0 and chargesEnd > now then
+        cooldownStart = charges.cooldownStartTime
+        cooldownDuration = charges.cooldownDuration
+        cooldownModRate = charges.cooldownModRate or 1
+        cooldownEnd = chargesEnd
+        onCooldown = true
+      end
     end
 
-    if aura.expirationTime and aura.duration and aura.duration > 0 then
-      frame.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration, aura.modRate or 1)
+    local cd = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(spellID)
+    if cd and cd.startTime and cd.duration and cd.duration > 0 then
+      local cdEnd = cd.startTime + cd.duration
+      if cdEnd > now then
+        if not cooldownEnd or cdEnd > cooldownEnd then
+          cooldownStart = cd.startTime
+          cooldownDuration = cd.duration
+          cooldownModRate = cd.modRate or cooldownModRate or 1
+          cooldownEnd = cdEnd
+        end
+        if cd.duration > 1.5 then
+          onCooldown = true
+        end
+      end
+    end
+  end
+
+  if auraActive and auraDuration and auraExpiration then
+    cooldownStart = auraExpiration - auraDuration
+    cooldownDuration = auraDuration
+    cooldownModRate = aura.modRate or cooldownModRate or 1
+    cooldownEnd = auraExpiration
+  end
+
+  local function ApplyCooldown(start, duration, modRate, endTime)
+    if start and duration and duration > 0 then
+      frame.cooldown:SetCooldown(start, duration, modRate or 1)
       frame.cooldown:Show()
       if frame.overlay and frame.cooldown then
         local need = frame.cooldown:GetFrameLevel() + 1
@@ -1114,63 +1210,147 @@ local function UpdateTrackedIconFrame(frame)
           frame.overlay:SetFrameLevel(need)
         end
       end
-
-      cache.cooldownStart = aura.expirationTime - aura.duration
-      cache.cooldownDuration = aura.duration
-      cache.cooldownModRate = aura.modRate or 1
-      cache.cooldownEnd = aura.expirationTime
+      cache.cooldownStart = start
+      cache.cooldownDuration = duration
+      cache.cooldownModRate = modRate or 1
+      cache.cooldownEnd = endTime or (start + duration)
       cache.hasCooldown = true
-      cache.hasChargeCooldown = false
     else
-      CooldownFrame_Clear(frame.cooldown)
-      frame.cooldown:Hide()
-
+      if cache.hasCooldown then
+        CooldownFrame_Clear(frame.cooldown)
+        frame.cooldown:Hide()
+      end
       cache.cooldownStart = nil
       cache.cooldownDuration = nil
       cache.cooldownModRate = nil
       cache.cooldownEnd = nil
       cache.hasCooldown = false
-      cache.hasChargeCooldown = false
     end
-
-    local stacks = aura.applications or aura.stackCount or aura.charges
-    if stacks and stacks > 1 then
-      frame.count:SetText(stacks)
-      frame.count:Show()
-    else
-      frame.count:SetText("")
-      frame.count:Hide()
-    end
-
-    local showNumbers = ShouldShowCooldownNumbers()
-    local remaining = nil
-    if showNumbers and cache.hasCooldown and cache.cooldownEnd then
-      remaining = cache.cooldownEnd - GetTime()
-      if remaining and remaining <= 0 then
-        remaining = nil
-      end
-    end
-    ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
-
-    frame:Show()
-    frame._layoutActive = true
-    return true
+    cache.hasChargeCooldown = false
   end
 
-  CooldownFrame_Clear(frame.cooldown)
-  frame.cooldown:Hide()
-  frame.count:SetText("")
-  frame.count:Hide()
-  cache.cooldownStart = nil
-  cache.cooldownDuration = nil
-  cache.cooldownModRate = nil
-  cache.cooldownEnd = nil
-  cache.hasCooldown = false
-  cache.hasChargeCooldown = false
-  ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
-  frame:Hide()
-  frame._layoutActive = false
-  return false
+  local stacks = aura and (aura.applications or aura.stackCount or aura.charges)
+  if stacks and stacks > 1 then
+    frame.count:SetText(stacks)
+    frame.count:Show()
+  else
+    frame.count:SetText("")
+    frame.count:Hide()
+  end
+
+  local showNumbers = ShouldShowCooldownNumbers()
+  local remaining = nil
+  local state = "INACTIVE_READY"
+  local pandemic = false
+
+  if auraActive then
+    if auraDuration and auraExpiration then
+      ApplyCooldown(cooldownStart, cooldownDuration, cooldownModRate, cooldownEnd)
+      remaining = auraRemaining
+    else
+      ApplyCooldown(nil, nil, nil, nil)
+    end
+
+    if onCooldown then
+      state = "COOLDOWN_ACTIVE"
+    else
+      state = "ACTIVE_READY"
+    end
+
+    if auraDuration and auraDuration > 0 and auraRemaining then
+      local threshold = auraDuration * 0.3
+      if threshold > 0 and auraRemaining <= threshold then
+        pandemic = true
+        state = "ACTIVE_PANDEMIC"
+      end
+    end
+  else
+    if onCooldown and cooldownStart and cooldownDuration and cooldownDuration > 0 then
+      ApplyCooldown(cooldownStart, cooldownDuration, cooldownModRate, cooldownEnd)
+      if cooldownEnd then
+        remaining = cooldownEnd - now
+        if remaining and remaining <= 0 then
+          remaining = nil
+        end
+      end
+      state = "COOLDOWN_INACTIVE"
+    else
+      ApplyCooldown(nil, nil, nil, nil)
+      state = "INACTIVE_READY"
+    end
+  end
+
+  if not auraActive and not onCooldown then
+    remaining = nil
+  end
+
+  ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
+
+  local desiredDesaturate = false
+  local vertexR, vertexG, vertexB = 1, 1, 1
+
+  if state == "COOLDOWN_INACTIVE" then
+    desiredDesaturate = true
+    vertexR, vertexG, vertexB = 0.5, 0.5, 0.5
+  elseif state == "COOLDOWN_ACTIVE" then
+    desiredDesaturate = true
+  else
+    desiredDesaturate = false
+  end
+
+  if cache.desaturated ~= desiredDesaturate then
+    frame.icon:SetDesaturated(desiredDesaturate)
+    cache.desaturated = desiredDesaturate
+  end
+
+  if cache.vertexR ~= vertexR or cache.vertexG ~= vertexG or cache.vertexB ~= vertexB then
+    frame.icon:SetVertexColor(vertexR, vertexG, vertexB)
+    cache.vertexR, cache.vertexG, cache.vertexB = vertexR, vertexG, vertexB
+  end
+
+  if frame.pandemicHighlight then
+    local shouldShowPandemic = pandemic and ClassHUD:IsPandemicHighlightEnabled()
+    if cache.pandemic ~= shouldShowPandemic then
+      if shouldShowPandemic then
+        frame.pandemicHighlight:Show()
+      else
+        frame.pandemicHighlight:Hide()
+      end
+      cache.pandemic = shouldShowPandemic
+    end
+  end
+
+  local prevOnCooldown = cache.wasOnCooldown
+  local prevActive = cache.wasActive
+
+  local function TryPlaySound()
+    if not ClassHUD:AreTrackedBuffSoundAlertsEnabled() then
+      return
+    end
+    local lastAt = cache.lastSoundAt or 0
+    if (now - lastAt) < TRACKED_SOUND_THROTTLE then
+      return
+    end
+    if ClassHUD:PlayTrackedBuffSound(buffID) then
+      cache.lastSoundAt = now
+    end
+  end
+
+  if prevOnCooldown ~= nil and prevOnCooldown and not onCooldown then
+    TryPlaySound()
+  end
+  if prevActive ~= nil and not prevActive and auraActive then
+    TryPlaySound()
+  end
+  if prevActive ~= nil and prevActive and not auraActive then
+    TryPlaySound()
+  end
+
+  cache.wasOnCooldown = onCooldown
+  cache.wasActive = auraActive
+
+  frame:Show()
+  return showIcon
 end
 
 function ClassHUD:BuildTrackedBuffFrames()
@@ -1328,19 +1508,23 @@ function ClassHUD:BuildTrackedBuffFrames()
     local iconFrame = CreateBuffFrame(buffID)
     PopulateBuffIconFrame(iconFrame, buffID, aura, entry)
     iconFrame._trackedEntry = entry
+    iconFrame._trackedConfig = config
     iconFrame._auraUnitList = TRACKED_UNITS
     iconFrame._last = iconFrame._last or {}
     iconFrame._updateKind = "trackedIcon"
     local iconCandidates = CopyCandidates(auraCandidates) or { buffID }
     iconFrame._trackedAuraCandidates = iconCandidates
     RegisterFrameAuraWatchers(iconFrame, iconCandidates, TRACKED_UNITS)
-    iconFrame._layoutActive = aura and true or false
-    if iconFrame._layoutActive then
+    local shouldShowIcon = not (config and config.showIcon == false)
+    iconFrame._layoutActive = shouldShowIcon
+    if shouldShowIcon then
       iconFrame:Show()
       table.insert(iconFrames, iconFrame)
     else
       iconFrame:Hide()
     end
+
+    UpdateTrackedIconFrame(iconFrame)
 
     registry[buffID] = registry[buffID] or {}
     registry[buffID].iconFrame = iconFrame

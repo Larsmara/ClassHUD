@@ -33,6 +33,12 @@ local WILD_IMP_MODE_OPTIONS = {
   buff = "Buff Icon",
 }
 
+local FALLBACK_SOUNDS = {
+  { key = "kit:ALARM_CLOCK_WARNING_3", label = "Alarm Clock", kit = SOUNDKIT and SOUNDKIT.ALARM_CLOCK_WARNING_3 },
+  { key = "kit:RAID_WARNING",          label = "Raid Warning",  kit = SOUNDKIT and SOUNDKIT.RAID_WARNING },
+  { key = "kit:READY_CHECK",           label = "Ready Check",    kit = SOUNDKIT and SOUNDKIT.READY_CHECK },
+}
+
 local function PlayerMatchesClass(addon, class)
   if not class then return false end
   local playerClass = select(1, addon:GetPlayerClassSpec())
@@ -128,6 +134,42 @@ local function EnsureTrackedBuffOrder(addon, class, specID)
   return trackedBuffBar.buffs[class][specID]
 end
 
+local function EnsureSoundAlertConfig(addon)
+  addon.db.profile.tracking = addon.db.profile.tracking or {}
+  addon.db.profile.tracking.buffs = addon.db.profile.tracking.buffs or {}
+  local buffs = addon.db.profile.tracking.buffs
+  buffs.soundAlerts = buffs.soundAlerts or { enabled = false, perSpell = {} }
+  buffs.soundAlerts.perSpell = buffs.soundAlerts.perSpell or {}
+  if buffs.pandemicHighlight == nil then
+    buffs.pandemicHighlight = true
+  end
+  return buffs.soundAlerts
+end
+
+local function GetSoundOptionValues(addon, buffID)
+  local values = { none = "No Sound" }
+
+  if LSM then
+    local list = LSM:List("sound")
+    for _, name in ipairs(list) do
+      values["LSM:" .. name] = name
+    end
+  end
+
+  for _, entry in ipairs(FALLBACK_SOUNDS) do
+    if entry.kit then
+      values[entry.key] = entry.label
+    end
+  end
+
+  local current = addon and addon.GetTrackedBuffSoundKey and addon:GetTrackedBuffSoundKey(buffID)
+  if current and not values[current] then
+    values[current] = current
+  end
+
+  return values
+end
+
 local function GetTrackedBuffOrder(addon, class, specID, buffID)
   local orderList = EnsureTrackedBuffOrder(addon, class, specID)
   for index = 1, #orderList do
@@ -158,6 +200,11 @@ local function RemoveTrackedBuff(addon, class, specID, buffID)
   local orderList = EnsureTrackedBuffOrder(addon, class, specID)
   tracked[buffID] = nil
   links[buffID] = nil
+  local sound = EnsureSoundAlertConfig(addon)
+  sound.perSpell[buffID] = nil
+  if addon.ClearTrackedBuffSoundKey then
+    addon:ClearTrackedBuffSoundKey(buffID)
+  end
   for index = #orderList, 1, -1 do
     local value = tonumber(orderList[index]) or orderList[index]
     if value == buffID then
@@ -746,10 +793,35 @@ local function BuildTrackedBuffArgs(addon, container)
             NotifyOptionsChanged()
           end,
         },
+        sound = {
+          type = "select",
+          name = "Sound Alert",
+          order = 2,
+          values = function()
+            return GetSoundOptionValues(addon, buffID)
+          end,
+          get = function()
+            local cfg = EnsureSoundAlertConfig(addon)
+            local key = cfg.perSpell and cfg.perSpell[buffID]
+            return key or "none"
+          end,
+          set = function(_, value)
+            local cfg = EnsureSoundAlertConfig(addon)
+            if value == "none" then
+              cfg.perSpell[buffID] = nil
+              if addon.ClearTrackedBuffSoundKey then
+                addon:ClearTrackedBuffSoundKey(buffID)
+              end
+            else
+              cfg.perSpell[buffID] = value
+            end
+            NotifyOptionsChanged()
+          end,
+        },
         orderControl = {
           type = "range",
           name = "Order",
-          order = 2,
+          order = 3,
           min = 1,
           max = 50,
           step = 1,
@@ -1869,6 +1941,44 @@ function ClassHUD_BuildOptions(addon)
                 type = "description",
                 name = "Configure which buffs appear on the tracked buff bar.",
                 order = 1,
+              },
+              pandemicHighlight = {
+                type = "toggle",
+                name = "Enable Pandemic Highlight",
+                order = 1.1,
+                width = "full",
+                get = function()
+                  local tracking = addon.db.profile.tracking and addon.db.profile.tracking.buffs
+                  if not tracking then return true end
+                  if tracking.pandemicHighlight == nil then
+                    return true
+                  end
+                  return tracking.pandemicHighlight
+                end,
+                set = function(_, value)
+                  addon.db.profile.tracking = addon.db.profile.tracking or {}
+                  addon.db.profile.tracking.buffs = addon.db.profile.tracking.buffs or {}
+                  addon.db.profile.tracking.buffs.pandemicHighlight = not not value
+                  if addon.RequestUpdate then
+                    addon:RequestUpdate("aura")
+                  end
+                  NotifyOptionsChanged()
+                end,
+              },
+              enableSoundAlerts = {
+                type = "toggle",
+                name = "Enable Sound Alerts",
+                order = 1.2,
+                width = "full",
+                get = function()
+                  local cfg = EnsureSoundAlertConfig(addon)
+                  return cfg.enabled or false
+                end,
+                set = function(_, value)
+                  local cfg = EnsureSoundAlertConfig(addon)
+                  cfg.enabled = not not value
+                  NotifyOptionsChanged()
+                end,
               },
               addBuff = {
                 type = "input",

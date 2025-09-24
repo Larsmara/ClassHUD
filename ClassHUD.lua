@@ -146,6 +146,138 @@ ClassHUD._auraWatchersByUnit = ClassHUD._auraWatchersByUnit or {
 ClassHUD._pendingAuraFrames = ClassHUD._pendingAuraFrames or {}
 ClassHUD._auraFlushTimer = ClassHUD._auraFlushTimer or nil
 
+local function GetBuffTrackingConfig(self)
+  if not (self and self.db and self.db.profile) then return nil end
+  local tracking = self.db.profile.tracking
+  return tracking and tracking.buffs or nil
+end
+
+function ClassHUD:IsPandemicHighlightEnabled()
+  local buffs = GetBuffTrackingConfig(self)
+  if buffs and buffs.pandemicHighlight == false then
+    return false
+  end
+  return true
+end
+
+function ClassHUD:AreTrackedBuffSoundAlertsEnabled()
+  local buffs = GetBuffTrackingConfig(self)
+  if not buffs then return false end
+  local sound = buffs.soundAlerts
+  return sound and sound.enabled or false
+end
+
+function ClassHUD:GetTrackedBuffSoundKey(buffID)
+  if not buffID then return nil end
+  local buffs = GetBuffTrackingConfig(self)
+  if not buffs then return nil end
+  local sound = buffs.soundAlerts
+  local perSpell = sound and sound.perSpell
+  if not perSpell then return nil end
+  return perSpell[buffID]
+end
+
+function ClassHUD:SetTrackedBuffSoundKey(buffID, key)
+  if not buffID then return end
+  local buffs = GetBuffTrackingConfig(self)
+  if not buffs then return end
+  buffs.soundAlerts = buffs.soundAlerts or { enabled = false, perSpell = {} }
+  buffs.soundAlerts.perSpell = buffs.soundAlerts.perSpell or {}
+  buffs.soundAlerts.perSpell[buffID] = key
+end
+
+function ClassHUD:ClearTrackedBuffSoundKey(buffID)
+  if not buffID then return end
+  local buffs = GetBuffTrackingConfig(self)
+  if not buffs then return end
+  local sound = buffs.soundAlerts
+  if sound and sound.perSpell then
+    sound.perSpell[buffID] = nil
+  end
+end
+
+local function ResolveSoundKey(self, soundKey)
+  if not soundKey or soundKey == "none" then
+    return nil, nil
+  end
+
+  if type(soundKey) ~= "string" then
+    return nil, nil
+  end
+
+  if soundKey:sub(1, 4) == "LSM:" then
+    local name = soundKey:sub(5)
+    if self.LSM then
+      local path = self.LSM:Fetch("sound", name, true)
+      if path then
+        return "file", path
+      end
+    end
+    return nil, nil
+  elseif soundKey:sub(1, 4) == "kit:" then
+    local kitName = soundKey:sub(5)
+    if SOUNDKIT and SOUNDKIT[kitName] then
+      return "kit", SOUNDKIT[kitName]
+    end
+    return nil, nil
+  else
+    return "file", soundKey
+  end
+end
+
+function ClassHUD:PlayTrackedBuffSound(buffID)
+  if not self:AreTrackedBuffSoundAlertsEnabled() then
+    return false
+  end
+
+  local soundKey = self:GetTrackedBuffSoundKey(buffID)
+  if not soundKey or soundKey == "none" then
+    return false
+  end
+
+  local kind, payload = ResolveSoundKey(self, soundKey)
+  if not kind or not payload then
+    return false
+  end
+
+  if kind == "kit" then
+    PlaySound(payload, "Master")
+    return true
+  elseif kind == "file" then
+    PlaySoundFile(payload, "Master")
+    return true
+  end
+
+  return false
+end
+
+function ClassHUD:GetTrackedSpellForBuff(buffID, class, specID)
+  if not buffID then return nil end
+
+  if self.trackedBuffToSpell and self.trackedBuffToSpell[buffID] then
+    return self.trackedBuffToSpell[buffID]
+  end
+
+  if not (self and self.db and self.db.profile) then
+    return nil
+  end
+
+  local playerClass, playerSpec = self:GetPlayerClassSpec()
+  class = class or playerClass
+  specID = specID or playerSpec
+
+  local tracking = self.db.profile.tracking
+  local buffs = tracking and tracking.buffs
+  local links = buffs and buffs.links
+  local classLinks = links and links[class]
+  local specLinks = classLinks and classLinks[specID]
+  if specLinks and specLinks[buffID] then
+    return specLinks[buffID]
+  end
+
+  return nil
+end
+
 function ClassHUD:RequestUpdate(kind)
   kind = kind or "any"
   if not self._pending then
@@ -681,6 +813,11 @@ local defaults = {
       buffs = {
         links   = {},
         tracked = {},
+        pandemicHighlight = true,
+        soundAlerts = {
+          enabled = false,
+          perSpell = {},
+        },
       },
     },
     cooldowns     = {
