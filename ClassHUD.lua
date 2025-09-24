@@ -145,6 +145,9 @@ ClassHUD._auraWatchersByUnit = ClassHUD._auraWatchersByUnit or {
 }
 ClassHUD._pendingAuraFrames = ClassHUD._pendingAuraFrames or {}
 ClassHUD._auraFlushTimer = ClassHUD._auraFlushTimer or nil
+ClassHUD._specRefreshTimer = ClassHUD._specRefreshTimer or nil
+ClassHUD._specRefreshInCombat = ClassHUD._specRefreshInCombat or false
+ClassHUD._pendingSpecRefreshReason = ClassHUD._pendingSpecRefreshReason or nil
 
 function ClassHUD:RequestUpdate(kind)
   kind = kind or "any"
@@ -230,6 +233,63 @@ function ClassHUD:FlushUpdates()
   pending.cooldown = false
   pending.resource = false
   pending.target = false
+end
+
+function ClassHUD:QueueSpecRefresh(reason)
+  self._pendingSpecRefreshReason = reason or self._pendingSpecRefreshReason or "talent"
+
+  if InCombatLockdown and InCombatLockdown() then
+    self._specRefreshInCombat = true
+    return
+  end
+
+  if self._specRefreshTimer then
+    self:CancelTimer(self._specRefreshTimer)
+  end
+
+  self._specRefreshTimer = self:ScheduleTimer("ExecuteSpecRefresh", 0.15)
+end
+
+function ClassHUD:ExecuteSpecRefresh()
+  if self._specRefreshTimer then
+    self:CancelTimer(self._specRefreshTimer)
+    self._specRefreshTimer = nil
+  end
+
+  if InCombatLockdown and InCombatLockdown() then
+    self._specRefreshInCombat = true
+    return
+  end
+
+  self._specRefreshInCombat = false
+
+  self:EnsureActiveSpecProfile()
+  self:TrySeedPendingProfile()
+  self:UpdateCDMSnapshot()
+
+  if self.BuildFramesForSpec then
+    self:BuildFramesForSpec()
+  end
+
+  if self.UpdateAllFrames then
+    self:UpdateAllFrames()
+  end
+
+  if self.RefreshSpellLoadoutVisibility then
+    self:RefreshSpellLoadoutVisibility()
+  end
+
+  if self.RefreshAllTotems then
+    self:RefreshAllTotems()
+  end
+
+  if self.EvaluateClassBarVisibility then
+    self:EvaluateClassBarVisibility()
+  elseif self.UpdateSpecialPower then
+    self:UpdateSpecialPower()
+  end
+
+  self:RefreshRegisteredOptions()
 end
 
 local function ExtractSpellIDFromAuraPayload(auraInfo)
@@ -1000,7 +1060,11 @@ function ClassHUD:FullUpdate()
   if self.Layout then self:Layout() end
   if self.UpdateHP then self:UpdateHP() end
   if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
-  if self.UpdateSpecialPower then self:UpdateSpecialPower() end
+  if self.EvaluateClassBarVisibility then
+    self:EvaluateClassBarVisibility()
+  elseif self.UpdateSpecialPower then
+    self:UpdateSpecialPower()
+  end
 end
 
 ---Rebuilds the Cooldown Viewer snapshot for the current class/spec.
@@ -1174,6 +1238,8 @@ for _, ev in pairs({
   "PLAYER_ENTERING_WORLD",
   "PLAYER_SPECIALIZATION_CHANGED",
   "PLAYER_TALENT_UPDATE",
+  "TRAIT_CONFIG_UPDATED",
+  "ACTIVE_TALENT_GROUP_CHANGED",
 
   -- Health
   "UNIT_HEALTH", "UNIT_MAXHEALTH",
@@ -1205,6 +1271,10 @@ for _, ev in pairs({
 end
 
 eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
+  if event == "PLAYER_REGEN_ENABLED" and ClassHUD._specRefreshInCombat then
+    ClassHUD:ExecuteSpecRefresh()
+  end
+
   -- Full refresh after world load
   if event == "PLAYER_ENTERING_WORLD" then
     ClassHUD:EnsureActiveSpecProfile()
@@ -1217,6 +1287,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
     if ClassHUD.RefreshSpellLoadoutVisibility then ClassHUD:RefreshSpellLoadoutVisibility() end
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
+    if ClassHUD.EvaluateClassBarVisibility then ClassHUD:EvaluateClassBarVisibility() end
     return
   end
 
@@ -1225,20 +1296,20 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     ClassHUD:EnsureActiveSpecProfile()
     if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
-    ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
-    if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
-    ClassHUD:RefreshRegisteredOptions()
-    ClassHUD:UpdateAllFrames()
-    if ClassHUD.RefreshSpellLoadoutVisibility then ClassHUD:RefreshSpellLoadoutVisibility() end
-    if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
+    if ClassHUD.EvaluateClassBarVisibility then
+      ClassHUD:EvaluateClassBarVisibility()
+    elseif ClassHUD.UpdateSpecialPower then
+      ClassHUD:UpdateSpecialPower()
+    end
+    ClassHUD:QueueSpecRefresh("spec-change")
     return
   end
 
-  if event == "PLAYER_TALENT_UPDATE" then
-    if ClassHUD.RefreshSpellLoadoutVisibility then ClassHUD:RefreshSpellLoadoutVisibility() end
-    if ClassHUD.UpdateAllSpellFrames then ClassHUD:UpdateAllSpellFrames() end
+  if event == "PLAYER_TALENT_UPDATE" or event == "TRAIT_CONFIG_UPDATED" or event == "ACTIVE_TALENT_GROUP_CHANGED" then
+    if unit and unit ~= "player" then return end
+    ClassHUD:QueueSpecRefresh(event)
+    if ClassHUD.EvaluateClassBarVisibility then ClassHUD:EvaluateClassBarVisibility() end
     return
   end
 
@@ -1262,7 +1333,11 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
 
   if event == "UPDATE_SHAPESHIFT_FORM" then
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if ClassHUD.EvaluateClassBarVisibility then
+      ClassHUD:EvaluateClassBarVisibility()
+    elseif ClassHUD.UpdateSpecialPower then
+      ClassHUD:UpdateSpecialPower()
+    end
     if ClassHUD.UpdateAllSpellFrames then
       ClassHUD:RequestUpdate("resource")
     end
@@ -1519,10 +1594,17 @@ SlashCmdList.CHUDMAP = function()
     return
   end
   print("|cff00ff88ClassHUD|r Auto-mapping (buff → spell):")
-  for buffID, spellID in pairs(ClassHUD.trackedBuffToSpell) do
+  for buffID, mapped in pairs(ClassHUD.trackedBuffToSpell) do
     local bName = C_Spell.GetSpellName(buffID) or ("buff " .. buffID)
-    local sName = C_Spell.GetSpellName(spellID) or ("spell " .. spellID)
-    print(string.format("  %s (%d)  →  %s (%d)", bName, buffID, sName, spellID))
+    if type(mapped) == "table" then
+      for spellID in pairs(mapped) do
+        local sName = C_Spell.GetSpellName(spellID) or ("spell " .. spellID)
+        print(string.format("  %s (%d)  →  %s (%d)", bName, buffID, sName, spellID))
+      end
+    elseif mapped then
+      local sName = C_Spell.GetSpellName(mapped) or ("spell " .. mapped)
+      print(string.format("  %s (%d)  →  %s (%d)", bName, buffID, sName, mapped))
+    end
   end
 end
 

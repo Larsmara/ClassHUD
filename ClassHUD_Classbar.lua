@@ -4,38 +4,6 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local UI = ClassHUD.UI
 UI.attachments = UI.attachments or {}
 
-local function GetSpecSettings(class, specID)
-  local db = ClassHUD.db
-if not db or not db.profile or not db.profile.layout or not db.profile.layout.classbars then return nil end
-local perClass = db.profile.layout.classbars[class]
-  if not perClass then return nil end
-  return perClass[specID]
-end
-
-local function IsComboEnabled(class, specID)
-  local settings = GetSpecSettings(class, specID)
-  if settings and settings.combo ~= nil then
-    return settings.combo
-  end
-  if class == "DRUID" then
-    -- Default to disabled for specs without explicit opt-in
-    return false
-  end
-  return true
-end
-
-local MOONKIN_FORM_ID = _G.MOONKIN_FORM or 31
-local INCARNATION_MOONKIN_FORM_ID = _G.INCARNATION_CHOSEN_OF_ELUNE or MOONKIN_FORM_ID
-
-local function IsMoonkinForm()
-  if not GetShapeshiftFormID then return false end
-  local formID = GetShapeshiftFormID()
-  if not formID or formID == 0 then return false end
-  return formID == MOONKIN_FORM_ID or formID == INCARNATION_MOONKIN_FORM_ID
-end
-
--- ========= Advanced Class Resource System =========
-
 -- Map classes → special resource power types
 local CLASS_POWER_ID = {
   MONK        = Enum.PowerType.Chi,
@@ -69,6 +37,64 @@ local RESOURCE_BASE_COLORS = {
   [Enum.PowerType.ArcaneCharges] = { 0.25, 0.60, 1.00 },
   [Enum.PowerType.Essence]       = { 0.50, 1.00, 0.90 },
 }
+
+local specID_BALANCE       = 102
+local ECLIPSE_SOLAR        = 48517
+local ECLIPSE_LUNAR        = 48518
+local LUNAR_CALLING_TALENT = 429523
+
+local function GetSpecSettings(class, specID)
+  local db = ClassHUD.db
+  if not db or not db.profile or not db.profile.layout or not db.profile.layout.classbars then
+    return nil
+  end
+
+  local perClass = db.profile.layout.classbars[class]
+  if not perClass then return nil end
+  return perClass[specID]
+end
+
+local function IsComboEnabled(class, specID)
+  local settings = GetSpecSettings(class, specID)
+  if settings and settings.combo ~= nil then
+    return settings.combo
+  end
+  if class == "DRUID" then
+    -- Default to disabled for specs without explicit opt-in
+    return false
+  end
+  return true
+end
+
+function ClassHUD:HasClassBarForCurrentSpec()
+  local class, specID = self:GetPlayerClassSpec()
+  if not class or not specID then
+    return false
+  end
+
+  if class == "DRUID" then
+    return specID ~= 105
+  end
+
+  local required = REQUIRED_SPEC[class]
+  if required and required ~= specID then
+    return false
+  end
+
+  return CLASS_POWER_ID[class] ~= nil
+end
+
+local MOONKIN_FORM_ID = _G.MOONKIN_FORM or 31
+local INCARNATION_MOONKIN_FORM_ID = _G.INCARNATION_CHOSEN_OF_ELUNE or MOONKIN_FORM_ID
+
+local function IsMoonkinForm()
+  if not GetShapeshiftFormID then return false end
+  local formID = GetShapeshiftFormID()
+  if not formID or formID == 0 then return false end
+  return formID == MOONKIN_FORM_ID or formID == INCARNATION_MOONKIN_FORM_ID
+end
+
+-- ========= Advanced Class Resource System =========
 
 -- DK rune colors by spec
 local function RuneSpecColor(specID)
@@ -310,12 +336,6 @@ function ClassHUD:UpdateRunes()
   end
   HideAllSegments(max + 1)
 end
-
--- ========= BALANCE DRUID: ECLIPSE =========
-local specID_BALANCE       = 102
-local ECLIPSE_SOLAR        = 48517
-local ECLIPSE_LUNAR        = 48518
-local LUNAR_CALLING_TALENT = 429523
 
 -- Wrath / Starfire IDs (kan variere, vi tar begge)
 local WRATH_IDS            = { [5176] = true, [190984] = true }
@@ -584,8 +604,14 @@ function DeactivateEclipseBar()
 end
 
 function ClassHUD:ShouldUseEclipseBar()
-  local db = self.db and self.db.profile
-  if not db or not db.show or not db.show.power then return false end
+  local profile = self.db and self.db.profile
+  if not profile then return false end
+
+  local layout = profile.layout or {}
+  local showSettings = layout.show or {}
+  if showSettings.power == false then
+    return false
+  end
 
   local _, class = UnitClass("player")
   if class ~= "DRUID" then return false end
@@ -595,9 +621,39 @@ function ClassHUD:ShouldUseEclipseBar()
   if specID ~= specID_BALANCE then return false end
 
   local settings = GetSpecSettings(class, specID)
-  if not (settings and settings.eclipse) then return false end
+  local enabled = true
+  if settings and settings.eclipse ~= nil then
+    enabled = settings.eclipse
+  end
+  if not enabled then return false end
 
   return IsMoonkinForm()
+end
+
+function ClassHUD:EvaluateClassBarVisibility()
+  local profile = self.db and self.db.profile
+  if not profile then return end
+
+  local layout = profile.layout
+  if not layout then
+    layout = {}
+    profile.layout = layout
+  end
+  layout.show = layout.show or {}
+
+  if layout.show.power == false then
+    if self.UpdateSpecialPower then self:UpdateSpecialPower() end
+    return
+  end
+
+  if not self:HasClassBarForCurrentSpec() then
+    if self.UpdateSpecialPower then self:UpdateSpecialPower() end
+    return
+  end
+
+  if self.UpdateSpecialPower then
+    self:UpdateSpecialPower()
+  end
 end
 
 function ClassHUD:EnsureEclipseBar()

@@ -124,6 +124,236 @@ local function EvaluateSpellFrameEligibility(frame)
   return false
 end
 
+local function NormalizeSpellList(payload, reuse)
+  local list = reuse
+  if list then
+    wipe(list)
+  else
+    list = {}
+  end
+
+  local seen = {}
+
+  local function push(id)
+    if type(id) == "number" and id > 0 and not seen[id] then
+      seen[id] = true
+      list[#list + 1] = id
+    end
+  end
+
+  if type(payload) == "number" then
+    push(tonumber(payload))
+  elseif type(payload) == "table" then
+    for i = 1, #payload do
+      push(tonumber(payload[i]) or payload[i])
+    end
+  end
+
+  if #list == 0 then
+    if reuse then wipe(list) end
+    return nil
+  end
+
+  return list
+end
+
+local function NormalizeManualBuffLinksTable(tbl)
+  if type(tbl) ~= "table" then
+    return {}
+  end
+
+  local sanitized = {}
+
+  for key, payload in pairs(tbl) do
+    local buffID = tonumber(key) or key
+    if type(buffID) == "number" then
+      local list = NormalizeSpellList(payload)
+      if list then
+        sanitized[buffID] = list
+      end
+    end
+  end
+
+  wipe(tbl)
+  for buffID, list in pairs(sanitized) do
+    tbl[buffID] = list
+  end
+
+  return tbl
+end
+
+function ClassHUD:GetManualBuffLinksForSpec(class, specID, create)
+  if not (self.db and self.db.profile) then return nil end
+
+  class = class or select(1, self:GetPlayerClassSpec())
+  specID = specID or select(2, self:GetPlayerClassSpec())
+
+  if not class or not specID then
+    return nil
+  end
+
+  self.db.profile.tracking = self.db.profile.tracking or {}
+  local tracking = self.db.profile.tracking
+  tracking.buffs = tracking.buffs or {}
+  local buffs = tracking.buffs
+  buffs.links = buffs.links or {}
+
+  buffs.links[class] = buffs.links[class] or {}
+  local perClass = buffs.links[class]
+
+  local specLinks = perClass[specID]
+  if not specLinks then
+    if not create then
+      return nil
+    end
+    specLinks = {}
+    perClass[specID] = specLinks
+  end
+
+  return NormalizeManualBuffLinksTable(specLinks)
+end
+
+local function EnsureManualLinkList(links, buffID, create)
+  buffID = tonumber(buffID) or buffID
+  if type(buffID) ~= "number" then
+    return nil, buffID
+  end
+
+  local list = links and links[buffID]
+  if type(list) ~= "table" then
+    local normalized = NormalizeSpellList(list)
+    if normalized then
+      links[buffID] = normalized
+      list = normalized
+    elseif create then
+      list = {}
+      links[buffID] = list
+    else
+      if list ~= nil then
+        links[buffID] = nil
+      end
+      return nil, buffID
+    end
+  end
+
+  return list, buffID
+end
+
+function ClassHUD:IsBuffLinkedToSpell(buffID, spellID)
+  buffID = tonumber(buffID) or buffID
+  spellID = tonumber(spellID) or spellID
+
+  if type(buffID) ~= "number" or type(spellID) ~= "number" then
+    return false
+  end
+
+  local class, specID = self:GetPlayerClassSpec()
+  local links = self:GetManualBuffLinksForSpec(class, specID, false)
+  if not links then return false end
+
+  local list = EnsureManualLinkList(links, buffID, false)
+  if not list then return false end
+
+  for i = 1, #list do
+    if list[i] == spellID then
+      return true
+    end
+  end
+
+  return false
+end
+
+function ClassHUD:GetLinkedBuffIDsForSpell(spellID)
+  spellID = tonumber(spellID) or spellID
+  if type(spellID) ~= "number" then
+    return {}
+  end
+
+  local class, specID = self:GetPlayerClassSpec()
+  local links = self:GetManualBuffLinksForSpec(class, specID, false) or {}
+  local result = {}
+
+  for buffID, list in pairs(links) do
+    if type(list) ~= "table" then
+      list = NormalizeSpellList(list)
+      if list then
+        links[buffID] = list
+      else
+        links[buffID] = nil
+      end
+    end
+
+    if type(list) == "table" then
+      for i = 1, #list do
+        if list[i] == spellID then
+          result[#result + 1] = buffID
+          break
+        end
+      end
+    end
+  end
+
+  table.sort(result)
+  return result
+end
+
+function ClassHUD:AddManualBuffLink(class, specID, buffID, spellID)
+  buffID = tonumber(buffID) or buffID
+  spellID = tonumber(spellID) or spellID
+
+  if type(buffID) ~= "number" or type(spellID) ~= "number" then
+    return false
+  end
+
+  local links = self:GetManualBuffLinksForSpec(class, specID, true)
+  local list = EnsureManualLinkList(links, buffID, true)
+  if not list then
+    return false
+  end
+
+  for i = 1, #list do
+    if list[i] == spellID then
+      return false
+    end
+  end
+
+  list[#list + 1] = spellID
+  return true
+end
+
+function ClassHUD:RemoveManualBuffLink(class, specID, buffID, spellID)
+  buffID = tonumber(buffID) or buffID
+  spellID = tonumber(spellID) or spellID
+
+  if type(buffID) ~= "number" or type(spellID) ~= "number" then
+    return false
+  end
+
+  local links = self:GetManualBuffLinksForSpec(class, specID, false)
+  if not links then return false end
+
+  local list = EnsureManualLinkList(links, buffID, false)
+  if not list then return false end
+
+  local removed = false
+  for index = #list, 1, -1 do
+    if list[index] == spellID then
+      table.remove(list, index)
+      removed = true
+    end
+  end
+
+  if removed then
+    if #list == 0 then
+      links[buffID] = nil
+    else
+      links[buffID] = list
+    end
+  end
+
+  return removed
+end
+
 local bit_band = bit and bit.band or (bit32 and bit32.band)
 local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
 
@@ -560,24 +790,35 @@ local function UpdateGlow(frame, aura, sid, data)
   -- 2) Manuelle buffLinks kan holde glow (som originalt "keepGlow")
   if allowExtraGlowLogic and not shouldGlow then
     local class, specID = ClassHUD:GetPlayerClassSpec()
-    local tracking = ClassHUD.db.profile.tracking or {}
-    local buffLinks = tracking.buffs and tracking.buffs.links or {}
-    local links = (buffLinks[class] and buffLinks[class][specID]) or {}
-    -- links: [buffID] = linkedSpellID
-    for buffID, linkedSpellID in pairs(links) do
-      if linkedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
-        shouldGlow = true
-        break
+    local manualLinks = ClassHUD:GetManualBuffLinksForSpec(class, specID, false)
+    if manualLinks then
+      for buffID, list in pairs(manualLinks) do
+        if type(list) == "table" then
+          for i = 1, #list do
+            if list[i] == sid and ClassHUD:GetAuraForSpell(buffID) then
+              shouldGlow = true
+              break
+            end
+          end
+        end
+        if shouldGlow then break end
       end
     end
   end
 
   -- 3) Auto-mapping fallback (som i originalens "keepGlow")
   if allowExtraGlowLogic and not shouldGlow and ClassHUD.trackedBuffToSpell then
-    for buffID, mappedSpellID in pairs(ClassHUD.trackedBuffToSpell) do
-      if mappedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
-        shouldGlow = true
-        break
+    for buffID, mapped in pairs(ClassHUD.trackedBuffToSpell) do
+      if mapped then
+        if type(mapped) == "table" then
+          if mapped[sid] and ClassHUD:GetAuraForSpell(buffID) then
+            shouldGlow = true
+            break
+          end
+        elseif mapped == sid and ClassHUD:GetAuraForSpell(buffID) then
+          shouldGlow = true
+          break
+        end
       end
     end
   end
@@ -2012,11 +2253,12 @@ function ClassHUD:RebuildTrackedBuffFrames()
     return
   end
 
-  local tracking = ClassHUD.db.profile.tracking or {}
-  local linkRoot = tracking.buffs and tracking.buffs.links or {}
-  local links = (linkRoot[class] and linkRoot[class][specID]) or {}
+  local links = self:GetManualBuffLinksForSpec(class, specID, false)
+  if not links then
+    return
+  end
 
-  for buffID, spellID in pairs(links) do
+  for buffID in pairs(links) do
     local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
     if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
       aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
@@ -2233,9 +2475,7 @@ function ClassHUD:BuildFramesForSpec()
   -- Auto-map tracked buffs to spells using snapshot descriptions
   self.db.profile.tracking = self.db.profile.tracking or {}
   self.db.profile.tracking.buffs = self.db.profile.tracking.buffs or {}
-  self.db.profile.tracking.buffs.links = self.db.profile.tracking.buffs.links or {}
-  self.db.profile.tracking.buffs.links[class] = self.db.profile.tracking.buffs.links[class] or {}
-  self.db.profile.tracking.buffs.links[class][specID] = self.db.profile.tracking.buffs.links[class][specID] or {}
+  local manualLinks = self:GetManualBuffLinksForSpec(class, specID, true)
 
   for buffID, entry in pairs(snapshot) do
     if entry.categories and entry.categories.buff then
@@ -2245,11 +2485,15 @@ function ClassHUD:BuildFramesForSpec()
           if frame and frame.snapshotEntry then
             local spellName = C_Spell.GetSpellName(spellID)
             if spellName and string.find(desc, spellName, 1, true) then
-              self.trackedBuffToSpell[buffID] = spellID
+              local bucket = self.trackedBuffToSpell[buffID]
+              if not bucket then
+                bucket = {}
+                self.trackedBuffToSpell[buffID] = bucket
+              end
+              bucket[spellID] = true
 
-              local links = self.db.profile.tracking.buffs.links[class][specID]
-              if not links[buffID] then
-                links[buffID] = spellID
+              if manualLinks and not manualLinks[buffID] then
+                self:AddManualBuffLink(class, specID, buffID, spellID)
               end
               break
             end

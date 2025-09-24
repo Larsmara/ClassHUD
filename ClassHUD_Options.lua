@@ -94,15 +94,12 @@ local function EnsureBuffTracking(addon, class, specID)
   local buffs = addon.db.profile.tracking.buffs
 
   buffs.tracked = buffs.tracked or {}
-  buffs.links = buffs.links or {}
-
   buffs.tracked[class] = buffs.tracked[class] or {}
   buffs.tracked[class][specID] = buffs.tracked[class][specID] or {}
 
-  buffs.links[class] = buffs.links[class] or {}
-  buffs.links[class][specID] = buffs.links[class][specID] or {}
+  local links = addon:GetManualBuffLinksForSpec(class, specID, true) or {}
 
-  return buffs.tracked[class][specID], buffs.links[class][specID]
+  return buffs.tracked[class][specID], links
 end
 
 local function EnsureTrackedBuffOrder(addon, class, specID)
@@ -378,12 +375,7 @@ local function BuildTopBarSpellsEditor(addon, container)
     local _, linkTable = EnsureBuffTracking(addon, class, specID)
 
     local linkedArgs, idx = {}, 1
-    local buffIDs = {}
-    for buffID, linkedSpellID in pairs(linkTable) do
-      if linkedSpellID == spellID then
-        table.insert(buffIDs, buffID)
-      end
-    end
+    local buffIDs = addon:GetLinkedBuffIDsForSpell(spellID) or {}
     table.sort(buffIDs, function(a, b)
       return (tonumber(a) or a) < (tonumber(b) or b)
     end)
@@ -397,7 +389,7 @@ local function BuildTopBarSpellsEditor(addon, container)
         desc  = "Click to remove this link",
         order = idx,
         func  = function()
-          linkTable[buffID] = nil
+          addon:RemoveManualBuffLink(class, specID, buffID, spellID)
           BuildTopBarSpellsEditor(addon, container)
           addon:BuildFramesForSpec()
           local ACR = LibStub("AceConfigRegistry-3.0", true)
@@ -424,7 +416,7 @@ local function BuildTopBarSpellsEditor(addon, container)
           get   = function() return "" end,
           set   = function(_, val)
             local buffID = tonumber(val); if not buffID then return end
-            linkTable[buffID] = spellID
+            addon:AddManualBuffLink(class, specID, buffID, spellID)
             BuildTopBarSpellsEditor(addon, container)
             addon:BuildFramesForSpec()
             local ACR = LibStub("AceConfigRegistry-3.0", true)
@@ -518,11 +510,15 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
     local icon = iconID and ("|T" .. iconID .. ":16|t ") or ""
 
     local linkedBuffs = {}
-    for buffID, linkedSpellID in pairs(linkTable) do
-      local resolved = tonumber(linkedSpellID) or linkedSpellID
-      if resolved == id then
-        local buffInfo = C_Spell.GetSpellInfo(buffID)
-        linkedBuffs[#linkedBuffs + 1] = (buffInfo and buffInfo.name) or ("Buff " .. buffID)
+    for buffID, spellList in pairs(linkTable) do
+      if type(spellList) == "table" then
+        for i = 1, #spellList do
+          if spellList[i] == id then
+            local buffInfo = C_Spell.GetSpellInfo(buffID)
+            linkedBuffs[#linkedBuffs + 1] = (buffInfo and buffInfo.name) or ("Buff " .. buffID)
+            break
+          end
+        end
       end
     end
 
@@ -780,7 +776,16 @@ local function BuildBuffLinkArgs(addon, container)
   local _, links = EnsureBuffTracking(addon, class, specID)
   local order = 1
 
-  if not next(links) then
+  local buffIDs = {}
+  for buffID, spellList in pairs(links) do
+    if type(spellList) == "table" and #spellList > 0 then
+      buffIDs[#buffIDs + 1] = buffID
+    end
+  end
+
+  table.sort(buffIDs, function(a, b) return (tonumber(a) or a) < (tonumber(b) or b) end)
+
+  if #buffIDs == 0 then
     container.empty = {
       type = "description",
       name =
@@ -790,26 +795,79 @@ local function BuildBuffLinkArgs(addon, container)
     return
   end
 
-  local sorted = {}
-  for buffID, spellID in pairs(links) do
-    table.insert(sorted, { buffID = buffID, spellID = spellID })
-  end
-  table.sort(sorted, function(a, b) return a.buffID < b.buffID end)
-
-  for _, map in ipairs(sorted) do
-    local buffInfo = C_Spell.GetSpellInfo(map.buffID)
-    local spellInfo = C_Spell.GetSpellInfo(map.spellID)
-    local name = string.format("|T%d:16|t %s (%d) → |T%d:16|t %s (%d)",
+  for _, buffID in ipairs(buffIDs) do
+    local spells = links[buffID]
+    local buffInfo = C_Spell.GetSpellInfo(buffID)
+    local header = string.format("|T%d:16|t %s (%d)",
       buffInfo and buffInfo.iconID or 134400,
       buffInfo and buffInfo.name or "Buff",
-      map.buffID,
-      spellInfo and spellInfo.iconID or 134400,
-      spellInfo and spellInfo.name or "Spell",
-      map.spellID)
+      buffID)
 
-    container["link" .. map.buffID] = {
+    local sortedSpells = {}
+    for i = 1, #spells do
+      sortedSpells[i] = spells[i]
+    end
+    table.sort(sortedSpells, function(a, b) return (tonumber(a) or a) < (tonumber(b) or b) end)
+
+    local spellsArgs = {}
+    if #sortedSpells == 0 then
+      spellsArgs.empty = {
+        type = "description",
+        name = "No linked spells yet.",
+        order = 1,
+      }
+    else
+      for idx, spellID in ipairs(sortedSpells) do
+        local currentSpell = spellID
+        local spellInfo = C_Spell.GetSpellInfo(currentSpell)
+        local label = string.format("|T%d:16|t %s (%d)",
+          spellInfo and spellInfo.iconID or 134400,
+          spellInfo and spellInfo.name or "Spell",
+          currentSpell)
+
+        spellsArgs["spell" .. idx] = {
+          type = "group",
+          name = label,
+          inline = true,
+          order = idx,
+          args = {
+            spell = {
+              type = "input",
+              name = "Spell ID",
+              width = "half",
+              order = 1,
+              get = function() return tostring(currentSpell) end,
+              set = function(_, value)
+                local newID = tonumber(value)
+                if newID and newID ~= currentSpell then
+                  addon:RemoveManualBuffLink(class, specID, buffID, currentSpell)
+                  addon:AddManualBuffLink(class, specID, buffID, newID)
+                  addon:BuildFramesForSpec()
+                  BuildBuffLinkArgs(addon, container)
+                  NotifyOptionsChanged()
+                end
+              end,
+            },
+            remove = {
+              type = "execute",
+              name = "Remove",
+              confirm = true,
+              order = 2,
+              func = function()
+                addon:RemoveManualBuffLink(class, specID, buffID, currentSpell)
+                addon:BuildFramesForSpec()
+                BuildBuffLinkArgs(addon, container)
+                NotifyOptionsChanged()
+              end,
+            },
+          },
+        }
+      end
+    end
+
+    container["link" .. buffID] = {
       type = "group",
-      name = name,
+      name = header,
       inline = true,
       order = order,
       args = {
@@ -818,42 +876,53 @@ local function BuildBuffLinkArgs(addon, container)
           name = "Buff ID",
           width = "half",
           order = 1,
-          get = function() return tostring(map.buffID) end,
+          get = function() return tostring(buffID) end,
           set = function(_, value)
             local newID = tonumber(value)
-            if newID and newID ~= map.buffID then
-              local current = links[map.buffID]
-              links[map.buffID] = nil
-              links[newID] = current
+            if newID and newID ~= buffID then
+              local copy = {}
+              for i = 1, #spells do
+                copy[#copy + 1] = spells[i]
+              end
+              links[buffID] = nil
+              for i = 1, #copy do
+                addon:AddManualBuffLink(class, specID, newID, copy[i])
+              end
               addon:BuildFramesForSpec()
               BuildBuffLinkArgs(addon, container)
               NotifyOptionsChanged()
             end
           end,
         },
-        spell = {
+        addSpell = {
           type = "input",
-          name = "Spell ID",
+          name = "Add Spell ID",
           width = "half",
           order = 2,
-          get = function() return tostring(map.spellID) end,
+          get = function() return "" end,
           set = function(_, value)
             local newID = tonumber(value)
-            if newID then
-              links[map.buffID] = newID
-              addon:BuildFramesForSpec()
-              BuildBuffLinkArgs(addon, container)
-              NotifyOptionsChanged()
-            end
+            if not newID then return end
+            addon:AddManualBuffLink(class, specID, buffID, newID)
+            addon:BuildFramesForSpec()
+            BuildBuffLinkArgs(addon, container)
+            NotifyOptionsChanged()
           end,
+        },
+        spells = {
+          type = "group",
+          name = "Linked Spells",
+          inline = true,
+          order = 3,
+          args = spellsArgs,
         },
         remove = {
           type = "execute",
-          name = "Remove",
+          name = "Remove Buff",
           confirm = true,
-          order = 3,
+          order = 99,
           func = function()
-            links[map.buffID] = nil
+            links[buffID] = nil
             addon:BuildFramesForSpec()
             BuildBuffLinkArgs(addon, container)
             NotifyOptionsChanged()
@@ -872,6 +941,27 @@ local function BuildBarOrderEditor(addon, container)
   local layout = addon.db.profile.layout or {}
   addon.db.profile.layout = layout
   layout.barOrder = layout.barOrder or { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+  layout.classbars = layout.classbars or {}
+
+  if db.profile.classbars then
+    for classKey, specMap in pairs(db.profile.classbars) do
+      layout.classbars[classKey] = layout.classbars[classKey] or {}
+      for specKey, value in pairs(specMap) do
+        if layout.classbars[classKey][specKey] == nil then
+          if type(value) == "table" then
+            local copy = {}
+            for k, v in pairs(value) do
+              copy[k] = v
+            end
+            layout.classbars[classKey][specKey] = copy
+          else
+            layout.classbars[classKey][specKey] = value
+          end
+        end
+      end
+    end
+    db.profile.classbars = nil
+  end
   local barOrder = layout.barOrder
 
   local LABELS = {
@@ -1497,6 +1587,9 @@ function ClassHUD_BuildOptions(addon)
         name = "Class Bar",
         order = 3,
         hidden = function()
+          if addon.HasClassBarForCurrentSpec then
+            return not addon:HasClassBarForCurrentSpec()
+          end
           return not PlayerHasClassbar(addon)
         end,
         args = {
@@ -1583,7 +1676,7 @@ function ClassHUD_BuildOptions(addon)
                 name = "Enable Eclipse Bar",
                 order = 2,
                 get = function()
-                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[102]
                   if spec and spec.eclipse ~= nil then
                     return spec.eclipse
@@ -1591,10 +1684,9 @@ function ClassHUD_BuildOptions(addon)
                   return true
                 end,
                 set = function(_, val)
-                  db.profile.classbars = db.profile.classbars or {}
-                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
-                  db.profile.classbars.DRUID[102] = db.profile.classbars.DRUID[102] or {}
-                  db.profile.classbars.DRUID[102].eclipse = val
+                  layout.classbars.DRUID = layout.classbars.DRUID or {}
+                  layout.classbars.DRUID[102] = layout.classbars.DRUID[102] or {}
+                  layout.classbars.DRUID[102].eclipse = val
                   addon:FullUpdate()
                 end,
               },
@@ -1603,15 +1695,14 @@ function ClassHUD_BuildOptions(addon)
                 name = "Enable Combo Points (Balance)",
                 order = 3,
                 get = function()
-                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[102]
                   return spec and spec.combo or false
                 end,
                 set = function(_, val)
-                  db.profile.classbars = db.profile.classbars or {}
-                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
-                  db.profile.classbars.DRUID[102] = db.profile.classbars.DRUID[102] or {}
-                  db.profile.classbars.DRUID[102].combo = val
+                  layout.classbars.DRUID = layout.classbars.DRUID or {}
+                  layout.classbars.DRUID[102] = layout.classbars.DRUID[102] or {}
+                  layout.classbars.DRUID[102].combo = val
                   addon:FullUpdate()
                 end,
               },
@@ -1625,7 +1716,7 @@ function ClassHUD_BuildOptions(addon)
                 name = "Enable Combo Points (Feral)",
                 order = 5,
                 get = function()
-                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[103]
                   if spec and spec.combo ~= nil then
                     return spec.combo
@@ -1633,10 +1724,9 @@ function ClassHUD_BuildOptions(addon)
                   return true
                 end,
                 set = function(_, val)
-                  db.profile.classbars = db.profile.classbars or {}
-                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
-                  db.profile.classbars.DRUID[103] = db.profile.classbars.DRUID[103] or {}
-                  db.profile.classbars.DRUID[103].combo = val
+                  layout.classbars.DRUID = layout.classbars.DRUID or {}
+                  layout.classbars.DRUID[103] = layout.classbars.DRUID[103] or {}
+                  layout.classbars.DRUID[103].combo = val
                   addon:FullUpdate()
                 end,
               },
@@ -1650,7 +1740,7 @@ function ClassHUD_BuildOptions(addon)
                 name = "Enable Combo Points (Guardian)",
                 order = 7,
                 get = function()
-                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[104]
                   if spec and spec.combo ~= nil then
                     return spec.combo
@@ -1658,10 +1748,9 @@ function ClassHUD_BuildOptions(addon)
                   return true
                 end,
                 set = function(_, val)
-                  db.profile.classbars = db.profile.classbars or {}
-                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
-                  db.profile.classbars.DRUID[104] = db.profile.classbars.DRUID[104] or {}
-                  db.profile.classbars.DRUID[104].combo = val
+                  layout.classbars.DRUID = layout.classbars.DRUID or {}
+                  layout.classbars.DRUID[104] = layout.classbars.DRUID[104] or {}
+                  layout.classbars.DRUID[104].combo = val
                   addon:FullUpdate()
                 end,
               },
@@ -1675,15 +1764,14 @@ function ClassHUD_BuildOptions(addon)
                 name = "Enable Combo Points (Restoration)",
                 order = 9,
                 get = function()
-                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[105]
                   return spec and spec.combo or false
                 end,
                 set = function(_, val)
-                  db.profile.classbars = db.profile.classbars or {}
-                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
-                  db.profile.classbars.DRUID[105] = db.profile.classbars.DRUID[105] or {}
-                  db.profile.classbars.DRUID[105].combo = val
+                  layout.classbars.DRUID = layout.classbars.DRUID or {}
+                  layout.classbars.DRUID[105] = layout.classbars.DRUID[105] or {}
+                  layout.classbars.DRUID[105].combo = val
                   addon:FullUpdate()
                 end,
               },
