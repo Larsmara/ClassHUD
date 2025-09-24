@@ -448,7 +448,9 @@ local function UpdateGlow(frame, aura, sid, data)
   -- 2) Manuelle buffLinks kan holde glow (som originalt "keepGlow")
   if allowExtraGlowLogic and not shouldGlow then
     local class, specID = ClassHUD:GetPlayerClassSpec()
-    local links = (ClassHUD.db.profile.buffLinks[class] and ClassHUD.db.profile.buffLinks[class][specID]) or {}
+    local tracking = ClassHUD.db.profile.tracking or {}
+    local buffLinks = tracking.buffs and tracking.buffs.links or {}
+    local links = (buffLinks[class] and buffLinks[class][specID]) or {}
     -- links: [buffID] = linkedSpellID
     for buffID, linkedSpellID in pairs(links) do
       if linkedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
@@ -662,8 +664,9 @@ local function CreateTrackedBarFrame(buffID)
   end
 
   local parent = (UI.attachments and UI.attachments.TRACKED_BARS) or UI.anchor
-  local height = ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.trackedBuffBar
-      and ClassHUD.db.profile.trackedBuffBar.height or 16
+  local layout = ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.layout
+  local trackedCfg = layout and layout.trackedBuffBar
+  local height = trackedCfg and trackedCfg.height or 16
 
   local bar = ClassHUD:CreateStatusBar(parent, height)
   bar.buffID = buffID
@@ -714,7 +717,8 @@ local function LayoutTrackedBars(barFrames, opts)
   local container = EnsureAttachment("TRACKED_BARS")
   if not container then return end
 
-  local settings   = ClassHUD.db.profile.trackedBuffBar or {}
+  local layout   = ClassHUD.db.profile.layout or {}
+  local settings = layout.trackedBuffBar or {}
   local width      = ClassHUD.db.profile.width or 250
   local spacingY   = settings.spacingY or 4
   local barHeight  = settings.height or 16
@@ -866,7 +870,8 @@ function ClassHUD:ApplyTrackedBuffLayout()
     end
   end
 
-  local settings = self.db.profile.trackedBuffBar or {}
+  local layout = self.db.profile.layout or {}
+  local settings = layout.trackedBuffBar or {}
   local yOffset = settings.yOffset or 0
   local barTopPadding = (#barFrames > 0) and yOffset or 0
   local iconTopPadding = (#barFrames == 0 and #iconFrames > 0) and yOffset or 0
@@ -880,12 +885,15 @@ local function LayoutTopBar(frames)
   local container = EnsureAttachment("TOP")
   if not container then return end
 
-  local width    = ClassHUD.db.profile.width or 250
-  local perRow   = math.max(ClassHUD.db.profile.topBar.perRow or 8, 1)
-  local spacingX = ClassHUD.db.profile.topBar.spacingX or 4
-  local spacingY = ClassHUD.db.profile.topBar.spacingY or 4
-  local yOffset  = ClassHUD.db.profile.topBar.yOffset or 0
-  local grow     = ClassHUD.db.profile.topBar.grow or "DOWN"
+  local profile  = ClassHUD.db.profile
+  local layout   = profile.layout or {}
+  local topBar   = layout.topBar or {}
+  local width    = profile.width or 250
+  local perRow   = math.max(topBar.perRow or 8, 1)
+  local spacingX = topBar.spacingX or 4
+  local spacingY = topBar.spacingY or 4
+  local yOffset  = topBar.yOffset or 0
+  local grow     = topBar.grow or "DOWN"
 
   container:SetWidth(width)
 
@@ -931,16 +939,18 @@ local function LayoutTopBar(frames)
 
   container._height = totalHeight
   container:SetHeight(totalHeight)
-  container._afterGap = ClassHUD.db.profile.spacing or 0 -- 👈 vertical spacing option
+  container._afterGap = profile.spacing or 0 -- 👈 vertical spacing option
   container:Show()
 end
 
 local function LayoutSideBar(frames, side)
   if not UI.attachments or not UI.attachments[side] then return end
-  local size    = ClassHUD.db.profile.sideBars.size or 36
-  local spacing = ClassHUD.db.profile.sideBars.spacing or 4
-  local offset  = ClassHUD.db.profile.sideBars.offset or 6
-  local yOffset = ClassHUD.db.profile.sideBars.yOffset or 0
+  local layout  = ClassHUD.db.profile.layout or {}
+  local sideCfg = layout.sideBars or {}
+  local size    = sideCfg.size or 36
+  local spacing = sideCfg.spacing or 4
+  local offset  = sideCfg.offset or 6
+  local yOffset = sideCfg.yOffset or 0
   for i, frame in ipairs(frames) do
     frame:SetSize(size, size)
     frame:ClearAllPoints()
@@ -957,11 +967,13 @@ local function LayoutBottomBar(frames)
   local container = EnsureAttachment("BOTTOM")
   if not container then return end
 
-  local width    = ClassHUD.db.profile.width or 250
-  local perRow   = math.max(ClassHUD.db.profile.bottomBar.perRow or 8, 1)
-  local spacingX = ClassHUD.db.profile.bottomBar.spacingX or 4
-  local spacingY = ClassHUD.db.profile.bottomBar.spacingY or 4
-  local yOffset  = ClassHUD.db.profile.bottomBar.yOffset or 0
+  local profile  = ClassHUD.db.profile
+  local bottom   = profile.layout and profile.layout.bottomBar or {}
+  local width    = profile.width or 250
+  local perRow   = math.max(bottom.perRow or 8, 1)
+  local spacingX = bottom.spacingX or 4
+  local spacingY = bottom.spacingY or 4
+  local yOffset  = bottom.yOffset or 0
 
   container:SetWidth(width)
 
@@ -1340,7 +1352,7 @@ function ClassHUD:BuildTrackedBuffFrames()
     self:UpdateTrackedLayoutSnapshot()
   end
 
-  if not self.db.profile.show.buffs then
+  if not (self.db.profile.layout and self.db.profile.layout.show and self.db.profile.layout.show.buffs) then
     resetLayouts()
     return
   end
@@ -1351,16 +1363,40 @@ function ClassHUD:BuildTrackedBuffFrames()
     return
   end
 
-  local tracked = self:GetProfileTable(false, "trackedBuffs", class, specID)
+  local tracked = self:GetProfileTable(false, "tracking", "buffs", "tracked", class, specID)
   if not tracked then
     resetLayouts()
     return
   end
 
   local snapshot = self:GetSnapshotForSpec(class, specID, false)
+  local orderArray = self:GetProfileTable(true, "layout", "trackedBuffBar", "buffs", class, specID)
+  local orderLookup = {}
+
+  local function IsTracked(buffID)
+    return tracked[buffID] or tracked[tostring(buffID)]
+  end
+
+  if type(orderArray) == "table" then
+    for idx = #orderArray, 1, -1 do
+      local value = orderArray[idx]
+      local buffID = tonumber(value) or value
+      if buffID and IsTracked(buffID) then
+        orderArray[idx] = buffID
+        orderLookup[buffID] = idx
+      else
+        table.remove(orderArray, idx)
+      end
+    end
+  else
+    orderArray = {}
+    orderLookup = {}
+  end
+
   local ordered = {}
 
-  for buffID, _ in pairs(tracked) do
+  for key, _ in pairs(tracked) do
+    local buffID = tonumber(key) or key
     local config = self:GetTrackedEntryConfig(class, specID, buffID, false)
     if config then
       local entry = snapshot and snapshot[buffID]
@@ -1374,21 +1410,33 @@ function ClassHUD:BuildTrackedBuffFrames()
         end
       end
       local name = entry and entry.name or C_Spell.GetSpellName(buffID) or ("Spell " .. buffID)
+      local manualIndex = orderLookup[buffID]
+      if not manualIndex then
+        orderArray[#orderArray + 1] = buffID
+        manualIndex = #orderArray
+        orderLookup[buffID] = manualIndex
+      end
       table.insert(ordered, {
         buffID = buffID,
         config = config,
         entry  = entry,
         order  = order,
         name   = name,
+        index  = manualIndex,
       })
     end
   end
 
   table.sort(ordered, function(a, b)
-    if a.order == b.order then
-      return a.name < b.name
+    local ia = a.index or math.huge
+    local ib = b.index or math.huge
+    if ia == ib then
+      if a.order == b.order then
+        return a.name < b.name
+      end
+      return a.order < b.order
     end
-    return a.order < b.order
+    return ia < ib
   end)
 
   local iconFrames = {}
@@ -1996,7 +2044,9 @@ function ClassHUD:RebuildTrackedBuffFrames()
     return
   end
 
-  local links = (ClassHUD.db.profile.buffLinks[class] and ClassHUD.db.profile.buffLinks[class][specID]) or {}
+  local tracking = ClassHUD.db.profile.tracking or {}
+  local linkRoot = tracking.buffs and tracking.buffs.links or {}
+  local links = (linkRoot[class] and linkRoot[class][specID]) or {}
 
   for buffID, spellID in pairs(links) do
     local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
@@ -2063,19 +2113,66 @@ function ClassHUD:BuildFramesForSpec()
     return frame
   end
 
-  local function collect(category)
-    local class, specID = self:GetPlayerClassSpec()
-    self.db.profile.utilityPlacement[class] = self.db.profile.utilityPlacement[class] or {}
-    self.db.profile.utilityPlacement[class][specID] = self.db.profile.utilityPlacement[class][specID] or {}
-    local placements = self.db.profile.utilityPlacement[class][specID]
+  local class, specID = self:GetPlayerClassSpec()
+  self.db.profile.layout = self.db.profile.layout or {}
+  local layout = self.db.profile.layout
+  layout.topBar = layout.topBar or {}
+  layout.bottomBar = layout.bottomBar or {}
+  layout.sideBars = layout.sideBars or {}
+  layout.sideBars.spells = layout.sideBars.spells or {}
+  layout.hiddenSpells = layout.hiddenSpells or {}
 
+  local topList = self:GetProfileTable(true, "layout", "topBar", "spells", class, specID)
+  local bottomList = self:GetProfileTable(true, "layout", "bottomBar", "spells", class, specID)
+  local sideSpec = self:GetProfileTable(true, "layout", "sideBars", "spells", class, specID)
+  sideSpec.left = sideSpec.left or {}
+  sideSpec.right = sideSpec.right or {}
+  local hiddenList = self:GetProfileTable(true, "layout", "hiddenSpells", class, specID)
+
+  local topFrames, bottomFrames = {}, {}
+  local sideFrames = { LEFT = {}, RIGHT = {} }
+  local hiddenSet = {}
+
+  if type(hiddenList) == "table" then
+    for i = #hiddenList, 1, -1 do
+      local spellID = tonumber(hiddenList[i]) or hiddenList[i]
+      if spellID then
+        hiddenSet[spellID] = true
+        built[spellID] = true
+      else
+        table.remove(hiddenList, i)
+      end
+    end
+  end
+
+  local function placeFromArray(array, target, placement)
+    if type(array) ~= "table" then return end
+    for index = 1, #array do
+      local spellID = tonumber(array[index]) or array[index]
+      if spellID and not built[spellID] and not hiddenSet[spellID] then
+        local frame = acquire(spellID)
+        frame._customOrder = index
+        frame._customPlacement = placement
+        table.insert(target, frame)
+        built[spellID] = true
+      end
+    end
+  end
+
+  placeFromArray(topList, topFrames, "TOP")
+  placeFromArray(bottomList, bottomFrames, "BOTTOM")
+  placeFromArray(sideSpec.left, sideFrames.LEFT, "LEFT")
+  placeFromArray(sideSpec.right, sideFrames.RIGHT, "RIGHT")
+
+  local function collectSnapshot(category)
     local list = {}
     self:ForEachSnapshotEntry(category, function(spellID, entry, categoryData)
-      local placementData = placements[spellID]
-      local customOrder   = placementData and placementData.order
-      local baseOrder     = categoryData.order or math.huge
-      local finalOrder    = customOrder or baseOrder
-      table.insert(list, { spellID = spellID, entry = entry, data = categoryData, order = finalOrder })
+      table.insert(list, {
+        spellID = spellID,
+        entry = entry,
+        data = categoryData,
+        order = categoryData.order or math.huge,
+      })
     end)
     table.sort(list, function(a, b)
       if a.order == b.order then
@@ -2086,76 +2183,37 @@ function ClassHUD:BuildFramesForSpec()
     return list
   end
 
-
-  local class, specID = self:GetPlayerClassSpec()
-  self.db.profile.utilityPlacement[class] = self.db.profile.utilityPlacement[class] or {}
-  self.db.profile.utilityPlacement[class][specID] = self.db.profile.utilityPlacement[class][specID] or {}
-
-  local placements = self.db.profile.utilityPlacement[class][specID]
-  local order = self.db.profile.barOrder or {}
-  if order[1] ~= "TOP" then
-    self.db.profile.topBar.grow = "DOWN"
-  else
-    self.db.profile.topBar.grow = "UP"
-  end
-
-
-  local topFrames, bottomFrames = {}, {}
-  local sideFrames = { LEFT = {}, RIGHT = {} }
-
-  local function placeSpell(spellID, defaultPlacement)
-    if built[spellID] then return end
-
-    local pData = placements[spellID]
-    local placement, customOrder
-    if type(pData) == "table" then
-      placement = pData.placement
-      customOrder = pData.order
-    else
-      placement = pData
-    end
-    placement = placement or defaultPlacement or "TOP"
-
-    if placement == "HIDDEN" then
+  for _, item in ipairs(collectSnapshot("essential")) do
+    local spellID = item.spellID
+    if not built[spellID] and not hiddenSet[spellID] then
+      local frame = acquire(spellID)
+      frame._customOrder = nil
+      table.insert(topFrames, frame)
       built[spellID] = true
-      return
     end
+  end
 
-    local frame = acquire(spellID)
-    frame._customOrder = customOrder -- 👈 lagres på frame
-    if placement == "TOP" then
-      table.insert(topFrames, frame)
-    elseif placement == "BOTTOM" then
+  for _, item in ipairs(collectSnapshot("utility")) do
+    local spellID = item.spellID
+    if spellID and not built[spellID] then
+      hiddenSet[spellID] = true
+      built[spellID] = true
+    end
+  end
+
+  for _, item in ipairs(collectSnapshot("bar")) do
+    local spellID = item.spellID
+    if not built[spellID] and not hiddenSet[spellID] then
+      local frame = acquire(spellID)
+      frame._customOrder = nil
       table.insert(bottomFrames, frame)
-    elseif placement == "LEFT" or placement == "RIGHT" then
-      table.insert(sideFrames[placement], frame)
-    else
-      table.insert(topFrames, frame)
-    end
-  end
-
-
-  for _, item in ipairs(collect("essential")) do
-    placeSpell(item.spellID, "TOP")
-  end
-
-  for _, item in ipairs(collect("utility")) do
-    placeSpell(item.spellID, "HIDDEN")
-  end
-
-  -- for _, item in ipairs(collect("bar")) do
-  --   placeSpell(item.spellID, "BOTTOM")
-  -- end
-
-  for spellID, placement in pairs(placements) do
-    if not built[spellID] then
-      placeSpell(spellID, placement)
+      built[spellID] = true
     end
   end
 
   -- Auto-grow for Top-bar basert på plassering
   do
-    local order = self.db.profile.barOrder or {}
+    local order = (self.db.profile.layout and self.db.profile.layout.barOrder) or {}
     local topIndex
     for i, key in ipairs(order) do
       if key == "TOP" then
@@ -2164,9 +2222,15 @@ function ClassHUD:BuildFramesForSpec()
       end
     end
     if topIndex and topIndex > 1 then
-      self.db.profile.topBar.grow = "DOWN"
+      self.db.profile.layout = self.db.profile.layout or {}
+      local topBar = self.db.profile.layout.topBar or {}
+      topBar.grow = "DOWN"
+      self.db.profile.layout.topBar = topBar
     else
-      self.db.profile.topBar.grow = "UP"
+      self.db.profile.layout = self.db.profile.layout or {}
+      local topBar = self.db.profile.layout.topBar or {}
+      topBar.grow = "UP"
+      self.db.profile.layout.topBar = topBar
     end
   end
 
@@ -2207,9 +2271,11 @@ function ClassHUD:BuildFramesForSpec()
 
 
   -- Auto-map tracked buffs to spells using snapshot descriptions
-  self.db.profile.buffLinks = self.db.profile.buffLinks or {}
-  self.db.profile.buffLinks[class] = self.db.profile.buffLinks[class] or {}
-  self.db.profile.buffLinks[class][specID] = self.db.profile.buffLinks[class][specID] or {}
+  self.db.profile.tracking = self.db.profile.tracking or {}
+  self.db.profile.tracking.buffs = self.db.profile.tracking.buffs or {}
+  self.db.profile.tracking.buffs.links = self.db.profile.tracking.buffs.links or {}
+  self.db.profile.tracking.buffs.links[class] = self.db.profile.tracking.buffs.links[class] or {}
+  self.db.profile.tracking.buffs.links[class][specID] = self.db.profile.tracking.buffs.links[class][specID] or {}
 
   for buffID, entry in pairs(snapshot) do
     if entry.categories and entry.categories.buff then
@@ -2221,7 +2287,7 @@ function ClassHUD:BuildFramesForSpec()
             if spellName and string.find(desc, spellName, 1, true) then
               self.trackedBuffToSpell[buffID] = spellID
 
-              local links = self.db.profile.buffLinks[class][specID]
+              local links = self.db.profile.tracking.buffs.links[class][specID]
               if not links[buffID] then
                 links[buffID] = spellID
               end

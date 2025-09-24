@@ -5,6 +5,7 @@
 local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 
 ClassHUD._lastSpecID = ClassHUD._lastSpecID or 0
+ClassHUD._snapshotStore = ClassHUD._snapshotStore or {}
 
 local C_Spell, C_UnitAuras, GetTime, floor, tostring, ipairs, pairs = C_Spell, C_UnitAuras, GetTime, floor, tostring, ipairs, pairs
 
@@ -71,7 +72,18 @@ end
 ---@param create boolean|nil If true, the snapshot root is created if needed.
 ---@return table|nil
 function ClassHUD:GetSnapshotRoot(create)
-  return self:GetProfileTable(create, "cdmSnapshot")
+  if not self._snapshotStore and not create then
+    return nil
+  end
+
+  self._snapshotStore = self._snapshotStore or {}
+  local profileName = (self.db and self.db.GetCurrentProfile and self.db:GetCurrentProfile()) or "Default"
+  local root = self._snapshotStore[profileName]
+  if not root and create then
+    root = {}
+    self._snapshotStore[profileName] = root
+  end
+  return root
 end
 
 ---Returns the snapshot table for a given class/spec combination.
@@ -186,7 +198,7 @@ function ClassHUD:GetTrackedEntryConfig(class, specID, buffID, create)
   class = class or playerClass
   specID = specID or playerSpec
 
-  local tracked = self:GetProfileTable(create, "trackedBuffs", class, specID)
+  local tracked = self:GetProfileTable(create, "tracking", "buffs", "tracked", class, specID)
   if not tracked then return nil end
 
   local value = tracked[buffID]

@@ -15,11 +15,6 @@ local PLACEMENTS = {
   RIGHT = "Right Side",
 }
 
-local optionsState = {
-  newLinkBuffID = "",
-  newLinkSpellID = "",
-}
-
 local SUMMON_CLASS_CONFIG = {
   { class = "PRIEST",      label = "Priest Summons",      spells = { 34433, 123040 } },
   { class = "WARLOCK",     label = "Warlock Summons",     spells = { 193332, 264119, 455476, 265187, 111898, 205180 } },
@@ -63,9 +58,167 @@ local function PlayerMatchesSpec(addon, class, specID)
 end
 
 local function EnsureSummonConfig(addon, class)
-  addon.db.profile.summonTracking = addon.db.profile.summonTracking or {}
-  addon.db.profile.summonTracking[class] = addon.db.profile.summonTracking[class] or {}
-  return addon.db.profile.summonTracking[class]
+  addon.db.profile.tracking = addon.db.profile.tracking or {}
+  addon.db.profile.tracking.summons = addon.db.profile.tracking.summons or {}
+  addon.db.profile.tracking.summons.byClass = addon.db.profile.tracking.summons.byClass or {}
+  addon.db.profile.tracking.summons.byClass[class] = addon.db.profile.tracking.summons.byClass[class] or {}
+  return addon.db.profile.tracking.summons.byClass[class]
+end
+
+local function EnsureBuffTracking(addon, class, specID)
+  addon.db.profile.tracking = addon.db.profile.tracking or {}
+  addon.db.profile.tracking.buffs = addon.db.profile.tracking.buffs or {}
+  local buffs = addon.db.profile.tracking.buffs
+
+  buffs.tracked = buffs.tracked or {}
+  buffs.links = buffs.links or {}
+
+  buffs.tracked[class] = buffs.tracked[class] or {}
+  buffs.tracked[class][specID] = buffs.tracked[class][specID] or {}
+
+  buffs.links[class] = buffs.links[class] or {}
+  buffs.links[class][specID] = buffs.links[class][specID] or {}
+
+  return buffs.tracked[class][specID], buffs.links[class][specID]
+end
+
+local function EnsureTrackedBuffOrder(addon, class, specID)
+  addon.db.profile.layout = addon.db.profile.layout or {}
+  addon.db.profile.layout.trackedBuffBar = addon.db.profile.layout.trackedBuffBar or {}
+  local trackedBuffBar = addon.db.profile.layout.trackedBuffBar
+
+  trackedBuffBar.buffs = trackedBuffBar.buffs or {}
+  trackedBuffBar.buffs[class] = trackedBuffBar.buffs[class] or {}
+  trackedBuffBar.buffs[class][specID] = trackedBuffBar.buffs[class][specID] or {}
+
+  return trackedBuffBar.buffs[class][specID]
+end
+
+local function GetTrackedBuffOrder(addon, class, specID, buffID)
+  local orderList = EnsureTrackedBuffOrder(addon, class, specID)
+  for index = 1, #orderList do
+    local value = tonumber(orderList[index]) or orderList[index]
+    if value == buffID then
+      return index, orderList
+    end
+  end
+  return nil, orderList
+end
+
+local function SetTrackedBuffOrder(addon, class, specID, buffID, position)
+  local orderList = EnsureTrackedBuffOrder(addon, class, specID)
+  for index = #orderList, 1, -1 do
+    local value = tonumber(orderList[index]) or orderList[index]
+    if value == buffID then
+      table.remove(orderList, index)
+      break
+    end
+  end
+
+  local target = math.max(1, math.min(position, #orderList + 1))
+  table.insert(orderList, target, buffID)
+end
+
+local function RemoveTrackedBuff(addon, class, specID, buffID)
+  local tracked, links = EnsureBuffTracking(addon, class, specID)
+  local orderList = EnsureTrackedBuffOrder(addon, class, specID)
+  tracked[buffID] = nil
+  links[buffID] = nil
+  for index = #orderList, 1, -1 do
+    local value = tonumber(orderList[index]) or orderList[index]
+    if value == buffID then
+      table.remove(orderList, index)
+    end
+  end
+end
+
+local function EnsurePlacementLists(addon, class, specID)
+  addon.db.profile.layout = addon.db.profile.layout or {}
+  local layout = addon.db.profile.layout
+  layout.topBar = layout.topBar or {}
+  layout.topBar.spells = layout.topBar.spells or {}
+  layout.bottomBar = layout.bottomBar or {}
+  layout.bottomBar.spells = layout.bottomBar.spells or {}
+  layout.sideBars = layout.sideBars or {}
+  layout.sideBars.spells = layout.sideBars.spells or {}
+  layout.hiddenSpells = layout.hiddenSpells or {}
+
+  local function ensure(root)
+    root[class] = root[class] or {}
+    root[class][specID] = root[class][specID] or {}
+    return root[class][specID]
+  end
+
+  local topList = ensure(layout.topBar.spells)
+  local bottomList = ensure(layout.bottomBar.spells)
+  local sideSpec = ensure(layout.sideBars.spells)
+  sideSpec.left = sideSpec.left or {}
+  sideSpec.right = sideSpec.right or {}
+  local hiddenList = ensure(layout.hiddenSpells)
+
+  return {
+    TOP = topList,
+    BOTTOM = bottomList,
+    LEFT = sideSpec.left,
+    RIGHT = sideSpec.right,
+    HIDDEN = hiddenList,
+  }
+end
+
+local function RemoveSpellFromLists(lists, spellID)
+  spellID = tonumber(spellID) or spellID
+  for _, list in pairs(lists) do
+    if type(list) == "table" then
+      for index = #list, 1, -1 do
+        if (tonumber(list[index]) or list[index]) == spellID then
+          table.remove(list, index)
+        end
+      end
+    end
+  end
+end
+
+local function GetSpellPlacement(addon, class, specID, spellID)
+  spellID = tonumber(spellID) or spellID
+  local lists = EnsurePlacementLists(addon, class, specID)
+  for name, list in pairs(lists) do
+    if type(list) == "table" then
+      for index = 1, #list do
+        if (tonumber(list[index]) or list[index]) == spellID then
+          return name, index, lists
+        end
+      end
+    end
+  end
+  return nil, nil, lists
+end
+
+local function SetSpellPlacement(addon, class, specID, spellID, placement, position)
+  spellID = tonumber(spellID) or spellID
+  local lists = EnsurePlacementLists(addon, class, specID)
+  RemoveSpellFromLists(lists, spellID)
+  local target = lists[placement]
+  if not target then return end
+  local insertIndex = tonumber(position)
+  if insertIndex and insertIndex >= 1 and insertIndex <= (#target + 1) then
+    table.insert(target, insertIndex, spellID)
+  else
+    target[#target + 1] = spellID
+  end
+end
+
+local function SetSpellOrder(addon, class, specID, spellID, order)
+  spellID = tonumber(spellID) or spellID
+  local placement, _, lists = GetSpellPlacement(addon, class, specID, spellID)
+  if not placement then
+    placement = "TOP"
+    lists = EnsurePlacementLists(addon, class, specID)
+  end
+  local target = lists[placement]
+  if not target then return end
+  RemoveSpellFromLists(lists, spellID)
+  local index = math.max(1, math.min(tonumber(order) or (#target + 1), #target + 1))
+  table.insert(target, index, spellID)
 end
 
 local function BuildSummonSpellArgs(addon, classConfig)
@@ -98,7 +251,9 @@ local function BuildSummonSpellArgs(addon, classConfig)
         NotifyOptionsChanged()
       end,
       disabled = function()
-        return addon.db.profile.trackSummons == false
+        local tracking = addon.db.profile.tracking
+        local summons = tracking and tracking.summons
+        return summons and summons.enabled == false
       end,
     }
   end
@@ -132,60 +287,55 @@ local function BuildTopBarSpellsEditor(addon, container)
   for k in pairs(container) do container[k] = nil end
 
   local class, specID = addon:GetPlayerClassSpec()
-
-  addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
-  addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or {}
-  local placements = addon.db.profile.utilityPlacement[class][specID]
-
   local snapshot = addon:GetSnapshotForSpec(class, specID, false)
-  local seen, list = {}, {}
 
-  -- 1) Manuelle Top Bar-spells
-  for spellID, placement in pairs(placements) do
-    local placementVal = placement
-    if type(placement) == "table" then
-      placementVal = placement.placement
-    end
-    if placementVal == "TOP" then
-      table.insert(list, spellID)
-      seen[spellID] = true
+  local lists = EnsurePlacementLists(addon, class, specID)
+  local topList = lists.TOP
+  local manualIndex = {}
+  local ordered = {}
+
+  for idx = #topList, 1, -1 do
+    local spellID = tonumber(topList[idx]) or topList[idx]
+    if spellID then
+      topList[idx] = spellID
+      manualIndex[spellID] = idx
+      ordered[#ordered + 1] = spellID
+    else
+      table.remove(topList, idx)
     end
   end
 
-  -- 2) Essential-spells fra snapshot
   if snapshot then
     for spellID, entry in pairs(snapshot) do
       if entry.categories and entry.categories.essential then
-        if not seen[spellID] then
-          table.insert(list, spellID)
-          seen[spellID] = true
+        if manualIndex[spellID] == nil then
+          ordered[#ordered + 1] = spellID
+          manualIndex[spellID] = false
         end
       end
     end
   end
 
-  -- Sorter basert på custom order → snapshot order → navn
-  table.sort(list, function(a, b)
-    local sa, sb = snapshot and snapshot[a], snapshot and snapshot[b]
-    local pa, pb = placements[a], placements[b]
-
-    local oa = (type(pa) == "table" and pa.order)
-        or (sa and sa.categories and sa.categories.essential and sa.categories.essential.order)
-        or math.huge
-    local ob = (type(pb) == "table" and pb.order)
-        or (sb and sb.categories and sb.categories.essential and sb.categories.essential.order)
-        or math.huge
-
-    if oa == ob then
-      local na = (sa and sa.name) or (C_Spell.GetSpellInfo(a) and C_Spell.GetSpellInfo(a).name) or tostring(a)
-      local nb = (sb and sb.name) or (C_Spell.GetSpellInfo(b) and C_Spell.GetSpellInfo(b).name) or tostring(b)
-      return na < nb
+  table.sort(ordered, function(a, b)
+    local ia = manualIndex[a] or math.huge
+    local ib = manualIndex[b] or math.huge
+    if ia == ib then
+      local sa = snapshot and snapshot[a]
+      local sb = snapshot and snapshot[b]
+      local oa = sa and sa.categories and sa.categories.essential and sa.categories.essential.order or math.huge
+      local ob = sb and sb.categories and sb.categories.essential and sb.categories.essential.order or math.huge
+      if oa == ob then
+        local na = (sa and sa.name) or (C_Spell.GetSpellInfo(a) and C_Spell.GetSpellInfo(a).name) or tostring(a)
+        local nb = (sb and sb.name) or (C_Spell.GetSpellInfo(b) and C_Spell.GetSpellInfo(b).name) or tostring(b)
+        return na < nb
+      end
+      return oa < ob
     end
-    return oa < ob
+    return ia < ib
   end)
 
   local order = 1
-  if #list == 0 then
+  if #ordered == 0 then
     container.empty = {
       type = "description",
       name = "No spells on the Top Bar yet. Use 'Add Spell ID' to add one.",
@@ -195,40 +345,43 @@ local function BuildTopBarSpellsEditor(addon, container)
   end
 
   -- Bygg options-grupper
-  for _, spellID in ipairs(list) do
+  for _, spellID in ipairs(ordered) do
     local s = C_Spell.GetSpellInfo(spellID)
     local icon = s and s.iconID and ("|T" .. s.iconID .. ":16|t ") or ""
     local name = (s and s.name) or ("Spell " .. spellID)
     local entry = snapshot and snapshot[spellID]
 
     -- Linked buffs
+    local _, linkTable = EnsureBuffTracking(addon, class, specID)
+
     local linkedArgs, idx = {}, 1
-    local links = addon.db.profile.buffLinks[class] and addon.db.profile.buffLinks[class][specID]
-    if links then
-      local buffIDs = {}
-      for buffID, linkedSpellID in pairs(links) do
-        if linkedSpellID == spellID then table.insert(buffIDs, buffID) end
+    local buffIDs = {}
+    for buffID, linkedSpellID in pairs(linkTable) do
+      if linkedSpellID == spellID then
+        table.insert(buffIDs, buffID)
       end
-      table.sort(buffIDs)
-      for _, buffID in ipairs(buffIDs) do
-        local b = C_Spell.GetSpellInfo(buffID)
-        local bi = b and b.iconID and ("|T" .. b.iconID .. ":16|t ") or ""
-        local bn = (b and b.name) or ("Buff " .. buffID)
-        linkedArgs["b" .. buffID] = {
-          type  = "execute",
-          name  = bi .. bn .. " (" .. buffID .. ")",
-          desc  = "Click to remove this link",
-          order = idx,
-          func  = function()
-            addon.db.profile.buffLinks[class][specID][buffID] = nil
-            BuildTopBarSpellsEditor(addon, container)
-            addon:BuildFramesForSpec()
-            local ACR = LibStub("AceConfigRegistry-3.0", true)
-            if ACR then ACR:NotifyChange("ClassHUD") end
-          end,
-        }
-        idx = idx + 1
-      end
+    end
+    table.sort(buffIDs, function(a, b)
+      return (tonumber(a) or a) < (tonumber(b) or b)
+    end)
+    for _, buffID in ipairs(buffIDs) do
+      local b = C_Spell.GetSpellInfo(buffID)
+      local bi = b and b.iconID and ("|T" .. b.iconID .. ":16|t ") or ""
+      local bn = (b and b.name) or ("Buff " .. buffID)
+      linkedArgs["b" .. buffID] = {
+        type  = "execute",
+        name  = bi .. bn .. " (" .. buffID .. ")",
+        desc  = "Click to remove this link",
+        order = idx,
+        func  = function()
+          linkTable[buffID] = nil
+          BuildTopBarSpellsEditor(addon, container)
+          addon:BuildFramesForSpec()
+          local ACR = LibStub("AceConfigRegistry-3.0", true)
+          if ACR then ACR:NotifyChange("ClassHUD") end
+        end,
+      }
+      idx = idx + 1
     end
     if idx == 1 then
       linkedArgs.none = { type = "description", name = "No linked buffs yet.", order = 1 }
@@ -248,9 +401,7 @@ local function BuildTopBarSpellsEditor(addon, container)
           get   = function() return "" end,
           set   = function(_, val)
             local buffID = tonumber(val); if not buffID then return end
-            addon.db.profile.buffLinks[class] = addon.db.profile.buffLinks[class] or {}
-            addon.db.profile.buffLinks[class][specID] = addon.db.profile.buffLinks[class][specID] or {}
-            addon.db.profile.buffLinks[class][specID][buffID] = spellID
+            linkTable[buffID] = spellID
             BuildTopBarSpellsEditor(addon, container)
             addon:BuildFramesForSpec()
             local ACR = LibStub("AceConfigRegistry-3.0", true)
@@ -265,26 +416,14 @@ local function BuildTopBarSpellsEditor(addon, container)
           step  = 1,
           order = 3,
           get   = function()
-            local class, specID = addon:GetPlayerClassSpec()
-            local placements = addon.db.profile.utilityPlacement[class][specID] or {}
-            local pData = placements[spellID]
-            if type(pData) == "table" then
-              return pData.order or
-                  (entry and entry.categories and entry.categories.essential and entry.categories.essential.order) or 1
+            local placement, index = GetSpellPlacement(addon, class, specID, spellID)
+            if placement == "TOP" then
+              return index or 1
             end
             return (entry and entry.categories and entry.categories.essential and entry.categories.essential.order) or 1
           end,
           set   = function(_, val)
-            local class, specID = addon:GetPlayerClassSpec()
-            addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
-            addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or {}
-            local placements = addon.db.profile.utilityPlacement[class][specID]
-
-            if type(placements[spellID]) ~= "table" then
-              placements[spellID] = { placement = placements[spellID], order = val }
-            else
-              placements[spellID].order = val
-            end
+            SetSpellOrder(addon, class, specID, spellID, val)
             addon:BuildFramesForSpec()
             NotifyOptionsChanged()
           end,
@@ -302,12 +441,10 @@ local function BuildTopBarSpellsEditor(addon, container)
           confirm = true,
           order   = 99,
           func    = function()
-            addon.db.profile.utilityPlacement[class][specID][spellID] = nil
-            local bl = addon.db.profile.buffLinks[class] and addon.db.profile.buffLinks[class][specID]
-            if bl then
-              for bid, sid in pairs(bl) do
-                if sid == spellID then bl[bid] = nil end
-              end
+            local lists = EnsurePlacementLists(addon, class, specID)
+            RemoveSpellFromLists(lists, spellID)
+            for bid, sid in pairs(linkTable) do
+              if sid == spellID then linkTable[bid] = nil end
             end
             BuildTopBarSpellsEditor(addon, container)
             addon:BuildFramesForSpec()
@@ -326,22 +463,16 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
   for k in pairs(container) do container[k] = nil end
 
   local class, specID = addon:GetPlayerClassSpec()
-  addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
-  addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or {}
+  local lists = EnsurePlacementLists(addon, class, specID)
+  local _, linkTable = EnsureBuffTracking(addon, class, specID)
 
-  local class, specID = addon:GetPlayerClassSpec()
-  addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
-  addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or {}
-
-  local placements = addon.db.profile.utilityPlacement[class][specID]
-
-
-  local snapshot = addon:GetSnapshotForSpec(nil, nil, false)
-  local list = SortEntries(snapshot, category)
+  local snapshot = addon:GetSnapshotForSpec(class, specID, false)
+  local entries = SortEntries(snapshot, category)
   local order = 1
   local added = {}
 
   local function addOption(spellID, entry)
+    if added[spellID] then return end
     added[spellID] = true
 
     local iconID = entry and entry.iconID
@@ -355,37 +486,36 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
 
     local icon = iconID and ("|T" .. iconID .. ":16|t ") or ""
 
-    -- Sjekk om noen buffLinks peker på denne spellen
-    local class, specID = addon:GetPlayerClassSpec()
     local linkedBuffs = {}
-    if addon.db.profile.buffLinks[class] and addon.db.profile.buffLinks[class][specID] then
-      for buffID, linkedSpellID in pairs(addon.db.profile.buffLinks[class][specID]) do
-        if linkedSpellID == spellID then
-          local buffInfo = C_Spell.GetSpellInfo(buffID)
-          table.insert(linkedBuffs, (buffInfo and buffInfo.name) or ("Buff " .. buffID))
-        end
+    for buffID, linkedSpellID in pairs(linkTable) do
+      if linkedSpellID == spellID then
+        local buffInfo = C_Spell.GetSpellInfo(buffID)
+        linkedBuffs[#linkedBuffs + 1] = (buffInfo and buffInfo.name) or ("Buff " .. buffID)
       end
     end
 
     local linkNote
     if #linkedBuffs > 0 then
+      table.sort(linkedBuffs)
       linkNote = "|cff00ff00Linked Buffs:|r " .. table.concat(linkedBuffs, ", ")
     end
 
     container["spell" .. spellID] = {
       type = "select",
       name = icon .. name .. " (" .. spellID .. ")",
-      desc = linkNote, -- 👈 viser link-informasjon i tooltip
+      desc = linkNote,
       order = order,
       values = PLACEMENTS,
       get = function()
-        return placements[spellID] or defaultPlacement
+        local placement = GetSpellPlacement(addon, class, specID, spellID)
+        return placement or defaultPlacement
       end,
       set = function(_, value)
+        local placementLists = EnsurePlacementLists(addon, class, specID)
         if value == defaultPlacement then
-          placements[spellID] = nil
+          RemoveSpellFromLists(placementLists, spellID)
         else
-          placements[spellID] = value
+          SetSpellPlacement(addon, class, specID, spellID, value)
         end
         addon:BuildFramesForSpec()
         BuildPlacementArgs(addon, container, category, defaultPlacement, emptyText)
@@ -393,27 +523,19 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
       end,
     }
 
-
     order = order + 1
   end
 
-  for _, item in ipairs(list) do
+  for _, item in ipairs(entries) do
     addOption(item.spellID, item.entry)
   end
 
-  if category == "essential" then
-    for spellID, placement in pairs(placements) do
-      if placement == "TOP" and not added[spellID] then
+  local placementOrder = { "TOP", "BOTTOM", "LEFT", "RIGHT", "HIDDEN" }
+  for _, placementName in ipairs(placementOrder) do
+    local list = lists[placementName]
+    if type(list) == "table" then
+      for _, spellID in ipairs(list) do
         local entry = snapshot and snapshot[spellID]
-        addOption(spellID, entry)
-      end
-    end
-  end
-
-  if category == "utility" then
-    for spellID, _ in pairs(placements) do
-      if not added[spellID] then
-        local entry = snapshot and snapshot[spellID] -- kan være nil
         addOption(spellID, entry)
       end
     end
@@ -434,10 +556,13 @@ local function BuildTrackedBuffArgs(addon, container)
   local class, specID = addon:GetPlayerClassSpec()
   local snapshot = addon:GetSnapshotForSpec(class, specID, false)
 
-  addon.db.profile.trackedBuffs[class] = addon.db.profile.trackedBuffs[class] or {}
-  addon.db.profile.trackedBuffs[class][specID] = addon.db.profile.trackedBuffs[class][specID] or {}
-
-  local tracked = addon.db.profile.trackedBuffs[class][specID]
+  local tracked = EnsureBuffTracking(addon, class, specID)
+  local orderList = EnsureTrackedBuffOrder(addon, class, specID)
+  local manualIndex = {}
+  for index = 1, #orderList do
+    local buffID = orderList[index]
+    manualIndex[buffID] = index
+  end
 
   local entries = {}
 
@@ -482,16 +607,37 @@ local function BuildTrackedBuffArgs(addon, container)
     end
   end
 
+  for _, buffID in ipairs(orderList) do
+    if not entries[buffID] then
+      local info = C_Spell.GetSpellInfo(buffID)
+      entries[buffID] = {
+        buffID = buffID,
+        entry = nil,
+        icon = info and info.iconID and ("|T" .. info.iconID .. ":16|t ") or "",
+        name = info and info.name or ("Spell " .. buffID),
+        hasBuff = true,
+        hasBar = false,
+        order = math.huge,
+      }
+    end
+  end
+
   local list = {}
   for _, data in pairs(entries) do
+    data.manualOrder = manualIndex[data.buffID]
     table.insert(list, data)
   end
 
   table.sort(list, function(a, b)
-    if a.order == b.order then
-      return a.name < b.name
+    local ao = a.manualOrder or math.huge
+    local bo = b.manualOrder or math.huge
+    if ao == bo then
+      if a.order == b.order then
+        return a.name < b.name
+      end
+      return a.order < b.order
     end
-    return a.order < b.order
+    return ao < bo
   end)
 
   if #list == 0 then
@@ -534,10 +680,29 @@ local function BuildTrackedBuffArgs(addon, container)
             NotifyOptionsChanged()
           end,
         },
+        showBar = {
+          type = "toggle",
+          name = "Show as Bar",
+          order = 2,
+          hidden = function()
+            return not data.hasBar
+          end,
+          get = function()
+            local cfg = getConfig(false)
+            return cfg and cfg.showBar or false
+          end,
+          set = function(_, value)
+            local cfg = getConfig(true)
+            cfg.showBar = not not value
+            addon:BuildTrackedBuffFrames()
+            BuildTrackedBuffArgs(addon, container)
+            NotifyOptionsChanged()
+          end,
+        },
         barShowIcon = {
           type = "toggle",
           name = "Show Icon",
-          order = 3,
+          order = 4,
           hidden = function()
             local cfg = getConfig(false)
             return not (data.hasBar and cfg and cfg.showBar)
@@ -556,7 +721,7 @@ local function BuildTrackedBuffArgs(addon, container)
         barColor = {
           type = "color",
           name = "Bar Color",
-          order = 4,
+          order = 5,
           hasAlpha = true,
           hidden = function()
             local cfg = getConfig(false)
@@ -577,7 +742,7 @@ local function BuildTrackedBuffArgs(addon, container)
         barTimer = {
           type = "toggle",
           name = "Show Timer",
-          order = 5,
+          order = 6,
           hidden = function()
             local cfg = getConfig(false)
             return not (data.hasBar and cfg and cfg.showBar)
@@ -593,6 +758,37 @@ local function BuildTrackedBuffArgs(addon, container)
             NotifyOptionsChanged()
           end,
         },
+        orderControl = {
+          type = "range",
+          name = "Order",
+          order = 7,
+          min = 1,
+          max = 50,
+          step = 1,
+          get = function()
+            local index = GetTrackedBuffOrder(addon, class, specID, buffID)
+            return index or 1
+          end,
+          set = function(_, value)
+            local index = math.floor(value + 0.5)
+            SetTrackedBuffOrder(addon, class, specID, buffID, index)
+            addon:BuildTrackedBuffFrames()
+            BuildTrackedBuffArgs(addon, container)
+            NotifyOptionsChanged()
+          end,
+        },
+        remove = {
+          type = "execute",
+          name = "Remove",
+          confirm = true,
+          order = 99,
+          func = function()
+            RemoveTrackedBuff(addon, class, specID, buffID)
+            addon:BuildTrackedBuffFrames()
+            BuildTrackedBuffArgs(addon, container)
+            NotifyOptionsChanged()
+          end,
+        },
       },
     }
 
@@ -604,10 +800,7 @@ local function BuildBuffLinkArgs(addon, container)
   for k in pairs(container) do container[k] = nil end
 
   local class, specID = addon:GetPlayerClassSpec()
-  addon.db.profile.buffLinks[class] = addon.db.profile.buffLinks[class] or {}
-  addon.db.profile.buffLinks[class][specID] = addon.db.profile.buffLinks[class][specID] or {}
-
-  local links = addon.db.profile.buffLinks[class][specID]
+  local _, links = EnsureBuffTracking(addon, class, specID)
   local order = 1
 
   if not next(links) then
@@ -652,9 +845,9 @@ local function BuildBuffLinkArgs(addon, container)
           set = function(_, value)
             local newID = tonumber(value)
             if newID and newID ~= map.buffID then
-              local current = addon.db.profile.buffLinks[class][specID][map.buffID]
-              addon.db.profile.buffLinks[class][specID][map.buffID] = nil
-              addon.db.profile.buffLinks[class][specID][newID] = current
+              local current = links[map.buffID]
+              links[map.buffID] = nil
+              links[newID] = current
               addon:BuildFramesForSpec()
               BuildBuffLinkArgs(addon, container)
               NotifyOptionsChanged()
@@ -670,7 +863,7 @@ local function BuildBuffLinkArgs(addon, container)
           set = function(_, value)
             local newID = tonumber(value)
             if newID then
-              addon.db.profile.buffLinks[class][specID][map.buffID] = newID
+              links[map.buffID] = newID
               addon:BuildFramesForSpec()
               BuildBuffLinkArgs(addon, container)
               NotifyOptionsChanged()
@@ -683,7 +876,7 @@ local function BuildBuffLinkArgs(addon, container)
           confirm = true,
           order = 3,
           func = function()
-            addon.db.profile.buffLinks[class][specID][map.buffID] = nil
+            links[map.buffID] = nil
             addon:BuildFramesForSpec()
             BuildBuffLinkArgs(addon, container)
             NotifyOptionsChanged()
@@ -699,10 +892,13 @@ end
 local function BuildBarOrderEditor(addon, container)
   for k in pairs(container) do container[k] = nil end
 
-  local db = addon.db
-  db.profile.barOrder = db.profile.barOrder or { "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+  local layout = addon.db.profile.layout or {}
+  addon.db.profile.layout = layout
+  layout.barOrder = layout.barOrder or { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+  local barOrder = layout.barOrder
 
   local LABELS = {
+    TOP      = "Top Bar",
     CAST     = "Cast Bar",
     HP       = "Health Bar",
     RESOURCE = "Primary Resource",
@@ -710,7 +906,7 @@ local function BuildBarOrderEditor(addon, container)
     BOTTOM   = "Bottom Bar",
   }
 
-  for index, key in ipairs(db.profile.barOrder) do
+  for index, key in ipairs(barOrder) do
     local label = LABELS[key] or key
 
     container["row" .. index] = {
@@ -725,8 +921,7 @@ local function BuildBarOrderEditor(addon, container)
           width    = "half",
           disabled = (index == 1),
           func     = function()
-            local list = db.profile.barOrder
-            list[index], list[index - 1] = list[index - 1], list[index]
+            barOrder[index], barOrder[index - 1] = barOrder[index - 1], barOrder[index]
             addon:FullUpdate()
             BuildBarOrderEditor(addon, container)
             NotifyOptionsChanged()
@@ -736,10 +931,9 @@ local function BuildBarOrderEditor(addon, container)
           type     = "execute",
           name     = "↓",
           width    = "half",
-          disabled = (index == #db.profile.barOrder),
+          disabled = (index == #barOrder),
           func     = function()
-            local list = db.profile.barOrder
-            list[index], list[index + 1] = list[index + 1], list[index]
+            barOrder[index], barOrder[index + 1] = barOrder[index + 1], barOrder[index]
             addon:FullUpdate()
             BuildBarOrderEditor(addon, container)
             NotifyOptionsChanged()
@@ -753,50 +947,75 @@ end
 
 function ClassHUD_BuildOptions(addon)
   local db = addon.db
+  local profile = db.profile
 
-  db.profile.textures = db.profile.textures or { bar = "Blizzard", font = "Friz Quadrata TT" }
-  db.profile.show = db.profile.show or { cast = true, hp = true, resource = true, power = true, buffs = true }
-  db.profile.height = db.profile.height or { cast = 18, hp = 14, resource = 14, power = 14 }
-  db.profile.colors = db.profile.colors or {
-    hp = { r = 0.10, g = 0.80, b = 0.10 },
-    resourceClass = true,
-    resource = { r = 0.00, g = 0.55, b = 1.00 },
-    power = { r = 1.00, g = 0.85, b = 0.10 },
-  }
-  db.profile.position = db.profile.position or { x = 0, y = -50 }
-  db.profile.position.x = db.profile.position.x or 0
-  db.profile.position.y = db.profile.position.y or -50
-  db.profile.topBar = db.profile.topBar or {}
-  db.profile.topBar.perRow = db.profile.topBar.perRow or 8
-  db.profile.topBar.spacingX = db.profile.topBar.spacingX or 4
-  db.profile.topBar.spacingY = db.profile.topBar.spacingY or 4
-  db.profile.topBar.yOffset = db.profile.topBar.yOffset or 0
-  db.profile.topBar.grow = db.profile.topBar.grow or "UP"
-  db.profile.bottomBar = db.profile.bottomBar or {}
-  db.profile.bottomBar.perRow = db.profile.bottomBar.perRow or 8
-  db.profile.bottomBar.spacingX = db.profile.bottomBar.spacingX or 4
-  db.profile.bottomBar.spacingY = db.profile.bottomBar.spacingY or 4
-  db.profile.bottomBar.yOffset = db.profile.bottomBar.yOffset or 0
-  db.profile.sideBars = db.profile.sideBars or {}
-  db.profile.sideBars.size = db.profile.sideBars.size or 36
-  db.profile.sideBars.spacing = db.profile.sideBars.spacing or 4
-  db.profile.sideBars.offset = db.profile.sideBars.offset or 6
-  db.profile.sideBars.yOffset = db.profile.sideBars.yOffset or 0
-  db.profile.trackedBuffBar = db.profile.trackedBuffBar or {}
-  db.profile.trackedBuffBar.perRow = db.profile.trackedBuffBar.perRow or 8
-  db.profile.trackedBuffBar.spacingX = db.profile.trackedBuffBar.spacingX or 4
-  db.profile.trackedBuffBar.spacingY = db.profile.trackedBuffBar.spacingY or 4
-  db.profile.trackedBuffBar.yOffset = db.profile.trackedBuffBar.yOffset or 4
-  db.profile.trackedBuffBar.align = db.profile.trackedBuffBar.align or "CENTER"
-  db.profile.trackedBuffBar.height = db.profile.trackedBuffBar.height or 16
-  db.profile.utilityPlacement = db.profile.utilityPlacement or {}
-  db.profile.trackedBuffs = db.profile.trackedBuffs or {}
-  db.profile.buffLinks = db.profile.buffLinks or {}
+  profile.textures = profile.textures or { bar = "Blizzard", font = "Friz Quadrata TT" }
+  profile.colors = profile.colors or {}
+  profile.colors.hp = profile.colors.hp or { r = 0.10, g = 0.80, b = 0.10 }
+  if profile.colors.resourceClass == nil then profile.colors.resourceClass = true end
+  profile.colors.resource = profile.colors.resource or { r = 0.00, g = 0.55, b = 1.00 }
+  profile.colors.power = profile.colors.power or { r = 1.00, g = 0.85, b = 0.10 }
+  profile.colors.border = profile.colors.border or { r = 0, g = 0, b = 0, a = 1 }
+
+  profile.position = profile.position or { x = 0, y = -50 }
+  profile.position.x = profile.position.x or 0
+  profile.position.y = profile.position.y or -50
+  profile.width = profile.width or 250
+  profile.spacing = profile.spacing or 2
+  profile.powerSpacing = profile.powerSpacing or 2
+
+  profile.layout = profile.layout or {}
+  local layout = profile.layout
+  layout.show = layout.show or { cast = true, hp = true, resource = true, power = true, buffs = true }
+  layout.height = layout.height or { cast = 18, hp = 14, resource = 14, power = 14 }
+  layout.barOrder = layout.barOrder or { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
+
+  layout.topBar = layout.topBar or {}
+  layout.topBar.perRow = layout.topBar.perRow or 8
+  layout.topBar.spacingX = layout.topBar.spacingX or 4
+  layout.topBar.spacingY = layout.topBar.spacingY or 4
+  layout.topBar.yOffset = layout.topBar.yOffset or 0
+  layout.topBar.grow = layout.topBar.grow or "UP"
+  layout.topBar.spells = layout.topBar.spells or {}
+
+  layout.bottomBar = layout.bottomBar or {}
+  layout.bottomBar.perRow = layout.bottomBar.perRow or 8
+  layout.bottomBar.spacingX = layout.bottomBar.spacingX or 4
+  layout.bottomBar.spacingY = layout.bottomBar.spacingY or 4
+  layout.bottomBar.yOffset = layout.bottomBar.yOffset or 0
+  layout.bottomBar.spells = layout.bottomBar.spells or {}
+
+  layout.sideBars = layout.sideBars or {}
+  layout.sideBars.size = layout.sideBars.size or 36
+  layout.sideBars.spacing = layout.sideBars.spacing or 4
+  layout.sideBars.offset = layout.sideBars.offset or 6
+  layout.sideBars.yOffset = layout.sideBars.yOffset or 0
+  layout.sideBars.spells = layout.sideBars.spells or {}
+
+  layout.trackedBuffBar = layout.trackedBuffBar or {}
+  layout.trackedBuffBar.perRow = layout.trackedBuffBar.perRow or 8
+  layout.trackedBuffBar.spacingX = layout.trackedBuffBar.spacingX or 4
+  layout.trackedBuffBar.spacingY = layout.trackedBuffBar.spacingY or 4
+  layout.trackedBuffBar.yOffset = layout.trackedBuffBar.yOffset or 4
+  layout.trackedBuffBar.align = layout.trackedBuffBar.align or "CENTER"
+  layout.trackedBuffBar.height = layout.trackedBuffBar.height or 16
+  layout.trackedBuffBar.buffs = layout.trackedBuffBar.buffs or {}
+
+  layout.hiddenSpells = layout.hiddenSpells or {}
+
+  profile.tracking = profile.tracking or {}
+  local tracking = profile.tracking
+  tracking.summons = tracking.summons or { enabled = true, byClass = {} }
+  tracking.summons.byClass = tracking.summons.byClass or {}
+  tracking.wildImps = tracking.wildImps or { enabled = true, mode = "implosion" }
+  tracking.totems = tracking.totems or { enabled = true, overlayStyle = "SWIPE", showDuration = true }
+  tracking.buffs = tracking.buffs or {}
+  tracking.buffs.links = tracking.buffs.links or {}
+  tracking.buffs.tracked = tracking.buffs.tracked or {}
 
   local topBarEditorContainer = {}
   local utilityContainer = {}
   local trackedContainer = {}
-  local linkContainer = {}
   local barOrderContainer = {}
 
   local opts = {
@@ -924,9 +1143,9 @@ function ClassHUD_BuildOptions(addon)
             type = "toggle",
             name = "Show Cast Bar",
             order = 1,
-            get = function() return db.profile.show.cast end,
+            get = function() return layout.show.cast end,
             set = function(_, value)
-              db.profile.show.cast = value
+              layout.show.cast = value
               addon:FullUpdate()
             end,
           },
@@ -934,9 +1153,9 @@ function ClassHUD_BuildOptions(addon)
             type = "toggle",
             name = "Show Health Bar",
             order = 2,
-            get = function() return db.profile.show.hp end,
+            get = function() return layout.show.hp end,
             set = function(_, value)
-              db.profile.show.hp = value
+              layout.show.hp = value
               addon:FullUpdate()
             end,
           },
@@ -944,9 +1163,9 @@ function ClassHUD_BuildOptions(addon)
             type = "toggle",
             name = "Show Primary Resource",
             order = 3,
-            get = function() return db.profile.show.resource end,
+            get = function() return layout.show.resource end,
             set = function(_, value)
-              db.profile.show.resource = value
+              layout.show.resource = value
               addon:FullUpdate()
             end,
           },
@@ -954,9 +1173,9 @@ function ClassHUD_BuildOptions(addon)
             type = "toggle",
             name = "Show Tracked Buff Bar",
             order = 5,
-            get = function() return db.profile.show.buffs end,
+            get = function() return layout.show.buffs end,
             set = function(_, value)
-              db.profile.show.buffs = value
+              layout.show.buffs = value
               addon:BuildTrackedBuffFrames()
             end,
           },
@@ -966,11 +1185,11 @@ function ClassHUD_BuildOptions(addon)
             order = 10,
             hasAlpha = true,
             get = function()
-              return db.profile.borderColor.r, db.profile.borderColor.g, db.profile.borderColor.b,
-                  db.profile.borderColor.a
+              local c = profile.colors.border or { r = 0, g = 0, b = 0, a = 1 }
+              return c.r, c.g, c.b, c.a or 1
             end,
             set = function(_, r, g, b, a)
-              db.profile.borderColor = { r = r, g = g, b = b, a = a }
+              profile.colors.border = { r = r, g = g, b = b, a = a or 1 }
               addon:ApplyBarSkins()
             end,
           },
@@ -1007,9 +1226,9 @@ function ClassHUD_BuildOptions(addon)
             min = 8,
             max = 40,
             step = 1,
-            get = function() return db.profile.trackedBuffBar.height or 16 end,
+            get = function() return layout.trackedBuffBar.height or 16 end,
             set = function(_, value)
-              db.profile.trackedBuffBar.height = value
+              layout.trackedBuffBar.height = value
               addon:BuildTrackedBuffFrames()
             end,
           },
@@ -1035,9 +1254,9 @@ function ClassHUD_BuildOptions(addon)
             min = 8,
             max = 40,
             step = 1,
-            get = function() return db.profile.height.cast end,
+            get = function() return layout.height.cast end,
             set = function(_, value)
-              db.profile.height.cast = value
+              layout.height.cast = value
               addon:FullUpdate()
             end,
           },
@@ -1048,9 +1267,9 @@ function ClassHUD_BuildOptions(addon)
             min = 8,
             max = 40,
             step = 1,
-            get = function() return db.profile.height.hp end,
+            get = function() return layout.height.hp end,
             set = function(_, value)
-              db.profile.height.hp = value
+              layout.height.hp = value
               addon:FullUpdate()
             end,
           },
@@ -1061,9 +1280,9 @@ function ClassHUD_BuildOptions(addon)
             min = 8,
             max = 40,
             step = 1,
-            get = function() return db.profile.height.resource end,
+            get = function() return layout.height.resource end,
             set = function(_, value)
-              db.profile.height.resource = value
+              layout.height.resource = value
               addon:FullUpdate()
             end,
           },
@@ -1080,9 +1299,9 @@ function ClassHUD_BuildOptions(addon)
                 min = 1,
                 max = 12,
                 step = 1,
-                get = function() return db.profile.topBar.perRow end,
+                get = function() return layout.topBar.perRow end,
                 set = function(_, value)
-                  db.profile.topBar.perRow = value
+                  layout.topBar.perRow = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1093,9 +1312,9 @@ function ClassHUD_BuildOptions(addon)
                 min = 0,
                 max = 20,
                 step = 1,
-                get = function() return db.profile.topBar.spacingX end,
+                get = function() return layout.topBar.spacingX end,
                 set = function(_, value)
-                  db.profile.topBar.spacingX = value
+                  layout.topBar.spacingX = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1106,9 +1325,9 @@ function ClassHUD_BuildOptions(addon)
                 min = 0,
                 max = 20,
                 step = 1,
-                get = function() return db.profile.topBar.spacingY end,
+                get = function() return layout.topBar.spacingY end,
                 set = function(_, value)
-                  db.profile.topBar.spacingY = value
+                  layout.topBar.spacingY = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1119,9 +1338,9 @@ function ClassHUD_BuildOptions(addon)
                 min = -100,
                 max = 100,
                 step = 1,
-                get = function() return db.profile.topBar.yOffset end,
+                get = function() return layout.topBar.yOffset end,
                 set = function(_, value)
-                  db.profile.topBar.yOffset = value
+                  layout.topBar.yOffset = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1140,9 +1359,9 @@ function ClassHUD_BuildOptions(addon)
                 min = 1,
                 max = 12,
                 step = 1,
-                get = function() return db.profile.bottomBar.perRow end,
+                get = function() return layout.bottomBar.perRow end,
                 set = function(_, value)
-                  db.profile.bottomBar.perRow = value
+                  layout.bottomBar.perRow = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1153,9 +1372,9 @@ function ClassHUD_BuildOptions(addon)
                 min = 0,
                 max = 20,
                 step = 1,
-                get = function() return db.profile.bottomBar.spacingX end,
+                get = function() return layout.bottomBar.spacingX end,
                 set = function(_, value)
-                  db.profile.bottomBar.spacingX = value
+                  layout.bottomBar.spacingX = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1166,9 +1385,9 @@ function ClassHUD_BuildOptions(addon)
                 min = 0,
                 max = 20,
                 step = 1,
-                get = function() return db.profile.bottomBar.spacingY end,
+                get = function() return layout.bottomBar.spacingY end,
                 set = function(_, value)
-                  db.profile.bottomBar.spacingY = value
+                  layout.bottomBar.spacingY = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1179,9 +1398,9 @@ function ClassHUD_BuildOptions(addon)
                 min = -100,
                 max = 100,
                 step = 1,
-                get = function() return db.profile.bottomBar.yOffset end,
+                get = function() return layout.bottomBar.yOffset end,
                 set = function(_, value)
-                  db.profile.bottomBar.yOffset = value
+                  layout.bottomBar.yOffset = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1200,9 +1419,9 @@ function ClassHUD_BuildOptions(addon)
                 min = 24,
                 max = 80,
                 step = 1,
-                get = function() return db.profile.sideBars.size end,
+                get = function() return layout.sideBars.size end,
                 set = function(_, value)
-                  db.profile.sideBars.size = value
+                  layout.sideBars.size = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1213,9 +1432,9 @@ function ClassHUD_BuildOptions(addon)
                 min = 0,
                 max = 20,
                 step = 1,
-                get = function() return db.profile.sideBars.spacing end,
+                get = function() return layout.sideBars.spacing end,
                 set = function(_, value)
-                  db.profile.sideBars.spacing = value
+                  layout.sideBars.spacing = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1226,9 +1445,9 @@ function ClassHUD_BuildOptions(addon)
                 min = -200,
                 max = 200,
                 step = 1,
-                get = function() return db.profile.sideBars.offset end,
+                get = function() return layout.sideBars.offset end,
                 set = function(_, value)
-                  db.profile.sideBars.offset = value
+                  layout.sideBars.offset = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1239,9 +1458,9 @@ function ClassHUD_BuildOptions(addon)
                 min = -200,
                 max = 200,
                 step = 1,
-                get = function() return db.profile.sideBars.yOffset or 0 end,
+                get = function() return layout.sideBars.yOffset or 0 end,
                 set = function(_, value)
-                  db.profile.sideBars.yOffset = value
+                  layout.sideBars.yOffset = value
                   addon:BuildFramesForSpec()
                 end,
               },
@@ -1308,9 +1527,9 @@ function ClassHUD_BuildOptions(addon)
                 type = "toggle",
                 name = "Show Class Bar",
                 order = 1,
-                get = function() return db.profile.show.power end,
+                get = function() return layout.show.power end,
                 set = function(_, value)
-                  db.profile.show.power = value
+                  layout.show.power = value
                   addon:FullUpdate()
                 end,
               },
@@ -1321,12 +1540,12 @@ function ClassHUD_BuildOptions(addon)
                 min = 8,
                 max = 40,
                 step = 1,
-                get = function() return db.profile.height.power end,
+                get = function() return layout.height.power end,
                 set = function(_, value)
-                  db.profile.height.power = value
+                  layout.height.power = value
                   addon:FullUpdate()
                 end,
-                disabled = function() return not db.profile.show.power end,
+                disabled = function() return not layout.show.power end,
               },
               spacing = {
                 type = "range",
@@ -1340,7 +1559,7 @@ function ClassHUD_BuildOptions(addon)
                   db.profile.powerSpacing = value
                   addon:FullUpdate()
                 end,
-                disabled = function() return not db.profile.show.power end,
+                disabled = function() return not layout.show.power end,
               },
             },
           },
@@ -1362,7 +1581,7 @@ function ClassHUD_BuildOptions(addon)
                   db.profile.colors.power = { r = r, g = g, b = b }
                   addon:UpdateSpecialPower()
                 end,
-                disabled = function() return not db.profile.show.power end,
+                disabled = function() return not layout.show.power end,
               },
             },
           },
@@ -1550,19 +1769,17 @@ function ClassHUD_BuildOptions(addon)
                 order = 2,
                 width = "half",
                 get   = function() return "" end,
-                set   = function(_, value)
-                  local spellID = tonumber(value)
-                  if not spellID then return end
-                  local class, specID = addon:GetPlayerClassSpec()
-                  addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
-                  addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or
-                      {}
-                  addon.db.profile.utilityPlacement[class][specID][spellID] = "TOP"
-                  BuildTopBarSpellsEditor(addon, topBarEditorContainer)
-                  addon:BuildFramesForSpec()
-                  local ACR = LibStub("AceConfigRegistry-3.0", true)
-                  if ACR then ACR:NotifyChange("ClassHUD") end
-                end,
+              set   = function(_, value)
+                local spellID = tonumber(value)
+                if not spellID then return end
+                local class, specID = addon:GetPlayerClassSpec()
+                local lists = EnsurePlacementLists(addon, class, specID)
+                SetSpellPlacement(addon, class, specID, spellID, "TOP", #lists.TOP + 1)
+                BuildTopBarSpellsEditor(addon, topBarEditorContainer)
+                addon:BuildFramesForSpec()
+                local ACR = LibStub("AceConfigRegistry-3.0", true)
+                if ACR then ACR:NotifyChange("ClassHUD") end
+              end,
               },
               editor = {
                 type   = "group",
@@ -1586,19 +1803,17 @@ function ClassHUD_BuildOptions(addon)
                 order = 1,
                 width = "half",
                 get = function() return "" end,
-                set = function(_, value)
-                  local spellID = tonumber(value)
-                  if not spellID then return end
-                  local class, specID = addon:GetPlayerClassSpec()
-                  addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
-                  addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or
-                      {}
-                  addon.db.profile.utilityPlacement[class][specID][spellID] = "HIDDEN"
-                  addon:BuildFramesForSpec()
-                  BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
-                    "No utility cooldowns reported by the snapshot for this spec.")
-                  NotifyOptionsChanged()
-                end,
+              set = function(_, value)
+                local spellID = tonumber(value)
+                if not spellID then return end
+                local class, specID = addon:GetPlayerClassSpec()
+                local lists = EnsurePlacementLists(addon, class, specID)
+                SetSpellPlacement(addon, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
+                addon:BuildFramesForSpec()
+                BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
+                  "No utility cooldowns reported by the snapshot for this spec.")
+                NotifyOptionsChanged()
+              end,
               },
               list = {
                 type = "group",
@@ -1625,18 +1840,28 @@ function ClassHUD_BuildOptions(addon)
                 order = 2,
                 width = "half",
                 get = function() return "" end,
-                set = function(_, value)
-                  local buffID = tonumber(value)
-                  if not buffID then return end
-                  local class, specID = addon:GetPlayerClassSpec()
-                  addon.db.profile.trackedBuffs[class] = addon.db.profile.trackedBuffs[class] or {}
-                  addon.db.profile.trackedBuffs[class][specID] = addon.db.profile.trackedBuffs[class][specID] or {}
-                  addon.db.profile.trackedBuffs[class][specID][buffID] = true
-                  addon:BuildTrackedBuffFrames()
-                  BuildTrackedBuffArgs(addon, trackedContainer)
-                  NotifyOptionsChanged()
-                end,
-              },
+              set = function(_, value)
+                local buffID = tonumber(value)
+                if not buffID then return end
+                local class, specID = addon:GetPlayerClassSpec()
+                local tracked = EnsureBuffTracking(addon, class, specID)
+                local orderList = EnsureTrackedBuffOrder(addon, class, specID)
+                tracked[buffID] = tracked[buffID] or true
+                local exists = false
+                for _, existing in ipairs(orderList) do
+                  if (tonumber(existing) or existing) == buffID then
+                    exists = true
+                    break
+                  end
+                end
+                if not exists then
+                  orderList[#orderList + 1] = buffID
+                end
+                addon:BuildTrackedBuffFrames()
+                BuildTrackedBuffArgs(addon, trackedContainer)
+                NotifyOptionsChanged()
+              end,
+            },
               list = {
                 type = "group",
                 name = "Entries",
@@ -1646,72 +1871,6 @@ function ClassHUD_BuildOptions(addon)
               },
             },
           },
-          -- buffLinks = {
-          --   type = "group",
-          --   name = "Buff Links",
-          --   order = 4,
-          --   args = {
-          --     description = {
-          --       type = "description",
-          --       name = "Manual overrides linking a buff to a spell. These are populated automatically when possible.",
-          --       order = 1,
-          --     },
-          --     list = {
-          --       type = "group",
-          --       name = "Links",
-          --       inline = true,
-          --       order = 2,
-          --       args = linkContainer,
-          --     },
-          --     add = {
-          --       type = "group",
-          --       name = "Add New Link",
-          --       inline = true,
-          --       order = 3,
-          --       args = {
-          --         buffID = {
-          --           type = "input",
-          --           name = "Buff ID",
-          --           order = 1,
-          --           width = "half",
-          --           get = function() return optionsState.newLinkBuffID end,
-          --           set = function(_, value)
-          --             optionsState.newLinkBuffID = value or ""
-          --           end,
-          --         },
-          --         spellID = {
-          --           type = "input",
-          --           name = "Spell ID",
-          --           order = 2,
-          --           width = "half",
-          --           get = function() return optionsState.newLinkSpellID end,
-          --           set = function(_, value)
-          --             optionsState.newLinkSpellID = value or ""
-          --           end,
-          --         },
-          --         addButton = {
-          --           type = "execute",
-          --           name = "Add Link",
-          --           order = 3,
-          --           func = function()
-          --             local buffID = tonumber(optionsState.newLinkBuffID)
-          --             local spellID = tonumber(optionsState.newLinkSpellID)
-          --             if not (buffID and spellID) then return end
-          --             local class, specID = addon:GetPlayerClassSpec()
-          --             addon.db.profile.buffLinks[class] = addon.db.profile.buffLinks[class] or {}
-          --             addon.db.profile.buffLinks[class][specID] = addon.db.profile.buffLinks[class][specID] or {}
-          --             addon.db.profile.buffLinks[class][specID][buffID] = spellID
-          --             addon:BuildFramesForSpec()
-          --             BuildBuffLinkArgs(addon, linkContainer)
-          --             optionsState.newLinkBuffID = ""
-          --             optionsState.newLinkSpellID = ""
-          --             NotifyOptionsChanged()
-          --           end,
-          --         },
-          --       },
-          --     },
-          --   },
-          -- },
         },
       },
       summonsTotems = {
@@ -1729,10 +1888,10 @@ function ClassHUD_BuildOptions(addon)
             name = "Track temporary summons",
             order = 2,
             get = function()
-              return addon.db.profile.trackSummons ~= false
+              return tracking.summons.enabled ~= false
             end,
             set = function(_, val)
-              addon.db.profile.trackSummons = not not val
+              tracking.summons.enabled = not not val
               if not val then
                 if addon.ResetSummonTracking then addon:ResetSummonTracking() end
               else
@@ -1749,13 +1908,13 @@ function ClassHUD_BuildOptions(addon)
               return not PlayerMatchesSpec(addon, "WARLOCK", 266)
             end,
             disabled = function()
-              return addon.db.profile.trackSummons == false
+              return tracking.summons.enabled == false
             end,
             get = function()
-              return addon.db.profile.trackWildImps ~= false
+              return tracking.wildImps.enabled ~= false
             end,
             set = function(_, val)
-              addon.db.profile.trackWildImps = not not val
+              tracking.wildImps.enabled = not not val
               if addon.ClearWildImpTracking then
                 addon:ClearWildImpTracking()
               end
@@ -1771,17 +1930,17 @@ function ClassHUD_BuildOptions(addon)
               return not PlayerMatchesSpec(addon, "WARLOCK", 266)
             end,
             disabled = function()
-              return addon.db.profile.trackSummons == false or addon.db.profile.trackWildImps == false
+              return tracking.summons.enabled == false or tracking.wildImps.enabled == false
             end,
             get = function()
-              local mode = addon.db.profile.wildImpTrackingMode
+              local mode = tracking.wildImps.mode
               if mode == "buff" then
                 return "buff"
               end
               return "implosion"
             end,
             set = function(_, value)
-              addon.db.profile.wildImpTrackingMode = value
+              tracking.wildImps.mode = value
               if addon.RefreshWildImpDisplay then addon:RefreshWildImpDisplay() end
               NotifyOptionsChanged()
             end,
@@ -1794,10 +1953,10 @@ function ClassHUD_BuildOptions(addon)
               return not PlayerMatchesClass(addon, "SHAMAN")
             end,
             get = function()
-              return addon.db.profile.trackTotems ~= false
+              return tracking.totems.enabled ~= false
             end,
             set = function(_, val)
-              addon.db.profile.trackTotems = not not val
+              tracking.totems.enabled = not not val
               if not val then
                 if addon.ResetTotemTracking then addon:ResetTotemTracking() end
               else
@@ -1812,13 +1971,13 @@ function ClassHUD_BuildOptions(addon)
             order = 7,
             values = TOTEM_OVERLAY_OPTIONS,
             hidden = function()
-              return not PlayerMatchesClass(addon, "SHAMAN") or addon.db.profile.trackTotems == false
+              return not PlayerMatchesClass(addon, "SHAMAN") or tracking.totems.enabled == false
             end,
             get = function()
-              return addon.db.profile.totemOverlayStyle or "SWIPE"
+              return tracking.totems.overlayStyle or "SWIPE"
             end,
             set = function(_, value)
-              addon.db.profile.totemOverlayStyle = value
+              tracking.totems.overlayStyle = value
               if addon.RefreshAllTotems then addon:RefreshAllTotems() end
               NotifyOptionsChanged()
             end,
@@ -1831,18 +1990,16 @@ function ClassHUD_BuildOptions(addon)
               return not PlayerMatchesClass(addon, "SHAMAN")
             end,
             disabled = function()
-              return addon.db.profile.trackTotems == false
+              return tracking.totems.enabled == false
             end,
             get = function()
-              local settings = addon.db.profile.totems or {}
-              if settings.showDuration == nil then
+              if tracking.totems.showDuration == nil then
                 return true
               end
-              return settings.showDuration
+              return tracking.totems.showDuration
             end,
             set = function(_, val)
-              addon.db.profile.totems = addon.db.profile.totems or {}
-              addon.db.profile.totems.showDuration = not not val
+              tracking.totems.showDuration = not not val
               if addon.RefreshAllTotems then addon:RefreshAllTotems() end
               NotifyOptionsChanged()
             end,
@@ -1865,7 +2022,6 @@ function ClassHUD_BuildOptions(addon)
               BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
                 "No utility cooldowns reported by the snapshot for this spec.")
               BuildTrackedBuffArgs(addon, trackedContainer)
-              BuildBuffLinkArgs(addon, linkContainer)
               NotifyOptionsChanged()
             end,
           },
@@ -1889,7 +2045,7 @@ function ClassHUD_BuildOptions(addon)
         inline = true,
         order = 10 + index,
         hidden = function()
-          if addon.db.profile.trackSummons == false then
+          if tracking.summons.enabled == false then
             return true
           end
           return not PlayerMatchesClass(addon, classConfig.class)
@@ -1903,7 +2059,6 @@ function ClassHUD_BuildOptions(addon)
   BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
     "No utility cooldowns reported by the snapshot for this spec.")
   BuildTrackedBuffArgs(addon, trackedContainer)
-  BuildBuffLinkArgs(addon, linkContainer)
   BuildBarOrderEditor(addon, barOrderContainer)
 
   return opts

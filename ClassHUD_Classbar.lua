@@ -6,8 +6,8 @@ UI.attachments = UI.attachments or {}
 
 local function GetSpecSettings(class, specID)
   local db = ClassHUD.db
-  if not db or not db.profile or not db.profile.classbars then return nil end
-  local perClass = db.profile.classbars[class]
+if not db or not db.profile or not db.profile.layout or not db.profile.layout.classbars then return nil end
+local perClass = db.profile.layout.classbars[class]
   if not perClass then return nil end
   return perClass[specID]
 end
@@ -113,7 +113,7 @@ end
 
 local function EnsureSegment(i)
   if not UI.powerSegments[i] then
-    local sb = ClassHUD:CreateStatusBar(UI.power, ClassHUD.db.profile.height.power)
+    local sb = ClassHUD:CreateStatusBar(UI.power, ClassHUD.db.profile.layout.height.power)
     sb.text:Hide() -- segments don’t need text
     UI.powerSegments[i] = sb
   end
@@ -151,7 +151,7 @@ function ClassHUD:UpdateSegmentsAdvanced(ptype, max, partial)
   for i = 1, max do
     local sb = EnsureSegment(i)
     sb:SetStatusBarTexture(self:FetchStatusbar())
-    sb:SetSize(segW, self.db.profile.height.power)
+    sb:SetSize(segW, self.db.profile.layout.height.power)
     sb:ClearAllPoints()
     if i == 1 then
       sb:SetPoint("LEFT", UI.power, "LEFT", 0, 0)
@@ -195,7 +195,7 @@ function ClassHUD:UpdateEssenceSegments(ptype)
   for i = 1, max do
     local sb = EnsureSegment(i)
     sb:SetStatusBarTexture(self:FetchStatusbar())
-    sb:SetSize(segW, self.db.profile.height.power)
+    sb:SetSize(segW, self.db.profile.layout.height.power)
     sb:ClearAllPoints()
     if i == 1 then
       sb:SetPoint("LEFT", UI.power, "LEFT", 0, 0)
@@ -241,7 +241,7 @@ end
 
 -- Main update entry
 function ClassHUD:UpdateSpecialPower()
-  if not (self.db and self.db.profile and self.db.profile.show.power) then
+  if not (self.db and self.db.profile and self.db.profile.layout and self.db.profile.layout.show.power) then
     HideAllSegments(1)
     if UI.power then UI.power:Hide() end
     DeactivateEclipseBar()
@@ -357,7 +357,7 @@ local function ResizeEclipseBar(f)
   end
   if not height or height <= 0 then
     local profile = ClassHUD.db and ClassHUD.db.profile
-    height = (profile and profile.height and profile.height.power) or 20
+    height = (profile and profile.layout and profile.layout.height and profile.layout.height.power) or 20
   end
 
   f:SetSize(width, height)

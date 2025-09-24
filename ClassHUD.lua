@@ -639,149 +639,430 @@ end
 -- ---------------------------------------------------------------------------
 local defaults = {
   profile = {
-    locked           = false,
-    width            = 250,
-    spacing          = 2,
-    powerSpacing     = 2,
-    position         = { x = 0, y = -50 },
-    borderColor      = { r = 0, g = 0, b = 0, a = 1 },
-    textures         = {
+    locked       = false,
+    position     = { x = 0, y = -50 },
+    width        = 250,
+    spacing      = 2,
+    powerSpacing = 2,
+    textures     = {
       bar  = "Blizzard",
       font = "Friz Quadrata TT",
     },
-    barOrder         = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" },
-    show             = {
-      cast     = true,
-      hp       = true,
-      resource = true, -- primary (mana/rage/energy/etc.)
-      power    = true, -- special (combo/chi/shards/etc.)
-      buffs    = true,
-    },
-
-    height           = {
-      cast     = 18,
-      hp       = 14,
-      resource = 14,
-      power    = 14,
-    },
-
-    sideBars         = {
-      size    = 36,
-      spacing = 4,
-      offset  = 6,
-    },
-    classbars        = {
-      -- Eksempel: Druid
-      DRUID = {
-        [102] = { eclipse = true, combo = false }, -- Balance
-        [103] = { combo = true },                  -- Feral
-        [104] = { combo = true },                  -- Guardian
-        [105] = {},                                -- Resto
-      },
-      ROGUE = {
-        [259] = { combo = true }, -- Assassination
-        [260] = { combo = true }, -- Outlaw
-        [261] = { combo = true }, -- Sub
-      },
-    },
-
-    topBar           = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 0,
-      grow     = "UP", -- "UP" eller "DOWN"
-    },
-    bottomBar        = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 0,
-    },
-    trackedBuffBar   = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 4,        -- litt luft over TopBar
-      align    = "CENTER", -- "LEFT" | "CENTER" | "RIGHT"
-      height   = 16,
-    },
-
-    -- =========================
-    -- Spell & Buff persistence
-    -- =========================
-
-    -- Utility placement per spellID
-    -- [spellID] = { placement = "TOP"/"BOTTOM"/"LEFT"/"RIGHT"/"HIDDEN", order = number }
-    utilityPlacement = {
-      -- [spellID] = "TOP" | "BOTTOM" | "LEFT" | "RIGHT"
-    },
-
-    -- Persistente buff-links (class -> spec -> buffID -> spellID)
-    buffLinks        = {},
-
-    -- Brukervalgte tracked buffs (class -> spec -> buffID -> true/false)
-    trackedBuffs     = {},
-
-    -- CDM snapshot (slik at vi ikke trenger å spørre CDM hver gang)
-    cdmSnapshot      = {
-      -- [class] = {
-      --   [specID] = {
-      --     [category] = {
-      --       [spellID] = {
-      --         spellID = ...,
-      --         iconID  = ...,
-      --         name    = ...,
-      --         desc    = ...,
-      --       }
-      --     }
-      --   }
-      -- }
-    },
-
-    colors           = {
-      hp            = { r = 0.10, g = 0.80, b = 0.10 },
+    colors = {
+      border       = { r = 0, g = 0, b = 0, a = 1 },
+      hp           = { r = 0.10, g = 0.80, b = 0.10 },
       resourceClass = true,
-      resource      = { r = 0.00, g = 0.55, b = 1.00 },
-      power         = { r = 1.00, g = 0.85, b = 0.10 },
+      resource     = { r = 0.00, g = 0.55, b = 1.00 },
+      power        = { r = 1.00, g = 0.85, b = 0.10 },
     },
-    summonTracking   = {
-      PRIEST = {
-        [34433]  = true, -- Shadowfiend
-        [123040] = true, -- Mindbender
+    layout = {
+      barOrder = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" },
+      show = {
+        cast     = true,
+        hp       = true,
+        resource = true,
+        power    = true,
+        buffs    = true,
       },
-      WARLOCK = {
-        [193332] = true, -- Call Dreadstalkers
-        [264119] = true, -- Summon Vilefiend
-        [455476] = true, -- Summon Charhound
-        [265187] = true, -- Summon Demonic Tyrant
-        [111898] = true, -- Grimoire: Felguard
-        [205180] = true, -- Summon Darkglare
+      height = {
+        cast     = 18,
+        hp       = 14,
+        resource = 14,
+        power    = 14,
       },
-      DEATHKNIGHT = {
-        [42650] = true, -- Army of the Dead
-        [49206]  = true, -- Summon Gargoyle
+      sideBars = {
+        size    = 36,
+        spacing = 4,
+        offset  = 6,
+        spells  = {},
       },
-      DRUID = {
-        [205636] = true, -- Force of Nature
+      classbars = {
+        DRUID = {
+          [102] = { eclipse = true, combo = false },
+          [103] = { combo = true },
+          [104] = { combo = true },
+          [105] = {},
+        },
+        ROGUE = {
+          [259] = { combo = true },
+          [260] = { combo = true },
+          [261] = { combo = true },
+        },
       },
-      MONK = {
-        [115313] = true, -- Jade Serpent Statue
+      topBar = {
+        perRow   = 8,
+        spacingX = 4,
+        spacingY = 4,
+        yOffset  = 0,
+        grow     = "UP",
+        spells   = {},
+      },
+      bottomBar = {
+        perRow   = 8,
+        spacingX = 4,
+        spacingY = 4,
+        yOffset  = 0,
+        spells   = {},
+      },
+      trackedBuffBar = {
+        perRow   = 8,
+        spacingX = 4,
+        spacingY = 4,
+        yOffset  = 4,
+        align    = "CENTER",
+        height   = 16,
+        buffs    = {},
+      },
+      hiddenSpells = {},
+    },
+    tracking = {
+      summons = {
+        enabled = true,
+        byClass = {
+          PRIEST = {
+            [34433]  = true,
+            [123040] = true,
+          },
+          WARLOCK = {
+            [193332] = true,
+            [264119] = true,
+            [455476] = true,
+            [265187] = true,
+            [111898] = true,
+            [205180] = true,
+          },
+          DEATHKNIGHT = {
+            [42650] = true,
+            [49206]  = true,
+          },
+          DRUID = {
+            [205636] = true,
+          },
+          MONK = {
+            [115313] = true,
+          },
+        },
+      },
+      wildImps = {
+        enabled = true,
+        mode    = "implosion",
+      },
+      totems = {
+        enabled      = true,
+        overlayStyle = "SWIPE",
+        showDuration = true,
+      },
+      buffs = {
+        links   = {},
+        tracked = {},
       },
     },
-    trackSummons     = true,
-    trackWildImps    = true,
-    wildImpTrackingMode = "implosion",
-    trackTotems      = true,
-    totemOverlayStyle = "SWIPE",
-    totems = {
-      showDuration = true,
+    cooldowns = {
+      showSwipe   = true,
+      showCharges = true,
+      showText    = true,
+      showGCD     = false,
+      timerStyle  = "Blizzard",
     },
-    cooldowns        = {
-      showText = true,
-    },
-  }
+    spellFontSize = 12,
+    buffFontSize  = 12,
+  },
 }
+
+local CURRENT_DB_VERSION = 2
+
+local function CopyTableRecursive(tbl)
+  if type(tbl) ~= "table" then return tbl end
+
+  local copy = {}
+  for k, v in pairs(tbl) do
+    if type(v) == "table" then
+      copy[k] = CopyTableRecursive(v)
+    else
+      copy[k] = v
+    end
+  end
+  return copy
+end
+
+local function MergeMissing(target, source)
+  if type(target) ~= "table" or type(source) ~= "table" then return end
+
+  for k, v in pairs(source) do
+    local existing = target[k]
+    if existing == nil then
+      if type(v) == "table" then
+        target[k] = CopyTableRecursive(v)
+      else
+        target[k] = v
+      end
+    elseif type(v) == "table" and type(existing) == "table" then
+      MergeMissing(existing, v)
+    end
+  end
+end
+
+local function EnsureChildTable(parent, key)
+  if type(parent) ~= "table" then return {} end
+  local value = parent[key]
+  if type(value) ~= "table" then
+    value = {}
+    parent[key] = value
+  end
+  return value
+end
+
+local function SortPlacementEntries(entries)
+  if type(entries) ~= "table" then return {} end
+
+  table.sort(entries, function(a, b)
+    local ao = tonumber(a.order) or math.huge
+    local bo = tonumber(b.order) or math.huge
+    if ao == bo then
+      return (a.index or 0) < (b.index or 0)
+    end
+    return ao < bo
+  end)
+
+  local ordered = {}
+  local seen = {}
+  for _, entry in ipairs(entries) do
+    local spellID = tonumber(entry.spellID) or entry.spellID
+    if spellID and not seen[spellID] then
+      ordered[#ordered + 1] = spellID
+      seen[spellID] = true
+    end
+  end
+  return ordered
+end
+
+function ClassHUD:MigrateProfile(profile)
+  if type(profile) ~= "table" then return end
+
+  local version = tonumber(profile.schemaVersion) or 0
+  if version >= CURRENT_DB_VERSION then
+    return
+  end
+
+  MergeMissing(profile, defaults.profile)
+
+  local colors = EnsureChildTable(profile, "colors")
+  if type(profile.borderColor) == "table" and colors.border == nil then
+    colors.border = CopyTableRecursive(profile.borderColor)
+  end
+  profile.borderColor = nil
+
+  local layout = EnsureChildTable(profile, "layout")
+
+  if type(profile.barOrder) == "table" then
+    layout.barOrder = CopyTableRecursive(profile.barOrder)
+    profile.barOrder = nil
+  end
+
+  if type(profile.show) == "table" then
+    local dest = EnsureChildTable(layout, "show")
+    for k, v in pairs(profile.show) do dest[k] = v end
+    profile.show = nil
+  end
+
+  if type(profile.height) == "table" then
+    local dest = EnsureChildTable(layout, "height")
+    for k, v in pairs(profile.height) do dest[k] = v end
+    profile.height = nil
+  end
+
+  if type(profile.sideBars) == "table" then
+    local dest = EnsureChildTable(layout, "sideBars")
+    for k, v in pairs(profile.sideBars) do
+      if k ~= "spells" then
+        dest[k] = v
+      end
+    end
+    profile.sideBars = nil
+  end
+  local sideBars = EnsureChildTable(layout, "sideBars")
+  sideBars.spells = EnsureChildTable(sideBars, "spells")
+
+  if type(profile.classbars) == "table" then
+    local dest = EnsureChildTable(layout, "classbars")
+    for k, v in pairs(profile.classbars) do dest[k] = CopyTableRecursive(v) end
+    profile.classbars = nil
+  end
+
+  local topBar = EnsureChildTable(layout, "topBar")
+  topBar.spells = EnsureChildTable(topBar, "spells")
+  if type(profile.topBar) == "table" then
+    for k, v in pairs(profile.topBar) do
+      if k ~= "spells" then
+        topBar[k] = v
+      end
+    end
+    profile.topBar = nil
+  end
+
+  local bottomBar = EnsureChildTable(layout, "bottomBar")
+  bottomBar.spells = EnsureChildTable(bottomBar, "spells")
+  if type(profile.bottomBar) == "table" then
+    for k, v in pairs(profile.bottomBar) do
+      if k ~= "spells" then
+        bottomBar[k] = v
+      end
+    end
+    profile.bottomBar = nil
+  end
+
+  local trackedBuffBar = EnsureChildTable(layout, "trackedBuffBar")
+  trackedBuffBar.buffs = EnsureChildTable(trackedBuffBar, "buffs")
+  if type(profile.trackedBuffBar) == "table" then
+    for k, v in pairs(profile.trackedBuffBar) do
+      if k ~= "buffs" then
+        trackedBuffBar[k] = v
+      end
+    end
+    profile.trackedBuffBar = nil
+  end
+
+  layout.hiddenSpells = EnsureChildTable(layout, "hiddenSpells")
+
+  if type(profile.utilityPlacement) == "table" then
+    for class, bySpec in pairs(profile.utilityPlacement) do
+      for specKey, spells in pairs(bySpec) do
+        local specID = tonumber(specKey) or specKey
+        local buckets = {
+          TOP = {},
+          BOTTOM = {},
+          LEFT = {},
+          RIGHT = {},
+          HIDDEN = {},
+        }
+        local index = 0
+        for spellKey, data in pairs(spells) do
+          local placement = data
+          local order
+          if type(data) == "table" then
+            placement = data.placement or data.position or data.place or data.slot
+            order = data.order
+          end
+          placement = (type(placement) == "string" and placement:upper()) or "TOP"
+          if not buckets[placement] then
+            placement = "TOP"
+          end
+          index = index + 1
+          local entry = {
+            spellID = tonumber(spellKey) or spellKey,
+            order   = order,
+            index   = index,
+          }
+          buckets[placement][#buckets[placement] + 1] = entry
+        end
+
+        local topRoot = EnsureChildTable(topBar.spells, class)
+        topRoot[specID] = SortPlacementEntries(buckets.TOP)
+
+        local bottomRoot = EnsureChildTable(bottomBar.spells, class)
+        bottomRoot[specID] = SortPlacementEntries(buckets.BOTTOM)
+
+        local sideRoot = EnsureChildTable(sideBars.spells, class)
+        local sideSpec = EnsureChildTable(sideRoot, specID)
+        sideSpec.left = SortPlacementEntries(buckets.LEFT)
+        sideSpec.right = SortPlacementEntries(buckets.RIGHT)
+
+        local hiddenRoot = EnsureChildTable(layout.hiddenSpells, class)
+        hiddenRoot[specID] = SortPlacementEntries(buckets.HIDDEN)
+      end
+    end
+    profile.utilityPlacement = nil
+  end
+
+  local tracking = EnsureChildTable(profile, "tracking")
+  MergeMissing(tracking, defaults.profile.tracking)
+
+  local summons = EnsureChildTable(tracking, "summons")
+  if profile.trackSummons ~= nil then
+    summons.enabled = not not profile.trackSummons
+    profile.trackSummons = nil
+  end
+  summons.byClass = EnsureChildTable(summons, "byClass")
+  if type(profile.summonTracking) == "table" then
+    for class, config in pairs(profile.summonTracking) do
+      summons.byClass[class] = CopyTableRecursive(config)
+    end
+    profile.summonTracking = nil
+  end
+
+  local wildImps = EnsureChildTable(tracking, "wildImps")
+  if profile.trackWildImps ~= nil then
+    wildImps.enabled = not not profile.trackWildImps
+    profile.trackWildImps = nil
+  end
+  if profile.wildImpTrackingMode then
+    wildImps.mode = profile.wildImpTrackingMode
+    profile.wildImpTrackingMode = nil
+  end
+
+  local totems = EnsureChildTable(tracking, "totems")
+  if profile.trackTotems ~= nil then
+    totems.enabled = not not profile.trackTotems
+    profile.trackTotems = nil
+  end
+  if profile.totemOverlayStyle then
+    totems.overlayStyle = profile.totemOverlayStyle
+    profile.totemOverlayStyle = nil
+  end
+  if type(profile.totems) == "table" and profile.totems.showDuration ~= nil then
+    totems.showDuration = not not profile.totems.showDuration
+  end
+  profile.totems = nil
+
+  local buffTracking = EnsureChildTable(tracking, "buffs")
+  buffTracking.links = EnsureChildTable(buffTracking, "links")
+  buffTracking.tracked = EnsureChildTable(buffTracking, "tracked")
+
+  if type(profile.buffLinks) == "table" then
+    for class, config in pairs(profile.buffLinks) do
+      buffTracking.links[class] = CopyTableRecursive(config)
+    end
+    profile.buffLinks = nil
+  end
+
+  if type(profile.trackedBuffs) == "table" then
+    for class, bySpec in pairs(profile.trackedBuffs) do
+      local destClass = EnsureChildTable(buffTracking.tracked, class)
+      local orderClass = EnsureChildTable(trackedBuffBar.buffs, class)
+      for specKey, config in pairs(bySpec) do
+        local specID = tonumber(specKey) or specKey
+        destClass[specID] = CopyTableRecursive(config)
+
+        local ordered = {}
+        for buffID in pairs(config) do
+          ordered[#ordered + 1] = tonumber(buffID) or buffID
+        end
+        table.sort(ordered, function(a, b)
+          if type(a) == "number" and type(b) == "number" then
+            return a < b
+          end
+          return tostring(a) < tostring(b)
+        end)
+        orderClass[specID] = ordered
+      end
+    end
+    profile.trackedBuffs = nil
+  end
+
+  if type(profile.cdmSnapshot) == "table" then
+    profile.cdmSnapshot = nil
+  end
+
+  local cooldowns = EnsureChildTable(profile, "cooldowns")
+  MergeMissing(cooldowns, defaults.profile.cooldowns)
+
+  profile.schemaVersion = CURRENT_DB_VERSION
+end
+
+function ClassHUD:MigrateDatabase()
+  if not (self.db and self.db.profile) then return end
+  self:MigrateProfile(self.db.profile)
+end
 
 
 function ClassHUD:FetchStatusbar()
@@ -792,6 +1073,41 @@ end
 function ClassHUD:FetchFont(size, flags)
   local path = self.LSM:Fetch("font", self.db.profile.textures.font) or STANDARD_TEXT_FONT
   return path, size, flags or "OUTLINE"
+end
+
+function ClassHUD:GetActiveSpecProfileName()
+  local specIndex = GetSpecialization and GetSpecialization()
+  if specIndex and specIndex > 0 and GetSpecializationInfo then
+    local _, specName = GetSpecializationInfo(specIndex)
+    if specName and specName ~= "" then
+      return string.format("ClassHUD-%s", specName)
+    end
+  end
+
+  local _, className = UnitClass and UnitClass("player") or nil
+  className = className or "Default"
+  return string.format("ClassHUD-%s", className)
+end
+
+function ClassHUD:EnsureActiveSpecProfile()
+  if not (self.db and self.db.GetCurrentProfile) then return end
+
+  local desiredProfile = self:GetActiveSpecProfileName()
+  if not desiredProfile then return end
+
+  local currentProfile = self.db:GetCurrentProfile()
+  if currentProfile ~= desiredProfile or not (self.db.profiles and self.db.profiles[desiredProfile]) then
+    self.db:SetProfile(desiredProfile)
+  end
+end
+
+function ClassHUD:OnProfileChanged()
+  self:MigrateDatabase()
+  if self.ResetSummonTracking then self:ResetSummonTracking() end
+  if self.ResetTotemTracking then self:ResetTotemTracking() end
+  if self.BuildFramesForSpec then self:BuildFramesForSpec() end
+  self:FullUpdate()
+  self:RefreshRegisteredOptions()
 end
 
 -- ---------------------------------------------------------------------------
@@ -818,7 +1134,8 @@ function ClassHUD:CreateStatusBar(parent, height, withBorder)
       edgeSize = edge,
       insets   = { left = 0, right = 0, top = 0, bottom = 0 },
     })
-    local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+    local colors = self.db.profile.colors or {}
+    local c = colors.border or { r = 0, g = 0, b = 0, a = 1 }
     holder:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
     holder:SetBackdropColor(0, 0, 0, 0.40)
   end
@@ -847,8 +1164,13 @@ end
 -- Lifecycle
 -- ---------------------------------------------------------------------------
 function ClassHUD:OnInitialize()
-  -- IMPORTANT: Ensure your TOC has "## SavedVariables: ClassHUDDB"
   self.db = AceDB:New("ClassHUDDB", defaults, true)
+  self.db.RegisterCallback(self, "OnProfileChanged")
+  self.db.RegisterCallback(self, "OnProfileCopied", "OnProfileChanged")
+  self.db.RegisterCallback(self, "OnProfileReset", "OnProfileChanged")
+
+  self:MigrateDatabase()
+  self:EnsureActiveSpecProfile()
 end
 
 -- Called by PLAYER_ENTERING_WORLD or when user changes options
@@ -1063,6 +1385,8 @@ end
 eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   -- Full refresh after world load
   if event == "PLAYER_ENTERING_WORLD" then
+    ClassHUD:EnsureActiveSpecProfile()
+    ClassHUD:MigrateDatabase()
     if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:FullUpdate()
@@ -1076,6 +1400,8 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
 
   -- Spec change
   if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
+    ClassHUD:EnsureActiveSpecProfile()
+    ClassHUD:MigrateDatabase()
     if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:UpdateCDMSnapshot()
@@ -1384,9 +1710,11 @@ SlashCmdList.CHUDTRACKED = function()
 
   local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
 
-  local tracked = ClassHUD.db.profile.trackedBuffs
-      and ClassHUD.db.profile.trackedBuffs[class]
-      and ClassHUD.db.profile.trackedBuffs[class][specID]
+  local tracked = ClassHUD.db.profile.tracking
+      and ClassHUD.db.profile.tracking.buffs
+      and ClassHUD.db.profile.tracking.buffs.tracked
+      and ClassHUD.db.profile.tracking.buffs.tracked[class]
+      and ClassHUD.db.profile.tracking.buffs.tracked[class][specID]
 
   if not snapshot then
     print("  Ingen snapshot lagret for denne spec.")

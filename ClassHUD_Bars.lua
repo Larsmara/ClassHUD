@@ -13,7 +13,7 @@ end
 
 -- Bars
 function ClassHUD:CreateCastBar()
-  local h = self.db.profile.height.cast
+  local h = self.db.profile.layout.height.cast
   local b = self:CreateStatusBar(UI.anchor, h, false) -- castbar starter uten border
 
   b:Hide()
@@ -126,14 +126,14 @@ end
 
 
 function ClassHUD:CreateHPBar()
-  local b = self:CreateStatusBar(UI.anchor, self.db.profile.height.hp, true) -- 👈 withBorder = true
+  local b = self:CreateStatusBar(UI.anchor, self.db.profile.layout.height.hp, true) -- 👈 withBorder = true
   local r, g, bCol = self:GetClassColor()
   b:SetStatusBarColor(r, g, bCol)
   UI.hp = b
 end
 
 function ClassHUD:CreateResourceBar()
-  local b = self:CreateStatusBar(UI.anchor, self.db.profile.height.resource, true) -- 👈 withBorder = true
+  local b = self:CreateStatusBar(UI.anchor, self.db.profile.layout.height.resource, true) -- 👈 withBorder = true
   if self.db.profile.colors.resourceClass then
     b:SetStatusBarColor(self:GetClassColor())
   else
@@ -152,7 +152,8 @@ end
 -- Layout (top→bottom): tracked buffs → cast → hp → resource → power
 function ClassHUD:ApplyBarSkins()
   local tex = self:FetchStatusbar()
-  local c   = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+  local colors = self.db.profile.colors or {}
+  local c   = colors.border or { r = 0, g = 0, b = 0, a = 1 }
   for _, sb in pairs({ UI.cast, UI.hp, UI.resource }) do
     if sb and sb.SetStatusBarTexture then
       sb:SetStatusBarTexture(tex)
@@ -168,7 +169,7 @@ function ClassHUD:ApplyBarSkins()
   if UI.hp then UI.hp.text:SetFont(self:FetchFont(12)) end
   if UI.resource then UI.resource.text:SetFont(self:FetchFont(12)) end
 
-  local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+  local c = colors.border or { r = 0, g = 0, b = 0, a = 1 }
   for _, sb in pairs({ UI.cast, UI.hp, UI.resource }) do
     if sb and sb.SetBackdropBorderColor then
       sb:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
@@ -177,10 +178,13 @@ function ClassHUD:ApplyBarSkins()
 end
 
 function ClassHUD:Layout()
-  local UI  = self.UI
-  local db  = self.db.profile
-  local w   = db.width or 250
-  local gap = db.spacing or 2
+  local UI      = self.UI
+  local profile = self.db.profile
+  local layout  = profile.layout or {}
+  layout.show = layout.show or {}
+  layout.height = layout.height or {}
+  local w       = profile.width or 250
+  local gap     = profile.spacing or 2
 
   if UI.anchor then UI.anchor:SetWidth(w) end
   UI.attachments = UI.attachments or {}
@@ -243,16 +247,16 @@ function ClassHUD:Layout()
 
 
   -- Bygg standard bars
-  layoutStatusBar(UI.cast, "CAST", db.show.cast, db.height.cast)
-  layoutStatusBar(UI.hp, "HP", db.show.hp, db.height.hp)
-  layoutStatusBar(UI.resource, "RESOURCE", db.show.resource, db.height.resource)
+  layoutStatusBar(UI.cast, "CAST", layout.show.cast, layout.height.cast)
+  layoutStatusBar(UI.hp, "HP", layout.show.hp, layout.height.hp)
+  layoutStatusBar(UI.resource, "RESOURCE", layout.show.resource, layout.height.resource)
 
   -- CLASS bar (special power)
   do
     local container = containers.CLASS
     if container then
-      local showPower = db.show.power
-      local h = (showPower and db.height.power) or 0
+      local showPower = layout.show.power
+      local h = (showPower and layout.height.power) or 0
       container._height = h
       container:SetHeight(math.max(h, 1))
 
@@ -303,10 +307,10 @@ function ClassHUD:Layout()
   place(trackedBars)
 
   -- Sanitér barOrder
-  local order = db.barOrder
+  local order = layout.barOrder
   if type(order) ~= "table" or #order == 0 then
     order = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
-    db.barOrder = order
+    layout.barOrder = order
   end
   local fixed = {}
   for _, key in ipairs(order) do
@@ -316,7 +320,7 @@ function ClassHUD:Layout()
     fixed = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
   end
   order = fixed
-  db.barOrder = fixed
+  layout.barOrder = fixed
 
   -- Legg ut i valgt rekkefølge
   for _, key in ipairs(order) do
@@ -372,7 +376,7 @@ function ClassHUD:StopCast()
 end
 
 function ClassHUD:StartCast(name, icon, startMS, endMS, isChannel)
-  if not self.db.profile.show.cast or not UI.cast then return end
+  if not self.db.profile.layout.show.cast or not UI.cast then return end
 
   local holder = UI.cast._holder
   local edge   = UI.cast._edge or 1
@@ -392,7 +396,8 @@ function ClassHUD:StartCast(name, icon, startMS, endMS, isChannel)
     edgeSize = edge,
     insets   = { left = 1, right = 1, top = 1, bottom = 1 },
   })
-  local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+  local colors = self.db.profile.colors or {}
+  local c = colors.border or { r = 0, g = 0, b = 0, a = 1 }
   holder:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
   holder:SetBackdropColor(0, 0, 0, 0.40)
 
@@ -451,7 +456,7 @@ function ClassHUD:UNIT_SPELLCAST_FAILED(unit) if unit == "player" then self:Stop
 
 -- HP/Primary updates
 function ClassHUD:UpdateHP()
-  if not self.db.profile.show.hp then return end
+  if not self.db.profile.layout.show.hp then return end
   local cur, max = UnitHealth("player"), UnitHealthMax("player")
   UI.hp:SetMinMaxValues(0, max)
   UI.hp:SetValue(cur)
@@ -461,7 +466,7 @@ function ClassHUD:UpdateHP()
 end
 
 function ClassHUD:UpdatePrimaryResource()
-  if not self.db.profile.show.resource then return end
+  if not self.db.profile.layout.show.resource then return end
 
   local id, token = UnitPowerType("player")
   local cur, max = UnitPower("player", id), UnitPowerMax("player", id)
