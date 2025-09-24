@@ -621,6 +621,7 @@ local defaults = {
         spacingY = 4,
         yOffset  = 0,
         grow     = "UP",
+        pandemicHighlight = true,
         spells   = {},
       },
       bottomBar = {
@@ -692,6 +693,9 @@ local defaults = {
     },
     spellFontSize = 12,
     buffFontSize  = 12,
+    soundAlerts   = {
+      enabled = false,
+    },
   },
 }
 
