@@ -28,6 +28,7 @@ _G.ClassHUD = ClassHUD -- explicit global bridge so split files can always find 
 ClassHUDDebugLog = ClassHUDDebugLog or {}
 ClassHUD.debugEnabled = ClassHUD.debugEnabled or false
 ClassHUD._loggedUntrackedSummons = ClassHUD._loggedUntrackedSummons or {}
+ClassHUD._pendingProfileSeeds = ClassHUD._pendingProfileSeeds or {}
 
 local MAX_DEBUG_LOG_ENTRIES = 2000
 
@@ -130,7 +131,6 @@ ClassHUD._framesByConcern.cooldown = ClassHUD._framesByConcern.cooldown or {}
 ClassHUD._framesByConcern.range = ClassHUD._framesByConcern.range or {}
 ClassHUD._framesByConcern.resource = ClassHUD._framesByConcern.resource or {}
 ClassHUD._framesByConcern.aura = ClassHUD._framesByConcern.aura or {}
-ClassHUD._trackedBarFrames = ClassHUD._trackedBarFrames or {}
 ClassHUD._trackedAuraIDs = ClassHUD._trackedAuraIDs or {}
 ClassHUD._trackedLayoutSnapshot = ClassHUD._trackedLayoutSnapshot or nil
 ClassHUD._barTickerToken = ClassHUD._barTickerToken or nil
@@ -360,83 +360,6 @@ local function EnsureTicker(self, field, method, interval, registry)
   end
 end
 
-function ClassHUD:RegisterTrackedBarFrame(frame)
-  if not frame then return end
-  self._trackedBarFrames[frame] = true
-  EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, self._trackedBarFrames)
-end
-
-function ClassHUD:UnregisterTrackedBarFrame(frame)
-  if not frame then return end
-  self._trackedBarFrames[frame] = nil
-
-  if frame.timer then
-    frame.timer:SetText("")
-    frame.timer:Hide()
-  end
-  frame._timerTextValue = nil
-
-  EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, self._trackedBarFrames)
-end
-
-function ClassHUD:TickTrackedBars()
-  local frames = self._trackedBarFrames
-  if not frames or not next(frames) then
-    EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, frames or {})
-    return
-  end
-
-  local now = GetTime()
-  local pendingRefresh = nil
-
-  for frame in pairs(frames) do
-    if not frame or not frame._duration or not frame._expiration then
-      frames[frame] = nil
-    else
-      local remaining = frame._expiration - now
-      if remaining < 0 then remaining = 0 end
-
-      if frame.SetValue then
-        local current = frame:GetValue()
-        if current ~= remaining then
-          frame:SetValue(remaining)
-        end
-      end
-
-      if frame._showTimer and frame.timer then
-        local formatted = ClassHUD.FormatSeconds(remaining)
-        if frame._timerTextValue ~= formatted then
-          frame.timer:SetText(formatted or "")
-          frame._timerTextValue = formatted
-        end
-        if not frame.timer:IsShown() then
-          frame.timer:Show()
-        end
-      elseif frame.timer then
-        if frame.timer:IsShown() then
-          frame.timer:Hide()
-        end
-        frame._timerTextValue = nil
-      end
-
-      if remaining <= 0 then
-        pendingRefresh = pendingRefresh or {}
-        table.insert(pendingRefresh, frame)
-      end
-    end
-  end
-
-  if pendingRefresh and self.UpdateTrackedBarFrame then
-    for _, frame in ipairs(pendingRefresh) do
-      if frames[frame] then
-        self:UpdateTrackedBarFrame(frame)
-      end
-    end
-  end
-
-  EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, frames)
-end
-
 function ClassHUD:RegisterCooldownTextFrame(frame)
   if not frame or not frame.cooldownText then return end
 
@@ -639,150 +562,321 @@ end
 -- ---------------------------------------------------------------------------
 local defaults = {
   profile = {
-    locked           = false,
-    width            = 250,
-    spacing          = 2,
-    powerSpacing     = 2,
-    position         = { x = 0, y = -50 },
-    borderColor      = { r = 0, g = 0, b = 0, a = 1 },
-    textures         = {
+    locked        = false,
+    position      = { x = 0, y = -50 },
+    width         = 250,
+    spacing       = 2,
+    powerSpacing  = 2,
+    textures      = {
       bar  = "Blizzard",
       font = "Friz Quadrata TT",
     },
-    barOrder         = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" },
-    show             = {
-      cast     = true,
-      hp       = true,
-      resource = true, -- primary (mana/rage/energy/etc.)
-      power    = true, -- special (combo/chi/shards/etc.)
-      buffs    = true,
-    },
-
-    height           = {
-      cast     = 18,
-      hp       = 14,
-      resource = 14,
-      power    = 14,
-    },
-
-    sideBars         = {
-      size    = 36,
-      spacing = 4,
-      offset  = 6,
-    },
-    classbars        = {
-      -- Eksempel: Druid
-      DRUID = {
-        [102] = { eclipse = true, combo = false }, -- Balance
-        [103] = { combo = true },                  -- Feral
-        [104] = { combo = true },                  -- Guardian
-        [105] = {},                                -- Resto
-      },
-      ROGUE = {
-        [259] = { combo = true }, -- Assassination
-        [260] = { combo = true }, -- Outlaw
-        [261] = { combo = true }, -- Sub
-      },
-    },
-
-    topBar           = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 0,
-      grow     = "UP", -- "UP" eller "DOWN"
-    },
-    bottomBar        = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 0,
-    },
-    trackedBuffBar   = {
-      perRow   = 8,
-      spacingX = 4,
-      spacingY = 4,
-      yOffset  = 4,        -- litt luft over TopBar
-      align    = "CENTER", -- "LEFT" | "CENTER" | "RIGHT"
-      height   = 16,
-    },
-
-    -- =========================
-    -- Spell & Buff persistence
-    -- =========================
-
-    -- Utility placement per spellID
-    -- [spellID] = { placement = "TOP"/"BOTTOM"/"LEFT"/"RIGHT"/"HIDDEN", order = number }
-    utilityPlacement = {
-      -- [spellID] = "TOP" | "BOTTOM" | "LEFT" | "RIGHT"
-    },
-
-    -- Persistente buff-links (class -> spec -> buffID -> spellID)
-    buffLinks        = {},
-
-    -- Brukervalgte tracked buffs (class -> spec -> buffID -> true/false)
-    trackedBuffs     = {},
-
-    -- CDM snapshot (slik at vi ikke trenger å spørre CDM hver gang)
-    cdmSnapshot      = {
-      -- [class] = {
-      --   [specID] = {
-      --     [category] = {
-      --       [spellID] = {
-      --         spellID = ...,
-      --         iconID  = ...,
-      --         name    = ...,
-      --         desc    = ...,
-      --       }
-      --     }
-      --   }
-      -- }
-    },
-
-    colors           = {
+    colors        = {
+      border        = { r = 0, g = 0, b = 0, a = 1 },
       hp            = { r = 0.10, g = 0.80, b = 0.10 },
       resourceClass = true,
       resource      = { r = 0.00, g = 0.55, b = 1.00 },
       power         = { r = 1.00, g = 0.85, b = 0.10 },
     },
-    summonTracking   = {
-      PRIEST = {
-        [34433]  = true, -- Shadowfiend
-        [123040] = true, -- Mindbender
+    layout        = {
+      barOrder = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" },
+      show = {
+        cast     = true,
+        hp       = true,
+        resource = true,
+        power    = true,
+        buffs    = true,
       },
-      WARLOCK = {
-        [193332] = true, -- Call Dreadstalkers
-        [264119] = true, -- Summon Vilefiend
-        [455476] = true, -- Summon Charhound
-        [265187] = true, -- Summon Demonic Tyrant
-        [111898] = true, -- Grimoire: Felguard
-        [205180] = true, -- Summon Darkglare
+      height = {
+        cast     = 18,
+        hp       = 14,
+        resource = 14,
+        power    = 14,
       },
-      DEATHKNIGHT = {
-        [42650] = true, -- Army of the Dead
-        [49206]  = true, -- Summon Gargoyle
+      sideBars = {
+        size    = 36,
+        spacing = 4,
+        offset  = 6,
+        spells  = {},
       },
-      DRUID = {
-        [205636] = true, -- Force of Nature
+      utility = {
+        spells = {},
       },
-      MONK = {
-        [115313] = true, -- Jade Serpent Statue
+      classbars = {
+        DRUID = {
+          [102] = { eclipse = true, combo = false },
+          [103] = { combo = true },
+          [104] = { combo = true },
+          [105] = {},
+        },
+        ROGUE = {
+          [259] = { combo = true },
+          [260] = { combo = true },
+          [261] = { combo = true },
+        },
+      },
+      topBar = {
+        perRow   = 8,
+        spacingX = 4,
+        spacingY = 4,
+        yOffset  = 0,
+        grow     = "UP",
+        spells   = {},
+      },
+      bottomBar = {
+        perRow   = 8,
+        spacingX = 4,
+        spacingY = 4,
+        yOffset  = 0,
+        spells   = {},
+      },
+      trackedBuffBar = {
+        perRow   = 8,
+        spacingX = 4,
+        spacingY = 4,
+        yOffset  = 4,
+        align    = "CENTER",
+        height   = 16,
+        buffs    = {},
+      },
+      hiddenSpells = {},
+    },
+    tracking      = {
+      summons = {
+        enabled = true,
+        byClass = {
+          PRIEST = {
+            [34433]  = true,
+            [123040] = true,
+          },
+          WARLOCK = {
+            [193332] = true,
+            [264119] = true,
+            [455476] = true,
+            [265187] = true,
+            [111898] = true,
+            [205180] = true,
+          },
+          DEATHKNIGHT = {
+            [42650] = true,
+            [49206] = true,
+          },
+          DRUID = {
+            [205636] = true,
+          },
+          MONK = {
+            [115313] = true,
+          },
+        },
+      },
+      wildImps = {
+        enabled = true,
+        mode    = "implosion",
+      },
+      totems = {
+        enabled      = true,
+        overlayStyle = "SWIPE",
+        showDuration = true,
+      },
+      buffs = {
+        links   = {},
+        tracked = {},
       },
     },
-    trackSummons     = true,
-    trackWildImps    = true,
-    wildImpTrackingMode = "implosion",
-    trackTotems      = true,
-    totemOverlayStyle = "SWIPE",
-    totems = {
-      showDuration = true,
+    cooldowns     = {
+      showSwipe   = true,
+      showCharges = true,
+      showText    = true,
+      showGCD     = false,
+      timerStyle  = "Blizzard",
     },
-    cooldowns        = {
-      showText = true,
-    },
-  }
+    spellFontSize = 12,
+    buffFontSize  = 12,
+  },
 }
 
+local function CopyTableRecursive(tbl)
+  if type(tbl) ~= "table" then return tbl end
+
+  local copy = {}
+  for k, v in pairs(tbl) do
+    if type(v) == "table" then
+      copy[k] = CopyTableRecursive(v)
+    else
+      copy[k] = v
+    end
+  end
+  return copy
+end
+
+
+function ClassHUD:SeedProfileFromCooldownManager()
+  if not (self.db and self.db.profile) then return false end
+  if not (self.IsCooldownViewerAvailable and self:IsCooldownViewerAvailable()) then return false end
+
+  local class, specID = self:GetPlayerClassSpec()
+  if not class or not specID or specID == 0 then return false end
+
+  self:UpdateCDMSnapshot()
+  local snapshot = self:GetSnapshotForSpec(class, specID, false)
+  if not snapshot or next(snapshot) == nil then return false end
+
+  local seeded = false
+
+  local layout = self.db.profile.layout or {}
+  self.db.profile.layout = layout
+
+  layout.topBar = layout.topBar or {}
+  layout.topBar.spells = layout.topBar.spells or {}
+
+  layout.utility = layout.utility or {}
+  layout.utility.spells = layout.utility.spells or {}
+
+  layout.bottomBar = layout.bottomBar or {}
+  layout.bottomBar.spells = layout.bottomBar.spells or {}
+
+  layout.trackedBuffBar = layout.trackedBuffBar or {}
+  layout.trackedBuffBar.buffs = layout.trackedBuffBar.buffs or {}
+
+  local function ensureSpecList(root)
+    root[class] = root[class] or {}
+    root[class][specID] = root[class][specID] or {}
+    return root[class][specID]
+  end
+
+  local topList = ensureSpecList(layout.topBar.spells)
+  local utilityList = ensureSpecList(layout.utility.spells)
+  local trackedOrder = ensureSpecList(layout.trackedBuffBar.buffs)
+
+  local function scrubList(target)
+    local lookup = {}
+    if type(target) ~= "table" then
+      return lookup
+    end
+
+    for index = #target, 1, -1 do
+      local value = tonumber(target[index]) or target[index]
+      if value then
+        target[index] = value
+        lookup[value] = true
+      else
+        table.remove(target, index)
+      end
+    end
+
+    return lookup
+  end
+
+  local topLookup = scrubList(topList)
+  local utilityLookup = scrubList(utilityList)
+  local trackedLookup = scrubList(trackedOrder)
+
+  local function buildEntries(category)
+    local entries = {}
+    for spellID, entry in pairs(snapshot) do
+      local cat = entry.categories and entry.categories[category]
+      if cat then
+        entries[#entries + 1] = {
+          id    = tonumber(spellID) or spellID,
+          order = tonumber(cat.order) or math.huge,
+          name  = entry.name or tostring(spellID),
+        }
+      end
+    end
+
+    table.sort(entries, function(a, b)
+      if a.order == b.order then
+        return a.name < b.name
+      end
+      return a.order < b.order
+    end)
+
+    return entries
+  end
+
+  local function appendEntries(target, lookup, entries)
+    local changed = false
+    if type(target) ~= "table" then
+      return changed
+    end
+
+    for _, info in ipairs(entries) do
+      local id = tonumber(info.id) or info.id
+      if id and not lookup[id] then
+        table.insert(target, id)
+        lookup[id] = true
+        changed = true
+      end
+    end
+
+    return changed
+  end
+
+  if appendEntries(topList, topLookup, buildEntries("essential")) then
+    seeded = true
+  end
+
+  if appendEntries(utilityList, utilityLookup, buildEntries("utility")) then
+    seeded = true
+  end
+
+  local trackedEntries = buildEntries("buff")
+
+  if (#trackedEntries > 0) then
+    self.db.profile.tracking = self.db.profile.tracking or {}
+    local tracking = self.db.profile.tracking
+    tracking.buffs = tracking.buffs or {}
+    tracking.buffs.tracked = tracking.buffs.tracked or {}
+    tracking.buffs.tracked[class] = tracking.buffs.tracked[class] or {}
+    tracking.buffs.tracked[class][specID] = tracking.buffs.tracked[class][specID] or {}
+    local trackedConfigs = tracking.buffs.tracked[class][specID]
+
+    local function appendTracked(entries)
+      local changed = false
+      for _, info in ipairs(entries) do
+        local id = tonumber(info.id) or info.id
+        if id then
+          if not trackedLookup[id] then
+            table.insert(trackedOrder, id)
+            trackedLookup[id] = true
+            changed = true
+          end
+          if trackedConfigs[id] == nil then
+            trackedConfigs[id] = true
+            changed = true
+          end
+        end
+      end
+      return changed
+    end
+
+    local trackedChanged = appendTracked(trackedEntries)
+
+    if trackedChanged then
+      seeded = true
+    end
+  end
+
+  return seeded
+end
+
+function ClassHUD:TrySeedPendingProfile()
+  if not (self.db and self.db.GetCurrentProfile) then return false end
+
+  local profileName = self.db:GetCurrentProfile()
+  if not profileName then return false end
+
+  if not (self._pendingProfileSeeds and self._pendingProfileSeeds[profileName]) then
+    return false
+  end
+
+  local seeded = self:SeedProfileFromCooldownManager()
+  if seeded then
+    self._pendingProfileSeeds[profileName] = nil
+  end
+
+  return seeded
+end
 
 function ClassHUD:FetchStatusbar()
   return self.LSM:Fetch("statusbar", self.db.profile.textures.bar)
@@ -792,6 +886,51 @@ end
 function ClassHUD:FetchFont(size, flags)
   local path = self.LSM:Fetch("font", self.db.profile.textures.font) or STANDARD_TEXT_FONT
   return path, size, flags or "OUTLINE"
+end
+
+function ClassHUD:GetActiveSpecProfileName()
+  local specIndex = GetSpecialization and GetSpecialization()
+  if specIndex and specIndex > 0 and GetSpecializationInfo then
+    local _, specName = GetSpecializationInfo(specIndex)
+    if specName and specName ~= "" then
+      return string.format("ClassHUD-%s", specName)
+    end
+  end
+
+  local _, className = UnitClass and UnitClass("player") or nil
+  className = className or "Default"
+  return string.format("ClassHUD-%s", className)
+end
+
+function ClassHUD:EnsureActiveSpecProfile()
+  if not (self.db and self.db.GetCurrentProfile) then return end
+
+  local desiredProfile = self:GetActiveSpecProfileName()
+  if not desiredProfile then return end
+
+  self.db.profiles = self.db.profiles or {}
+  self._pendingProfileSeeds = self._pendingProfileSeeds or {}
+
+  if not self.db.profiles[desiredProfile] then
+    self.db.profiles[desiredProfile] = CopyTableRecursive(defaults.profile)
+    self._pendingProfileSeeds[desiredProfile] = true
+  end
+
+  local currentProfile = self.db:GetCurrentProfile()
+  if currentProfile ~= desiredProfile then
+    self.db:SetProfile(desiredProfile)
+  end
+
+  self:TrySeedPendingProfile()
+end
+
+function ClassHUD:OnProfileChanged()
+  self:TrySeedPendingProfile()
+  if self.ResetSummonTracking then self:ResetSummonTracking() end
+  if self.ResetTotemTracking then self:ResetTotemTracking() end
+  if self.BuildFramesForSpec then self:BuildFramesForSpec() end
+  self:FullUpdate()
+  self:RefreshRegisteredOptions()
 end
 
 -- ---------------------------------------------------------------------------
@@ -818,7 +957,8 @@ function ClassHUD:CreateStatusBar(parent, height, withBorder)
       edgeSize = edge,
       insets   = { left = 0, right = 0, top = 0, bottom = 0 },
     })
-    local c = self.db.profile.borderColor or { r = 0, g = 0, b = 0, a = 1 }
+    local colors = self.db.profile.colors or {}
+    local c = colors.border or { r = 0, g = 0, b = 0, a = 1 }
     holder:SetBackdropBorderColor(c.r, c.g, c.b, c.a)
     holder:SetBackdropColor(0, 0, 0, 0.40)
   end
@@ -847,8 +987,12 @@ end
 -- Lifecycle
 -- ---------------------------------------------------------------------------
 function ClassHUD:OnInitialize()
-  -- IMPORTANT: Ensure your TOC has "## SavedVariables: ClassHUDDB"
-  self.db = AceDB:New("ClassHUDDB", defaults, true)
+  self.db = AceDB:New("ClassHUDDB2", defaults, true)
+  self.db.RegisterCallback(self, "OnProfileChanged")
+  self.db.RegisterCallback(self, "OnProfileCopied", "OnProfileChanged")
+  self.db.RegisterCallback(self, "OnProfileReset", "OnProfileChanged")
+
+  self:EnsureActiveSpecProfile()
 end
 
 -- Called by PLAYER_ENTERING_WORLD or when user changes options
@@ -875,7 +1019,6 @@ function ClassHUD:UpdateCDMSnapshot()
     [Enum.CooldownViewerCategory.Essential]   = "essential",
     [Enum.CooldownViewerCategory.Utility]     = "utility",
     [Enum.CooldownViewerCategory.TrackedBuff] = "buff",
-    [Enum.CooldownViewerCategory.TrackedBar]  = "bar",
   }
 
   local orderByCategory = {}
@@ -1063,6 +1206,7 @@ end
 eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   -- Full refresh after world load
   if event == "PLAYER_ENTERING_WORLD" then
+    ClassHUD:EnsureActiveSpecProfile()
     if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:FullUpdate()
@@ -1076,6 +1220,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
 
   -- Spec change
   if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
+    ClassHUD:EnsureActiveSpecProfile()
     if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:UpdateCDMSnapshot()
@@ -1384,9 +1529,11 @@ SlashCmdList.CHUDTRACKED = function()
 
   local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
 
-  local tracked = ClassHUD.db.profile.trackedBuffs
-      and ClassHUD.db.profile.trackedBuffs[class]
-      and ClassHUD.db.profile.trackedBuffs[class][specID]
+  local tracked = ClassHUD.db.profile.tracking
+      and ClassHUD.db.profile.tracking.buffs
+      and ClassHUD.db.profile.tracking.buffs.tracked
+      and ClassHUD.db.profile.tracking.buffs.tracked[class]
+      and ClassHUD.db.profile.tracking.buffs.tracked[class][specID]
 
   if not snapshot then
     print("  Ingen snapshot lagret for denne spec.")

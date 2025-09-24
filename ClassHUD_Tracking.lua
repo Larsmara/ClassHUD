@@ -189,14 +189,12 @@ local function GetPlayerClassToken(self)
 end
 
 function ClassHUD:IsTemporarySummonTrackingEnabled()
-  if not (self and self.db and self.db.profile) then
-    return true
+  local tracking = self and self.db and self.db.profile and self.db.profile.tracking
+  local config = tracking and tracking.summons
+  if config and config.enabled ~= nil then
+    return not not config.enabled
   end
-  local enabled = self.db.profile.trackSummons
-  if enabled == nil then
-    return true
-  end
-  return not not enabled
+  return true
 end
 
 function ClassHUD:IsSummonSpellEnabled(spellID)
@@ -207,19 +205,26 @@ function ClassHUD:IsSummonSpellEnabled(spellID)
     return true
   end
 
-  local profile = self.db and self.db.profile
-  if not profile then
+  local tracking = self.db and self.db.profile and self.db.profile.tracking
+  if not tracking then
     return true
   end
 
-  profile.summonTracking = profile.summonTracking or {}
   local class = GetPlayerClassToken(self)
   if not class then
     return true
   end
 
-  profile.summonTracking[class] = profile.summonTracking[class] or {}
-  local value = profile.summonTracking[class][spellID]
+  local summons = tracking.summons or {}
+  local byClass = summons.byClass or {}
+  local classConfig = byClass[class]
+  if type(classConfig) ~= "table" then
+    return true
+  end
+  local value = classConfig[spellID]
+  if value == nil then
+    value = classConfig[tostring(spellID)]
+  end
   if value == nil then
     return true
   end
@@ -233,19 +238,21 @@ function ClassHUD:IsWildImpTrackingEnabled()
   if not (self and self.db and self.db.profile) then
     return true
   end
-  local enabled = self.db.profile.trackWildImps
-  if enabled == nil then
-    return true
+  local tracking = self.db.profile.tracking
+  local config = tracking and tracking.wildImps
+  if config and config.enabled ~= nil then
+    return not not config.enabled
   end
-  return not not enabled
+  return true
 end
 
 function ClassHUD:GetWildImpTrackingMode()
   if not (self and self.db and self.db.profile) then
     return "implosion"
   end
-  local mode = self.db.profile.wildImpTrackingMode
-  if mode == "buff" then
+  local tracking = self.db.profile.tracking
+  local config = tracking and tracking.wildImps
+  if config and config.mode == "buff" then
     return "buff"
   end
   return "implosion"
@@ -259,18 +266,21 @@ function ClassHUD:IsTotemTrackingEnabled()
   if not (self and self.db and self.db.profile) then
     return true
   end
-  local enabled = self.db.profile.trackTotems
-  if enabled == nil then
-    return true
+  local tracking = self.db.profile.tracking
+  local config = tracking and tracking.totems
+  if config and config.enabled ~= nil then
+    return not not config.enabled
   end
-  return not not enabled
+  return true
 end
 
 function ClassHUD:GetTotemOverlayStyle()
   if not (self and self.db and self.db.profile) then
     return "SWIPE"
   end
-  return self.db.profile.totemOverlayStyle or "SWIPE"
+  local tracking = self.db.profile.tracking
+  local config = tracking and tracking.totems
+  return (config and config.overlayStyle) or "SWIPE"
 end
 
 function ClassHUD:GetActiveTotemStateForSpell(spellID)
@@ -292,9 +302,10 @@ function ClassHUD:IsTotemDurationTextEnabled()
   if not (self and self.db and self.db.profile) then
     return true
   end
-  local settings = self.db.profile.totems
-  if settings and settings.showDuration ~= nil then
-    return not not settings.showDuration
+  local tracking = self.db.profile.tracking
+  local config = tracking and tracking.totems
+  if config and config.showDuration ~= nil then
+    return not not config.showDuration
   end
   return true
 end
