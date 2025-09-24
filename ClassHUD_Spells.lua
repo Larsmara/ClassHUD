@@ -10,6 +10,120 @@ ClassHUD._trackedBuffFramePool = ClassHUD._trackedBuffFramePool or {}
 local activeFrames = {}
 local trackedBuffPool = ClassHUD._trackedBuffFramePool
 
+local function IsSpellKnownByPlayer(spellID)
+  if not spellID or spellID <= 0 then
+    return false
+  end
+
+  if IsPlayerSpell and IsPlayerSpell(spellID) then
+    return true
+  end
+
+  if IsSpellKnownOrOverridesKnown and IsSpellKnownOrOverridesKnown(spellID) then
+    return true
+  end
+
+  if C_Spell and C_Spell.IsSpellDataCached and not C_Spell.IsSpellDataCached(spellID) then
+    C_Spell.RequestLoadSpellData(spellID)
+  end
+
+  if C_Spell and C_Spell.IsSpellKnown and C_Spell.IsSpellKnown(spellID) then
+    return true
+  end
+
+  return false
+end
+
+local function AddSpellCandidate(target, spellID)
+  if type(spellID) == "number" and spellID > 0 then
+    target[spellID] = true
+  end
+end
+
+local function CollectCategoryCandidates(categoryData, bucket)
+  if not categoryData then return end
+
+  AddSpellCandidate(bucket, categoryData.overrideSpellID)
+  AddSpellCandidate(bucket, categoryData.spellID)
+  AddSpellCandidate(bucket, categoryData.spellId)
+  AddSpellCandidate(bucket, categoryData.buffSpellID)
+  AddSpellCandidate(bucket, categoryData.buffSpellId)
+  AddSpellCandidate(bucket, categoryData.castSpellID)
+  AddSpellCandidate(bucket, categoryData.castSpellId)
+  AddSpellCandidate(bucket, categoryData.talentSpellID)
+  AddSpellCandidate(bucket, categoryData.talentSpellId)
+
+  local linked = categoryData.linkedSpellIDs or categoryData.linkedSpellIds or categoryData.linkedSpells
+  if type(linked) == "table" then
+    for i = 1, #linked do
+      AddSpellCandidate(bucket, linked[i])
+    end
+  else
+    AddSpellCandidate(bucket, linked)
+  end
+
+  local spellList = categoryData.spellIDs or categoryData.spellIds or categoryData.talentSpellIDs or categoryData.talentSpellIds
+  if type(spellList) == "table" then
+    for i = 1, #spellList do
+      AddSpellCandidate(bucket, spellList[i])
+    end
+  end
+end
+
+local function DetermineCategoryForPlacement(entry, placement)
+  if not entry or not entry.categories then
+    return nil
+  end
+
+  local categories = entry.categories
+  if placement == "TOP" then
+    return categories.essential or categories.bar or categories.buff or categories.utility
+  elseif placement == "BOTTOM" then
+    return categories.bar or categories.essential or categories.buff or categories.utility
+  elseif placement == "LEFT" or placement == "RIGHT" then
+    return categories.utility or categories.essential or categories.bar or categories.buff
+  end
+
+  return categories.essential or categories.bar or categories.utility or categories.buff
+end
+
+local function EvaluateSpellFrameEligibility(frame)
+  if not frame then
+    return false
+  end
+
+  if IsSpellKnownByPlayer(frame.spellID) then
+    return true
+  end
+
+  local entry = frame.snapshotEntry
+  local placement = frame._layoutPlacement
+  local categoryData = frame._categoryData or DetermineCategoryForPlacement(entry, placement)
+
+  local candidates = {}
+  CollectCategoryCandidates(categoryData, candidates)
+
+  if not next(candidates) and entry and entry.categories then
+    for _, data in pairs(entry.categories) do
+      if data ~= categoryData then
+        CollectCategoryCandidates(data, candidates)
+      end
+    end
+  end
+
+  if not next(candidates) then
+    return true
+  end
+
+  for spellID in pairs(candidates) do
+    if IsSpellKnownByPlayer(spellID) then
+      return true
+    end
+  end
+
+  return false
+end
+
 local bit_band = bit and bit.band or (bit32 and bit32.band)
 local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
 
@@ -536,6 +650,7 @@ local function CreateSpellFrame(spellID)
   frame.isGlowing = false
   frame._last = frame._last or {}
   frame._updateKind = "spell"
+  frame._loadoutEligible = true
 
   ClassHUD.spellFrames[spellID] = frame
 
@@ -671,6 +786,14 @@ local function LayoutTrackedIcons(iconFrames, opts)
 
   container:SetWidth(width)
 
+  if #iconFrames == 0 then
+    container:SetHeight(0)
+    container._height = 0
+    container._afterGap = nil
+    container:Hide()
+    return
+  end
+
   local size = (width - (perRow - 1) * spacingX) / perRow
   if size < 1 then size = 1 end
 
@@ -773,6 +896,16 @@ local function LayoutTopBar(frames)
   local container = EnsureAttachment("TOP")
   if not container then return end
 
+  local visible = {}
+  for i = 1, #frames do
+    local frame = frames[i]
+    if frame and frame._loadoutEligible ~= false then
+      visible[#visible + 1] = frame
+    elseif frame then
+      frame:Hide()
+    end
+  end
+
   local profile  = ClassHUD.db.profile
   local layout   = profile.layout or {}
   local topBar   = layout.topBar or {}
@@ -785,19 +918,19 @@ local function LayoutTopBar(frames)
 
   container:SetWidth(width)
 
-  if #frames == 0 then
+  if #visible == 0 then
     container._height = 0
     container:SetHeight(0)
     container._afterGap = nil
-    container:Show()
+    container:Hide()
     return
   end
 
   local size     = (width - (perRow - 1) * spacingX) / perRow
-  local count    = #frames
+  local count    = #visible
   local rowsUsed = math.ceil(count / perRow)
 
-  for index, frame in ipairs(frames) do
+  for index, frame in ipairs(visible) do
     frame:SetParent(container)
     frame:SetSize(size, size)
     frame:ClearAllPoints()
@@ -839,14 +972,22 @@ local function LayoutSideBar(frames, side)
   local spacing = sideCfg.spacing or 4
   local offset  = sideCfg.offset or 6
   local yOffset = sideCfg.yOffset or 0
-  for i, frame in ipairs(frames) do
-    frame:SetSize(size, size)
-    frame:ClearAllPoints()
-    local y = yOffset - (i - 1) * (size + spacing)
-    if side == "LEFT" then
-      frame:SetPoint("TOPRIGHT", UI.attachments.LEFT, "TOPLEFT", -offset, y)
-    elseif side == "RIGHT" then
-      frame:SetPoint("TOPLEFT", UI.attachments.RIGHT, "TOPRIGHT", offset, y)
+  local index = 0
+  for i = 1, #frames do
+    local frame = frames[i]
+    if frame and frame._loadoutEligible ~= false then
+      index = index + 1
+      frame:SetSize(size, size)
+      frame:ClearAllPoints()
+      local y = yOffset - (index - 1) * (size + spacing)
+      if side == "LEFT" then
+        frame:SetPoint("TOPRIGHT", UI.attachments.LEFT, "TOPLEFT", -offset, y)
+      elseif side == "RIGHT" then
+        frame:SetPoint("TOPLEFT", UI.attachments.RIGHT, "TOPRIGHT", offset, y)
+      end
+      frame:Show()
+    elseif frame then
+      frame:Hide()
     end
   end
 end
@@ -854,6 +995,16 @@ end
 local function LayoutBottomBar(frames)
   local container = EnsureAttachment("BOTTOM")
   if not container then return end
+
+  local visible = {}
+  for i = 1, #frames do
+    local frame = frames[i]
+    if frame and frame._loadoutEligible ~= false then
+      visible[#visible + 1] = frame
+    elseif frame then
+      frame:Hide()
+    end
+  end
 
   local profile  = ClassHUD.db.profile
   local bottom   = profile.layout and profile.layout.bottomBar or {}
@@ -865,20 +1016,20 @@ local function LayoutBottomBar(frames)
 
   container:SetWidth(width)
 
-  if #frames == 0 then
+  if #visible == 0 then
     container._height = 0
     container:SetHeight(0)
     container._afterGap = nil
-    container:Show()
+    container:Hide()
     return
   end
 
   local size       = (width - (perRow - 1) * spacingX) / perRow
-  local count      = #frames
+  local count      = #visible
   local rowsUsed   = math.ceil(count / perRow)
   local topPadding = spacingY + yOffset
 
-  for index, frame in ipairs(frames) do
+  for index, frame in ipairs(visible) do
     frame:SetSize(size, size)
     frame:SetParent(container)
     frame:ClearAllPoints()
@@ -1293,6 +1444,11 @@ local function UpdateSpellFrame(frame)
   local sid = frame.spellID
   if not sid then return end
 
+  if frame._loadoutEligible == false then
+    frame:Hide()
+    return
+  end
+
   local cache = frame._last
   if not cache then
     cache = {}
@@ -1644,6 +1800,38 @@ local function UpdateSpellFrame(frame)
   end
 end
 
+function ClassHUD:IsSpellFrameEligible(frame)
+  return EvaluateSpellFrameEligibility(frame)
+end
+
+function ClassHUD:RefreshSpellLoadoutVisibility(skipLayout)
+  local changed = false
+
+  for _, frame in ipairs(activeFrames) do
+    local eligible = EvaluateSpellFrameEligibility(frame)
+    if frame._loadoutEligible ~= eligible then
+      frame._loadoutEligible = eligible
+      changed = true
+      if not eligible then
+        self:ClearFrameConcerns(frame)
+        self:ClearFrameAuraWatchers(frame)
+        frame:Hide()
+      else
+        self:RefreshFrameConcerns(frame)
+        UpdateSpellFrame(frame)
+      end
+    elseif not eligible then
+      frame:Hide()
+    end
+  end
+
+  if changed and not skipLayout and self.Layout then
+    self:Layout()
+  end
+
+  return changed
+end
+
 -- ==================================================
 -- Public API (kalles fra ClassHUD.lua events)
 -- ==================================================
@@ -1851,6 +2039,10 @@ function ClassHUD:BuildFramesForSpec()
     self:ClearFrameConcerns(f)
     self:ClearFrameAuraWatchers(f)
     f:Hide()
+    f._categoryData = nil
+    f._layoutPlacement = nil
+    f._customPlacement = nil
+    f._loadoutEligible = nil
   end
   wipe(activeFrames)
 
@@ -1861,6 +2053,10 @@ function ClassHUD:BuildFramesForSpec()
   if self.spellFrames then
     for _, frame in pairs(self.spellFrames) do
       frame.snapshotEntry = nil
+      frame._categoryData = nil
+      frame._layoutPlacement = nil
+      frame._customPlacement = nil
+      frame._loadoutEligible = nil
     end
   end
 
@@ -1933,6 +2129,8 @@ function ClassHUD:BuildFramesForSpec()
         local frame = acquire(spellID)
         frame._customOrder = index
         frame._customPlacement = placement
+        frame._layoutPlacement = placement
+        frame._categoryData = DetermineCategoryForPlacement(frame.snapshotEntry, placement)
         table.insert(target, frame)
         built[spellID] = true
       end
@@ -1968,6 +2166,8 @@ function ClassHUD:BuildFramesForSpec()
     if not built[spellID] and not hiddenSet[spellID] then
       local frame = acquire(spellID)
       frame._customOrder = nil
+      frame._layoutPlacement = "TOP"
+      frame._categoryData = item.data or DetermineCategoryForPlacement(frame.snapshotEntry, "TOP")
       table.insert(topFrames, frame)
       built[spellID] = true
     end
@@ -1986,10 +2186,14 @@ function ClassHUD:BuildFramesForSpec()
     if not built[spellID] and not hiddenSet[spellID] then
       local frame = acquire(spellID)
       frame._customOrder = nil
+      frame._layoutPlacement = "BOTTOM"
+      frame._categoryData = item.data or DetermineCategoryForPlacement(frame.snapshotEntry, "BOTTOM")
       table.insert(bottomFrames, frame)
       built[spellID] = true
     end
   end
+
+  self:RefreshSpellLoadoutVisibility(true)
 
   local function sortFrames(list)
     table.sort(list, function(a, b)

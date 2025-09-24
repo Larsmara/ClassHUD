@@ -198,8 +198,7 @@ function ClassHUD:Layout()
     f:SetParent(UI.anchor)
     f:SetWidth(w)
     f._height = f._height or 0
-    f:SetHeight(f._height)
-    f:Show()
+    f:SetHeight(math.max(f._height, 1))
     return f
   end
 
@@ -224,7 +223,13 @@ function ClassHUD:Layout()
 
     local h = (enabled and height) or 0
     container._height = h
-    container:SetHeight(math.max(h, 1))
+    if enabled and h and h > 0 then
+      container:SetHeight(h)
+      container:Show()
+    else
+      container:SetHeight(1)
+      container:Hide()
+    end
 
     if not frame then return end
 
@@ -258,7 +263,13 @@ function ClassHUD:Layout()
       local showPower = layout.show.power
       local h = (showPower and layout.height.power) or 0
       container._height = h
-      container:SetHeight(math.max(h, 1))
+      if showPower and h and h > 0 then
+        container:SetHeight(h)
+        container:Show()
+      else
+        container:SetHeight(1)
+        container:Hide()
+      end
 
       if UI.power then
         UI.power:SetParent(container)
@@ -281,7 +292,13 @@ function ClassHUD:Layout()
     local container = containers.BOTTOM
     if container then
       local h = container._height or 0
-      container:SetHeight(math.max(h, 1))
+      if h and h > 0 then
+        container:SetHeight(h)
+        container:Show()
+      else
+        container:SetHeight(1)
+        container:Hide()
+      end
     end
   end
 

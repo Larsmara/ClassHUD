@@ -1173,6 +1173,7 @@ for _, ev in pairs({
   -- World/spec
   "PLAYER_ENTERING_WORLD",
   "PLAYER_SPECIALIZATION_CHANGED",
+  "PLAYER_TALENT_UPDATE",
 
   -- Health
   "UNIT_HEALTH", "UNIT_MAXHEALTH",
@@ -1214,6 +1215,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
+    if ClassHUD.RefreshSpellLoadoutVisibility then ClassHUD:RefreshSpellLoadoutVisibility() end
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
   end
@@ -1229,7 +1231,14 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
     ClassHUD:RefreshRegisteredOptions()
     ClassHUD:UpdateAllFrames()
+    if ClassHUD.RefreshSpellLoadoutVisibility then ClassHUD:RefreshSpellLoadoutVisibility() end
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
+    return
+  end
+
+  if event == "PLAYER_TALENT_UPDATE" then
+    if ClassHUD.RefreshSpellLoadoutVisibility then ClassHUD:RefreshSpellLoadoutVisibility() end
+    if ClassHUD.UpdateAllSpellFrames then ClassHUD:UpdateAllSpellFrames() end
     return
   end
 
