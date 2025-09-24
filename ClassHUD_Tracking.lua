@@ -706,6 +706,19 @@ function ClassHUD:ExtendActiveSummonDurations(extension, excludeSpellID)
           end
         end
 
+        if active.startTime then
+          local latestExpire = 0
+          for _, data in pairs(active.guids) do
+            if data.expiration and data.expiration > latestExpire then
+              latestExpire = data.expiration
+            end
+          end
+          if latestExpire > 0 then
+            active.expiration = latestExpire
+            active.duration   = active.expiration - active.startTime
+          end
+        end
+
         FinalizeSummonState(active)
         self:UpdateSummonFrame(spellID, true)
         self:ScheduleSummonExpiryCheck(spellID)
@@ -1011,7 +1024,7 @@ local function FindSpellFrameByName(self, name)
   return nil
 end
 
-local function HasTotemDuration(state)
+function ClassHUD:HasTotemDuration(state)
   return state and state.expiration and state.duration and state.duration > 0
 end
 
@@ -1331,7 +1344,8 @@ end
 function ClassHUD:HandleCombatLogEvent()
   if not CombatLogGetCurrentEventInfo then return end
 
-  local _, subevent, _, sourceGUID, _, sourceFlags, _, destGUID, destName, _, _, spellID, spellName = CombatLogGetCurrentEventInfo()
+  local _, subevent, _, sourceGUID, _, sourceFlags, _, destGUID, destName, _, _, spellID, spellName =
+      CombatLogGetCurrentEventInfo()
   local npcID = destGUID and self:GetNpcIDFromGUID(destGUID)
 
   if DEBUG_LOG_EVENTS[subevent] and self.LogDebug then
@@ -1380,4 +1394,3 @@ function ClassHUD:HandleCombatLogEvent()
     end
   end
 end
-

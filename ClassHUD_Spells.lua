@@ -17,18 +17,31 @@ local bit_band = bit and bit.band or (bit32 and bit32.band)
 local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
 
 local SUMMON_SPELLS = {
-  [34433]  = { fallbackDuration = 15, class = "PRIEST" },      -- Shadowfiend
-  [123040] = { fallbackDuration = 12, class = "PRIEST" },      -- Mindbender
-  [193332] = { duration = 20, fallbackDuration = 20, class = "WARLOCK", name = "Dreadstalkers", npcID = 98035, displaySpellID = 104316, demon = true }, -- Call Dreadstalkers
-  [264119] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Vilefiend", npcID = 135816, demon = true },        -- Summon Vilefiend
-  [111898] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Grimoire: Felguard", npcID = 17252, demon = true }, -- Grimoire: Felguard
-  [455476] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Charhound", npcID = 226639, demon = true },         -- Summon Charhound
+  -- Priest
+  [34433]  = { fallbackDuration = 15, class = "PRIEST" }, -- Shadowfiend
+  [123040] = { fallbackDuration = 12, class = "PRIEST" }, -- Mindbender
+
+  -- Warlock
+  [193332] = { duration = 12, fallbackDuration = 12, class = "WARLOCK", name = "Dreadstalkers", npcID = 98035, displaySpellID = 104316, demon = true },              -- Call Dreadstalkers
+  [264119] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Vilefiend", npcID = 135816, demon = true },                                          -- Summon Vilefiend
+  [455465] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Gloomhound", npcID = 226268, demon = true },                                         -- Summon Gloomhound (Mark of Shatug)
+  [455476] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Charhound", npcID = 226269, demon = true },                                          -- Summon Charhound (Mark of F’harg)
+  [111898] = { duration = 17, fallbackDuration = 17, class = "WARLOCK", name = "Grimoire: Felguard", npcID = 17252, demon = true },                                  -- Grimoire: Felguard
   [265187] = { duration = 15, fallbackDuration = 15, class = "WARLOCK", name = "Demonic Tyrant", npcID = 135002, demon = true, tyrant = true, extendDuration = 15 }, -- Summon Demonic Tyrant
-  [205180] = { duration = 20, fallbackDuration = 20, class = "WARLOCK", name = "Darkglare", npcID = 103673, demon = true },        -- Summon Darkglare
-  [42650]  = { fallbackDuration = 30, class = "DEATHKNIGHT" }, -- Army of the Dead
-  [49206]  = { fallbackDuration = 25, class = "DEATHKNIGHT" }, -- Summon Gargoyle
-  [205636] = { fallbackDuration = 10, class = "DRUID" },       -- Force of Nature
-  [115313] = { fallbackDuration = 15, class = "MONK" },        -- Jade Serpent Statue
+  [205180] = { duration = 20, fallbackDuration = 20, class = "WARLOCK", name = "Darkglare", npcID = 103673, demon = true },                                          -- Summon Darkglare
+
+  -- Death Knight
+  [42650]  = { fallbackDuration = 30, class = "DEATHKNIGHT" },                                                             -- Army of the Dead (classic ID)
+  [275430] = { fallbackDuration = 30, class = "DEATHKNIGHT" },                                                             -- Army of the Dead (alt ID)
+  [49206]  = { fallbackDuration = 25, class = "DEATHKNIGHT" },                                                             -- Summon Gargoyle
+  [317776] = { duration = 15, fallbackDuration = 15, class = "DEATHKNIGHT", name = "Army of the Damned", npcID = 163366 }, -- Magus of the Dead
+  [455395] = { duration = 15, fallbackDuration = 15, class = "DEATHKNIGHT", name = "Abomination", npcID = 149555 },        -- Raise Abomination
+
+  -- Druid
+  [205636] = { fallbackDuration = 10, class = "DRUID" }, -- Force of Nature
+
+  -- Monk
+  [115313] = { fallbackDuration = 15, class = "MONK" }, -- Jade Serpent Statue
 }
 
 local WILD_IMP_SUMMON_IDS = {
@@ -811,26 +824,25 @@ function ClassHUD:UpdateTrackedLayoutSnapshot()
   local iconsContainer = EnsureAttachment("TRACKED_ICONS")
   local barsContainer  = EnsureAttachment("TRACKED_BARS")
 
-  local iconsHeight = iconsContainer and iconsContainer._height or 0
-  local iconsGap    = iconsContainer and iconsContainer._afterGap or nil
-  local barsHeight  = barsContainer and barsContainer._height or 0
-  local barsGap     = barsContainer and barsContainer._afterGap or nil
+  local iconsHeight    = iconsContainer and iconsContainer._height or 0
+  local iconsGap       = iconsContainer and iconsContainer._afterGap or nil
+  local barsHeight     = barsContainer and barsContainer._height or 0
+  local barsGap        = barsContainer and barsContainer._afterGap or nil
 
-  local changed = snapshot.iconsHeight ~= iconsHeight
+  local changed        = snapshot.iconsHeight ~= iconsHeight
       or snapshot.iconsGap ~= iconsGap
       or snapshot.barsHeight ~= barsHeight
       or snapshot.barsGap ~= barsGap
 
   snapshot.iconsHeight = iconsHeight
-  snapshot.iconsGap = iconsGap
-  snapshot.barsHeight = barsHeight
-  snapshot.barsGap = barsGap
+  snapshot.iconsGap    = iconsGap
+  snapshot.barsHeight  = barsHeight
+  snapshot.barsGap     = barsGap
 
   if changed and self.Layout then
     self:Layout()
   end
 end
-
 
 function ClassHUD:ApplyTrackedBuffLayout()
   local registry = self._trackedBuffRegistry or {}
@@ -863,8 +875,6 @@ function ClassHUD:ApplyTrackedBuffLayout()
   LayoutTrackedIcons(iconFrames, { topPadding = iconTopPadding })
   self:UpdateTrackedLayoutSnapshot()
 end
-
-
 
 local function LayoutTopBar(frames)
   local container = EnsureAttachment("TOP")
@@ -1071,14 +1081,13 @@ function ClassHUD:GetManualCountForSpell(spellID)
     if not self:IsWildImpTrackingEnabled() then
       return 0
     end
-    if self:GetWildImpTrackingMode and self:GetWildImpTrackingMode() ~= "implosion" then
+    if self:GetWildImpTrackingMode() ~= "implosion" then
       return nil
     end
     return self._wildImpCount or 0
   end
   return nil
 end
-
 
 local function UpdateTrackedIconFrame(frame)
   if not frame then return false end
@@ -1391,7 +1400,7 @@ function ClassHUD:BuildTrackedBuffFrames()
     local auraCandidates = CollectAuraSpellIDs(entry, buffID)
     local aura           = FindAuraFromCandidates(auraCandidates)
 
-    trackedIDs[buffID] = true
+    trackedIDs[buffID]   = true
     if auraCandidates then
       for _, candidateID in ipairs(auraCandidates) do
         if type(candidateID) == "number" then
@@ -1455,10 +1464,10 @@ local function UpdateSpellFrame(frame)
     frame._last = cache
   end
 
-  local data  = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
-  local entry = ClassHUD:GetSnapshotEntry(sid)
-  local auraCandidates = ClassHUD:GetAuraCandidatesForEntry(entry, sid)
-  frame._auraCandidates = auraCandidates
+  local data              = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
+  local entry             = ClassHUD:GetSnapshotEntry(sid)
+  local auraCandidates    = ClassHUD:GetAuraCandidatesForEntry(entry, sid)
+  frame._auraCandidates   = auraCandidates
 
   local harmfulTracksAura = false
   if ClassHUD.IsHarmfulAuraSpell then
@@ -1525,7 +1534,6 @@ local function UpdateSpellFrame(frame)
         cooldownSource = "charges"
       end
     end
-
   end
 
   local baseCooldown = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(sid)
@@ -1727,7 +1735,7 @@ local function UpdateSpellFrame(frame)
       frame._activeTotemState = totemState
     end
 
-    if HasTotemDuration(totemState) then
+    if ClassHUD:HasTotemDuration(totemState) then
       totemOverride = true
       if ClassHUD.MarkTotemFrameForUpdate then
         ClassHUD:MarkTotemFrameForUpdate(frame)
