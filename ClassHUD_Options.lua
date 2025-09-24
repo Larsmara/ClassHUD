@@ -116,6 +116,31 @@ local function EnsureBuffTracking(addon, class, specID)
   return buffs.tracked[class][specID], buffs.links[class][specID]
 end
 
+local function EnsureSoundConfig(addon, class, specID)
+  addon.db.profile.soundAlerts = addon.db.profile.soundAlerts or { enabled = false }
+  local root = addon.db.profile.soundAlerts
+  root[class] = root[class] or {}
+  root[class][specID] = root[class][specID] or {}
+  return root[class][specID]
+end
+
+local SOUND_NONE = "None"
+
+local function BuildSoundDropdownValues()
+  local values = { [SOUND_NONE] = SOUND_NONE }
+  if LSM then
+    local media = LSM:HashTable("sound")
+    if type(media) == "table" then
+      for key in pairs(media) do
+        if key and key ~= "" then
+          values[key] = key
+        end
+      end
+    end
+  end
+  return values
+end
+
 local function EnsureTrackedBuffOrder(addon, class, specID)
   addon.db.profile.layout = addon.db.profile.layout or {}
   addon.db.profile.layout.trackedBuffBar = addon.db.profile.layout.trackedBuffBar or {}
@@ -421,6 +446,8 @@ local function BuildTopBarSpellsEditor(addon, container)
       linkedArgs.none = { type = "description", name = "No linked buffs yet.", order = 1 }
     end
 
+    local soundValues = BuildSoundDropdownValues()
+
     container["spell" .. spellID] = {
       type   = "group",
       name   = icon .. name .. " (" .. spellID .. ")",
@@ -468,6 +495,86 @@ local function BuildTopBarSpellsEditor(addon, container)
           order  = 2,
           inline = true,
           args   = linkedArgs,
+        },
+        sounds = {
+          type   = "group",
+          name   = "Sound Alerts",
+          order  = 4,
+          inline = true,
+          args   = {
+            ready = {
+              type          = "select",
+              name          = "Ready",
+              order         = 1,
+              width         = "full",
+              dialogControl = "LSM30_Sound",
+              values        = soundValues,
+              get           = function()
+                local conf = EnsureSoundConfig(addon, class, specID)
+                local per  = conf[spellID]
+                return (per and per.onReady) or SOUND_NONE
+              end,
+              set           = function(_, value)
+                local conf = EnsureSoundConfig(addon, class, specID)
+                conf[spellID] = conf[spellID] or {}
+                if value == SOUND_NONE then
+                  conf[spellID].onReady = nil
+                else
+                  conf[spellID].onReady = value
+                end
+                addon:UpdateAllSpellFrames()
+                NotifyOptionsChanged()
+              end,
+            },
+            applied = {
+              type          = "select",
+              name          = "Applied",
+              order         = 2,
+              width         = "full",
+              dialogControl = "LSM30_Sound",
+              values        = soundValues,
+              get           = function()
+                local conf = EnsureSoundConfig(addon, class, specID)
+                local per  = conf[spellID]
+                return (per and per.onApplied) or SOUND_NONE
+              end,
+              set           = function(_, value)
+                local conf = EnsureSoundConfig(addon, class, specID)
+                conf[spellID] = conf[spellID] or {}
+                if value == SOUND_NONE then
+                  conf[spellID].onApplied = nil
+                else
+                  conf[spellID].onApplied = value
+                end
+                addon:UpdateAllSpellFrames()
+                NotifyOptionsChanged()
+              end,
+            },
+            removed = {
+              type          = "select",
+              name          = "Removed",
+              order         = 3,
+              width         = "full",
+              dialogControl = "LSM30_Sound",
+              values        = soundValues,
+              get           = function()
+                local conf = EnsureSoundConfig(addon, class, specID)
+                local per  = conf[spellID]
+                return (per and per.onRemoved) or SOUND_NONE
+              end,
+              set           = function(_, value)
+                local conf = EnsureSoundConfig(addon, class, specID)
+                conf[spellID] = conf[spellID] or {}
+                if value == SOUND_NONE then
+                  conf[spellID].onRemoved = nil
+                else
+                  conf[spellID].onRemoved = value
+                end
+                addon:UpdateAllSpellFrames()
+                NotifyOptionsChanged()
+              end,
+            },
+          },
         },
         removeSpell = {
           type    = "execute",
@@ -966,6 +1073,9 @@ function ClassHUD_BuildOptions(addon)
   layout.topBar.spacingY = layout.topBar.spacingY or 4
   layout.topBar.yOffset = layout.topBar.yOffset or 0
   layout.topBar.grow = layout.topBar.grow or "UP"
+  if layout.topBar.pandemicHighlight == nil then
+    layout.topBar.pandemicHighlight = true
+  end
   layout.topBar.spells = layout.topBar.spells or {}
 
   layout.bottomBar = layout.bottomBar or {}
@@ -1002,6 +1112,11 @@ function ClassHUD_BuildOptions(addon)
   tracking.buffs = tracking.buffs or {}
   tracking.buffs.links = tracking.buffs.links or {}
   tracking.buffs.tracked = tracking.buffs.tracked or {}
+
+  profile.soundAlerts = profile.soundAlerts or { enabled = false }
+  if profile.soundAlerts.enabled == nil then
+    profile.soundAlerts.enabled = false
+  end
 
   local topBarEditorContainer = {}
   local utilityContainer = {}
@@ -1104,6 +1219,21 @@ function ClassHUD_BuildOptions(addon)
               db.profile.textures.font = value
               addon:FullUpdate()
               addon:BuildFramesForSpec()
+            end,
+          },
+          soundAlerts = {
+            type = "toggle",
+            name = "Enable Sound Alerts",
+            order = 8,
+            width = "full",
+            get = function()
+              return db.profile.soundAlerts and db.profile.soundAlerts.enabled
+            end,
+            set = function(_, value)
+              db.profile.soundAlerts = db.profile.soundAlerts or { enabled = false }
+              db.profile.soundAlerts.enabled = value and true or false
+              addon:UpdateAllSpellFrames()
+              NotifyOptionsChanged()
             end,
           },
           bars = {
@@ -1321,10 +1451,23 @@ function ClassHUD_BuildOptions(addon)
                   addon:BuildFramesForSpec()
                 end,
               },
+              pandemicHighlight = {
+                type = "toggle",
+                name = "Enable Pandemic Highlight",
+                order = 5,
+                width = "full",
+                get = function()
+                  return layout.topBar.pandemicHighlight ~= false
+                end,
+                set = function(_, value)
+                  layout.topBar.pandemicHighlight = value and true or false
+                  addon:UpdateAllSpellFrames()
+                end,
+              },
               grow = {
                 type = "select",
                 name = "Growth Direction",
-                order = 5,
+                order = 6,
                 values = {
                   UP = "Up",
                   DOWN = "Down",

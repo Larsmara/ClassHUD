@@ -2,6 +2,7 @@
 ---@type ClassHUD
 local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local UI = ClassHUD.UI
+local LSM = LibStub("LibSharedMedia-3.0", true)
 
 ClassHUD.spellFrames = ClassHUD.spellFrames or {}
 ClassHUD.trackedBuffFrames = ClassHUD.trackedBuffFrames or {}
@@ -12,6 +13,10 @@ local trackedBuffPool = ClassHUD._trackedBuffFramePool
 
 local bit_band = bit and bit.band or (bit32 and bit32.band)
 local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
+
+local SOUND_THROTTLE_SECONDS = 0.75
+local SOUND_CHANNEL = "Master"
+local SOUND_NONE_KEY = "None"
 
 local SUMMON_SPELLS = {
   -- Priest
@@ -368,6 +373,65 @@ end
 
 ClassHUD.ShouldShowCooldownNumbers = ShouldShowCooldownNumbers
 
+local function ResolveSoundPath(soundKey)
+  if not soundKey or soundKey == "" or soundKey == SOUND_NONE_KEY then
+    return nil
+  end
+
+  if LSM then
+    local ok, path = pcall(LSM.Fetch, LSM, "sound", soundKey, true)
+    if ok and type(path) == "string" and path ~= "" then
+      return path
+    end
+  end
+
+  if type(soundKey) == "string" and soundKey ~= "" then
+    return soundKey
+  end
+
+  return nil
+end
+
+local function PlayConfiguredSound(soundKey)
+  local path = ResolveSoundPath(soundKey)
+  if not path then
+    return false
+  end
+
+  if PlaySoundFile then
+    PlaySoundFile(path, SOUND_CHANNEL)
+    return true
+  end
+
+  return false
+end
+
+local function ResolvePandemicBaseDuration(frame, aura)
+  if aura then
+    local base = aura.baseDuration or aura.duration
+    if base and base > 0 then
+      frame._pandemicBaseDuration = base
+      return base
+    end
+  end
+
+  local entry = frame and frame.snapshotEntry
+  if entry and entry.categories and entry.categories.buff then
+    local buffCat = entry.categories.buff
+    local duration = buffCat.baseDuration or buffCat.duration or buffCat.maxDuration
+    if duration and duration > 0 then
+      frame._pandemicBaseDuration = duration
+      return duration
+    end
+  end
+
+  if frame and frame._pandemicBaseDuration and frame._pandemicBaseDuration > 0 then
+    return frame._pandemicBaseDuration
+  end
+
+  return nil
+end
+
 local function CollectAuraSpellIDs(entry, primaryID)
   return ClassHUD:GetAuraCandidatesForEntry(entry, primaryID)
 end
@@ -508,6 +572,13 @@ local function CreateSpellFrame(spellID)
   frame.overlay:SetAllPoints(frame)
   frame.overlay:SetFrameLevel(frame.cooldown2:GetFrameLevel() + 1)
 
+  frame.pandemicGlow = frame.overlay:CreateTexture(nil, "OVERLAY")
+  frame.pandemicGlow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+  frame.pandemicGlow:SetBlendMode("ADD")
+  frame.pandemicGlow:SetAllPoints(frame)
+  frame.pandemicGlow:SetVertexColor(0.6, 1, 0.2, 0.85)
+  frame.pandemicGlow:Hide()
+
   -- Flytt tekstene til overlay
   frame.count = frame.overlay:CreateFontString(nil, "OVERLAY")
   frame.count:ClearAllPoints()
@@ -536,6 +607,8 @@ local function CreateSpellFrame(spellID)
   frame.isGlowing = false
   frame._last = frame._last or {}
   frame._updateKind = "spell"
+  frame._pandemicBaseDuration = frame._pandemicBaseDuration or nil
+  frame._soundState = frame._soundState or { wasReady = nil, auraWasActive = nil, lastPlayedAt = 0 }
 
   ClassHUD.spellFrames[spellID] = frame
 
@@ -811,6 +884,22 @@ local function SpellMatchesPlayer(spellID)
   return false
 end
 
+local function SpellIsKnownAndUsable(spellID)
+  if not SpellMatchesPlayer(spellID) then
+    return false, false
+  end
+
+  if C_Spell and C_Spell.IsSpellUsable then
+    local usable, insufficient = C_Spell.IsSpellUsable(spellID)
+    if usable or insufficient then
+      return true, insufficient
+    end
+    return false, insufficient and true or false
+  end
+
+  return true, false
+end
+
 local function FilterSpellFrames(frames)
   if type(frames) ~= "table" then
     return {}
@@ -820,11 +909,18 @@ local function FilterSpellFrames(frames)
   for _, frame in ipairs(frames) do
     if frame then
       local spellID = frame.spellID
-      local allow = SpellMatchesPlayer(spellID)
+      local allow = false
+      if spellID then
+        allow = SpellIsKnownAndUsable(spellID)
+      end
       frame._layoutConditionHidden = not allow
       if allow then
         visible[#visible + 1] = frame
       else
+        frame._layoutPlacement = nil
+        if frame.pandemicGlow then
+          frame.pandemicGlow:Hide()
+        end
         frame:Hide()
       end
     end
@@ -886,6 +982,7 @@ local function LayoutTopBar(frames)
     end
 
     frame:Show()
+    frame._layoutPlacement = "TOP"
   end
 
   local totalHeight = yOffset + rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY
@@ -912,8 +1009,12 @@ local function LayoutSideBar(frames, side)
     local y = yOffset - (i - 1) * (size + spacing)
     if side == "LEFT" then
       frame:SetPoint("TOPRIGHT", UI.attachments.LEFT, "TOPLEFT", -offset, y)
+      frame._layoutPlacement = "LEFT"
     elseif side == "RIGHT" then
       frame:SetPoint("TOPLEFT", UI.attachments.RIGHT, "TOPRIGHT", offset, y)
+      frame._layoutPlacement = "RIGHT"
+    else
+      frame._layoutPlacement = side
     end
   end
 end
@@ -963,6 +1064,7 @@ local function LayoutBottomBar(frames)
       startX + col * (size + spacingX),
       -(topPadding + row * (size + spacingY)))
     frame:Show()
+    frame._layoutPlacement = "BOTTOM"
   end
 
   local totalHeight = topPadding + rowsUsed * size + math.max(0, rowsUsed - 1) * spacingY
@@ -1418,6 +1520,20 @@ local function UpdateSpellFrame(frame)
   local shouldDesaturate = false
   local chargeStart, chargeDuration, chargeModRate = nil, nil, nil
 
+  local now = GetTime()
+  local actualCooldownRemaining = nil
+  local function registerActualCooldown(startTime, duration)
+    if not startTime or not duration or duration <= 0 then
+      return
+    end
+    local remaining = (startTime + duration) - now
+    if remaining and remaining > 0 then
+      if not actualCooldownRemaining or remaining > actualCooldownRemaining then
+        actualCooldownRemaining = remaining
+      end
+    end
+  end
+
   if chargesInfo and chargesInfo.maxCharges and chargesInfo.maxCharges > 1 then
     chargesValue = chargesInfo.currentCharges or 0
     maxCharges = chargesInfo.maxCharges
@@ -1436,6 +1552,7 @@ local function UpdateSpellFrame(frame)
         cdModRate = chargeModRate
         cooldownEnd = chargeStart + chargeDuration
         cooldownSource = "charges"
+        registerActualCooldown(chargeStart, chargeDuration)
       end
     end
   end
@@ -1450,6 +1567,7 @@ local function UpdateSpellFrame(frame)
       cooldownEnd = baseEnd
       cooldownSource = "spell"
     end
+    registerActualCooldown(baseCooldown.startTime, baseCooldown.duration)
   end
 
   local gcd = C_Spell and C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(61304)
@@ -1600,6 +1718,34 @@ local function UpdateSpellFrame(frame)
     resourceLimited = true
   end
 
+  local auraRemaining = nil
+  local auraActive = false
+  if aura and aura.expirationTime then
+    auraRemaining = aura.expirationTime - now
+    if auraRemaining and auraRemaining > 0 then
+      auraActive = true
+    else
+      auraRemaining = nil
+    end
+  end
+
+  local isTopPlacement = frame._layoutPlacement == "TOP"
+  local useDotStates = false
+  if isTopPlacement and harmfulTracksAura then
+    useDotStates = true
+    if C_Spell and C_Spell.IsSpellHarmful then
+      local ok, harmfulFlag = pcall(C_Spell.IsSpellHarmful, sid)
+      if ok and harmfulFlag == false then
+        useDotStates = false
+      end
+    end
+  end
+
+  local stateOnCooldown = false
+  if actualCooldownRemaining and actualCooldownRemaining > 0 then
+    stateOnCooldown = true
+  end
+
   local cooldownEndTime = cooldownEnd or (cdStart and cdDuration and (cdStart + cdDuration)) or nil
   if hasCooldown then
     cache.cooldownEnd = cooldownEndTime
@@ -1613,7 +1759,6 @@ local function UpdateSpellFrame(frame)
     cache.chargeCooldownEnd = nil
   end
 
-  local now = GetTime()
   local chargesDepleted = chargesShown and (chargesValue or 0) <= 0
   local onCooldown = false
   if hasCooldown and cooldownEndTime then
@@ -1679,7 +1824,90 @@ local function UpdateSpellFrame(frame)
     vertexR, vertexG, vertexB = 1, 1, 0.3
   end
 
-  local finalDesaturate = shouldDesaturate
+  local baseDuration = nil
+  if auraActive then
+    baseDuration = ResolvePandemicBaseDuration(frame, aura)
+  end
+
+  local pandemicHighlight = false
+  if useDotStates then
+    local profile = ClassHUD.db and ClassHUD.db.profile
+    local layout = profile and profile.layout
+    local topSettings = layout and layout.topBar
+    local highlightEnabled = not (topSettings and topSettings.pandemicHighlight == false)
+    if highlightEnabled and auraActive and baseDuration and baseDuration > 0 and auraRemaining and auraRemaining > 0 then
+      if auraRemaining <= (baseDuration * 0.3) then
+        pandemicHighlight = true
+      end
+    end
+  end
+
+  if frame.pandemicGlow then
+    if pandemicHighlight then
+      if not frame.pandemicGlow:IsShown() then
+        frame.pandemicGlow:Show()
+      end
+    elseif frame.pandemicGlow:IsShown() then
+      frame.pandemicGlow:Hide()
+    end
+  end
+
+  do
+    local state = frame._soundState
+    if state then
+      if state.lastPlayedAt == nil then
+        state.lastPlayedAt = 0
+      end
+      local soundProfile = ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.soundAlerts
+      if useDotStates and soundProfile and soundProfile.enabled then
+        local class, specID = ClassHUD:GetPlayerClassSpec()
+        local perClass = soundProfile[class]
+        local perSpec = perClass and perClass[specID]
+        local perSpell = perSpec and perSpec[sid]
+        if state.wasReady == nil then
+          state.wasReady = not stateOnCooldown
+        end
+        if state.auraWasActive == nil then
+          state.auraWasActive = auraActive
+        end
+        if perSpell then
+          local function tryPlay(key)
+            if not key or key == SOUND_NONE_KEY then
+              return
+            end
+            local last = state.lastPlayedAt or 0
+            if (now - last) < SOUND_THROTTLE_SECONDS then
+              return
+            end
+            if PlayConfiguredSound(key) then
+              state.lastPlayedAt = now
+            end
+          end
+          if not stateOnCooldown and state.wasReady == false then
+            tryPlay(perSpell.onReady)
+          end
+          if auraActive and not state.auraWasActive then
+            tryPlay(perSpell.onApplied)
+          end
+          if not auraActive and state.auraWasActive then
+            tryPlay(perSpell.onRemoved)
+          end
+        end
+        state.wasReady = not stateOnCooldown
+        state.auraWasActive = auraActive
+      else
+        state.wasReady = not stateOnCooldown
+        state.auraWasActive = auraActive
+      end
+    end
+  end
+
+  local finalDesaturate
+  if useDotStates then
+    finalDesaturate = stateOnCooldown or resourceLimited
+  else
+    finalDesaturate = shouldDesaturate
+  end
 
   local inRange = nil
   if UnitExists("target") and not UnitIsDead("target") then
@@ -1999,11 +2227,14 @@ function ClassHUD:BuildFramesForSpec()
     for index = 1, #array do
       local spellID = tonumber(array[index]) or array[index]
       if spellID and not built[spellID] and not hiddenSet[spellID] then
-        local frame = acquire(spellID)
-        frame._customOrder = index
-        frame._customPlacement = placement
-        table.insert(target, frame)
-        built[spellID] = true
+        local allow = SpellIsKnownAndUsable(spellID)
+        if allow then
+          local frame = acquire(spellID)
+          frame._customOrder = index
+          frame._customPlacement = placement
+          table.insert(target, frame)
+          built[spellID] = true
+        end
       end
     end
   end
@@ -2034,7 +2265,7 @@ function ClassHUD:BuildFramesForSpec()
 
   for _, item in ipairs(collectSnapshot("essential")) do
     local spellID = item.spellID
-    if not built[spellID] and not hiddenSet[spellID] then
+    if not built[spellID] and not hiddenSet[spellID] and SpellIsKnownAndUsable(spellID) then
       local frame = acquire(spellID)
       frame._customOrder = nil
       table.insert(topFrames, frame)
@@ -2044,7 +2275,7 @@ function ClassHUD:BuildFramesForSpec()
 
   for _, item in ipairs(collectSnapshot("utility")) do
     local spellID = item.spellID
-    if spellID and not built[spellID] then
+    if spellID and not built[spellID] and SpellIsKnownAndUsable(spellID) then
       hiddenSet[spellID] = true
       built[spellID] = true
     end
@@ -2052,7 +2283,7 @@ function ClassHUD:BuildFramesForSpec()
 
   for _, item in ipairs(collectSnapshot("bar")) do
     local spellID = item.spellID
-    if not built[spellID] and not hiddenSet[spellID] then
+    if not built[spellID] and not hiddenSet[spellID] and SpellIsKnownAndUsable(spellID) then
       local frame = acquire(spellID)
       frame._customOrder = nil
       table.insert(bottomFrames, frame)
