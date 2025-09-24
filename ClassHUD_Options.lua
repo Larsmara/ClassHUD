@@ -224,6 +224,16 @@ local function EnsurePlacementLists(addon, class, specID)
   }
 end
 
+local function EnsureTopBarFlags(addon, class, specID)
+  addon.db.profile.layout = addon.db.profile.layout or {}
+  local layout = addon.db.profile.layout
+  layout.topBar = layout.topBar or {}
+  layout.topBar.flags = layout.topBar.flags or {}
+  layout.topBar.flags[class] = layout.topBar.flags[class] or {}
+  layout.topBar.flags[class][specID] = layout.topBar.flags[class][specID] or {}
+  return layout.topBar.flags[class][specID]
+end
+
 local function RemoveSpellFromLists(lists, spellID)
   spellID = tonumber(spellID) or spellID
   for _, list in pairs(lists) do
@@ -467,6 +477,47 @@ local function BuildTopBarSpellsEditor(addon, container)
             addon:BuildFramesForSpec()
             local ACR = LibStub("AceConfigRegistry-3.0", true)
             if ACR then ACR:NotifyChange("ClassHUD") end
+          end,
+        },
+        trackOnTarget = {
+          type  = "toggle",
+          name  = "Track on Target",
+          desc  = "When enabled, this spell will track its DoT/debuff on your current target. Uses the debuff state machine (cooldown, active, pandemic). If no target or the debuff is missing, the icon is shown greyed out.",
+          order = 1.5,
+          width = "full",
+          get   = function()
+            local numericID = tonumber(spellID) or spellID
+            local flagsRoot = addon:GetProfileTable(false, "layout", "topBar", "flags", class, specID)
+            local perSpell = flagsRoot and flagsRoot[numericID]
+            return perSpell and perSpell.trackOnTarget == true
+          end,
+          set   = function(_, val)
+            local numericID = tonumber(spellID) or spellID
+            local flagsRoot = EnsureTopBarFlags(addon, class, specID)
+            if val then
+              flagsRoot[numericID] = flagsRoot[numericID] or {}
+              flagsRoot[numericID].trackOnTarget = true
+            else
+              local perSpell = flagsRoot[numericID]
+              if perSpell then
+                perSpell.trackOnTarget = nil
+                if next(perSpell) == nil then
+                  flagsRoot[numericID] = nil
+                end
+              end
+              if next(flagsRoot) == nil then
+                local topFlags = addon.db.profile.layout.topBar.flags
+                local classFlags = topFlags and topFlags[class]
+                if classFlags then
+                  classFlags[specID] = nil
+                  if next(classFlags) == nil then
+                    topFlags[class] = nil
+                  end
+                end
+              end
+            end
+            addon:BuildFramesForSpec()
+            NotifyOptionsChanged()
           end,
         },
         order = {

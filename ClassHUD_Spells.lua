@@ -68,6 +68,7 @@ local HARMFUL_GLOW_UNITS = { "target", "focus" }
 local TRACKED_UNITS = { "player", "pet" }
 local SPELL_AURA_UNITS_DEFAULT = TRACKED_UNITS
 local SPELL_AURA_UNITS_HARMFUL = { "target", "focus" }
+local SPELL_AURA_UNITS_TARGET_ONLY = { "target" }
 
 local function CopyCandidates(list)
   if type(list) ~= "table" then return nil end
@@ -1475,12 +1476,18 @@ local function UpdateSpellFrame(frame)
   local auraCandidates    = ClassHUD:GetAuraCandidatesForEntry(entry, sid)
   frame._auraCandidates   = auraCandidates
 
+  local trackOnTarget = frame._trackOnTarget == true
   local harmfulTracksAura = false
-  if ClassHUD.IsHarmfulAuraSpell then
+  if (not trackOnTarget) and ClassHUD.IsHarmfulAuraSpell then
     harmfulTracksAura = select(1, ClassHUD:IsHarmfulAuraSpell(sid, entry))
   end
 
-  local auraUnits = harmfulTracksAura and SPELL_AURA_UNITS_HARMFUL or SPELL_AURA_UNITS_DEFAULT
+  local auraUnits
+  if trackOnTarget then
+    auraUnits = SPELL_AURA_UNITS_TARGET_ONLY
+  else
+    auraUnits = harmfulTracksAura and SPELL_AURA_UNITS_HARMFUL or SPELL_AURA_UNITS_DEFAULT
+  end
   frame._auraUnitList = auraUnits
   RegisterFrameAuraWatchers(frame, auraCandidates, auraUnits)
 
@@ -1503,9 +1510,16 @@ local function UpdateSpellFrame(frame)
     aura, auraUnit = ClassHUD:GetAuraForSpell(sid, auraUnits)
     auraSpellID = sid
   end
-  if not aura and harmfulTracksAura then
-    aura = ClassHUD:FindAuraByName(sid, SPELL_AURA_UNITS_HARMFUL)
-    auraSpellID = sid
+  if not aura then
+    if trackOnTarget then
+      aura = ClassHUD:FindAuraByName(sid, SPELL_AURA_UNITS_TARGET_ONLY)
+      if aura then
+        auraSpellID = sid
+      end
+    elseif harmfulTracksAura then
+      aura = ClassHUD:FindAuraByName(sid, SPELL_AURA_UNITS_HARMFUL)
+      auraSpellID = sid
+    end
   end
   frame._lastAuraUnit = auraUnit
   frame._lastAuraSpellID = auraSpellID
@@ -1731,7 +1745,7 @@ local function UpdateSpellFrame(frame)
 
   local isTopPlacement = frame._layoutPlacement == "TOP"
   local useDotStates = false
-  if isTopPlacement and harmfulTracksAura then
+  if isTopPlacement and trackOnTarget then
     useDotStates = true
     if C_Spell and C_Spell.IsSpellHarmful then
       local ok, harmfulFlag = pcall(C_Spell.IsSpellHarmful, sid)
@@ -1812,7 +1826,7 @@ local function UpdateSpellFrame(frame)
     shouldDesaturate = true
   end
 
-  local tracksAura = harmfulTracksAura or (auraCandidates and #auraCandidates > 0)
+  local tracksAura = trackOnTarget or harmfulTracksAura or (auraCandidates and #auraCandidates > 0)
   if tracksAura then
     ClassHUD:AddFrameToConcern(frame, "aura")
   else
@@ -1902,9 +1916,21 @@ local function UpdateSpellFrame(frame)
     end
   end
 
+  local hasTarget = true
+  if trackOnTarget then
+    local exists = UnitExists and UnitExists("target")
+    if exists and UnitIsDead and UnitIsDead("target") then
+      exists = false
+    end
+    hasTarget = not not exists
+  end
+
   local finalDesaturate
   if useDotStates then
     finalDesaturate = stateOnCooldown or resourceLimited
+    if trackOnTarget and (not hasTarget or not auraActive) then
+      finalDesaturate = true
+    end
   else
     finalDesaturate = shouldDesaturate
   end
@@ -2148,6 +2174,7 @@ function ClassHUD:BuildFramesForSpec()
     self:ClearFrameConcerns(f)
     self:ClearFrameAuraWatchers(f)
     f:Hide()
+    f._trackOnTarget = false
   end
   wipe(activeFrames)
 
@@ -2182,6 +2209,7 @@ function ClassHUD:BuildFramesForSpec()
     local frame = CreateSpellFrame(spellID)
     frame:Show()
     frame.snapshotEntry = snapshot[spellID]
+    frame._trackOnTarget = false
     if not built[spellID] then
       table.insert(activeFrames, frame)
       built[spellID] = true
@@ -2194,6 +2222,7 @@ function ClassHUD:BuildFramesForSpec()
   self.db.profile.layout = self.db.profile.layout or {}
   local layout = self.db.profile.layout
   layout.topBar = layout.topBar or {}
+  layout.topBar.flags = layout.topBar.flags or {}
   layout.bottomBar = layout.bottomBar or {}
   layout.sideBars = layout.sideBars or {}
   layout.sideBars.spells = layout.sideBars.spells or {}
@@ -2205,6 +2234,19 @@ function ClassHUD:BuildFramesForSpec()
   sideSpec.left = sideSpec.left or {}
   sideSpec.right = sideSpec.right or {}
   local hiddenList = self:GetProfileTable(true, "layout", "hiddenSpells", class, specID)
+  local topFlags = self:GetProfileTable(false, "layout", "topBar", "flags", class, specID)
+
+  local function shouldTrackOnTarget(spellID)
+    if not topFlags then
+      return false
+    end
+    local numericID = tonumber(spellID) or spellID
+    local perSpell = topFlags[numericID]
+    if type(perSpell) ~= "table" then
+      return false
+    end
+    return perSpell.trackOnTarget == true
+  end
 
   local topFrames, bottomFrames = {}, {}
   local sideFrames = { LEFT = {}, RIGHT = {} }
@@ -2232,6 +2274,11 @@ function ClassHUD:BuildFramesForSpec()
           local frame = acquire(spellID)
           frame._customOrder = index
           frame._customPlacement = placement
+          if placement == "TOP" then
+            frame._trackOnTarget = shouldTrackOnTarget(spellID)
+          else
+            frame._trackOnTarget = false
+          end
           table.insert(target, frame)
           built[spellID] = true
         end
@@ -2268,6 +2315,7 @@ function ClassHUD:BuildFramesForSpec()
     if not built[spellID] and not hiddenSet[spellID] and SpellIsKnownAndUsable(spellID) then
       local frame = acquire(spellID)
       frame._customOrder = nil
+      frame._trackOnTarget = shouldTrackOnTarget(spellID)
       table.insert(topFrames, frame)
       built[spellID] = true
     end
@@ -2286,6 +2334,7 @@ function ClassHUD:BuildFramesForSpec()
     if not built[spellID] and not hiddenSet[spellID] and SpellIsKnownAndUsable(spellID) then
       local frame = acquire(spellID)
       frame._customOrder = nil
+      frame._trackOnTarget = false
       table.insert(bottomFrames, frame)
       built[spellID] = true
     end

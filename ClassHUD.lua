@@ -623,6 +623,7 @@ local defaults = {
         grow     = "UP",
         pandemicHighlight = true,
         spells   = {},
+        flags    = {},
       },
       bottomBar = {
         perRow   = 8,
@@ -732,6 +733,7 @@ function ClassHUD:SeedProfileFromCooldownManager()
 
   layout.topBar = layout.topBar or {}
   layout.topBar.spells = layout.topBar.spells or {}
+  layout.topBar.flags = layout.topBar.flags or {}
 
   layout.utility = layout.utility or {}
   layout.utility.spells = layout.utility.spells or {}
@@ -879,6 +881,7 @@ function ClassHUD:SyncSnapshotToDB()
 
   layout.topBar = layout.topBar or {}
   layout.topBar.spells = layout.topBar.spells or {}
+  layout.topBar.flags = layout.topBar.flags or {}
 
   layout.utility = layout.utility or {}
   layout.utility.spells = layout.utility.spells or {}
