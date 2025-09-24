@@ -387,6 +387,19 @@ function ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
     frame._last = cache
   end
 
+  if frame._gcdActive then
+    if cache.cooldownTextShown then
+      frame.cooldownText:Hide()
+      cache.cooldownTextShown = false
+    end
+    if cache.cooldownTextValue then
+      frame.cooldownText:SetText("")
+      cache.cooldownTextValue = nil
+    end
+    self:UnregisterCooldownTextFrame(frame)
+    return
+  end
+
   if not showNumbers then
     if cache.cooldownTextShown then
       frame.cooldownText:Hide()
@@ -915,7 +928,10 @@ function ClassHUD:SyncSnapshotToDB()
     local lookup = {}
     if type(list) == "table" then
       for _, id in ipairs(list) do
-        lookup[id] = true
+        local normalized = tonumber(id) or id
+        if normalized ~= nil then
+          lookup[normalized] = true
+        end
       end
     end
     return lookup
@@ -939,37 +955,66 @@ function ClassHUD:SyncSnapshotToDB()
   end
 
   -- Build snapshot category lists
-  local function buildEntries(category)
-    local entries = {}
+  local function buildCategorizedEntries()
+    local categorized = {
+      essential = {},
+      utility = {},
+      buff = {},
+    }
+
+    local relevant = { essential = true, utility = true, buff = true }
+
     for spellID, entry in pairs(snapshot) do
-      if entry.categories and entry.categories[category] then
-        local cat = entry.categories[category]
-        entries[#entries + 1] = {
-          id    = tonumber(spellID) or spellID,
-          order = tonumber(cat.order) or math.huge,
-          name  = entry.name or tostring(spellID),
-        }
+      if entry and entry.categories then
+        for category, catData in pairs(entry.categories) do
+          if relevant[category] then
+            local normalizedID = tonumber(spellID) or spellID
+            if normalizedID then
+              local orderValue = math.huge
+              if type(catData) == "table" and catData.order ~= nil then
+                orderValue = tonumber(catData.order) or math.huge
+              end
+
+              local bucket = categorized[category]
+              bucket[#bucket + 1] = {
+                id = normalizedID,
+                order = orderValue,
+                name = entry.name or tostring(normalizedID),
+              }
+            end
+          end
+        end
       end
     end
-    table.sort(entries, function(a, b)
-      if a.order == b.order then
-        return a.name < b.name
-      end
-      return a.order < b.order
-    end)
-    return entries
+
+    local function sortEntries(list)
+      table.sort(list, function(a, b)
+        if a.order == b.order then
+          return a.name < b.name
+        end
+        return a.order < b.order
+      end)
+    end
+
+    for _, list in pairs(categorized) do
+      sortEntries(list)
+    end
+
+    return categorized
   end
 
+  local categorized = buildCategorizedEntries()
+
   local changed = false
-  if appendEntries(topList, topLookup, buildEntries("essential")) then
+  if appendEntries(topList, topLookup, categorized.essential) then
     changed = true
   end
-  if appendEntries(utilityList, utilityLookup, buildEntries("utility")) then
+  if appendEntries(utilityList, utilityLookup, categorized.utility) then
     changed = true
   end
 
   -- Tracked buffs
-  local trackedEntries = buildEntries("buff")
+  local trackedEntries = categorized.buff or {}
   if #trackedEntries > 0 then
     self.db.profile.tracking = self.db.profile.tracking or {}
     local tracking = self.db.profile.tracking

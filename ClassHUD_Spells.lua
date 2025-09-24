@@ -472,6 +472,75 @@ end
 
 ClassHUD.SetFrameGlow = SetFrameGlow
 
+local function EvaluateBuffLinks(frame, spellID)
+  local list = frame and frame._linkedBuffIDs
+  if not list then
+    list = {}
+    if frame then
+      frame._linkedBuffIDs = list
+    end
+  else
+    wipe(list)
+  end
+
+  if frame then
+    frame._linkedBuffActive = false
+    frame._linkedBuffCount = nil
+  end
+
+  if not frame or not spellID or not ClassHUD.db or not ClassHUD.db.profile then
+    return false, nil, list
+  end
+
+  local class, specID = ClassHUD:GetPlayerClassSpec()
+  if not class or not specID or specID == 0 then
+    return false, nil, list
+  end
+
+  local tracking = ClassHUD.db.profile.tracking
+  local linkRoot = tracking and tracking.buffs and tracking.buffs.links
+  local specLinks = linkRoot and linkRoot[class] and linkRoot[class][specID]
+  if type(specLinks) ~= "table" then
+    return false, nil, list
+  end
+
+  local anyActive = false
+  local highestCount = nil
+
+  for buffKey, linkedSpellID in pairs(specLinks) do
+    local normalizedLink = tonumber(linkedSpellID) or linkedSpellID
+    if normalizedLink == spellID then
+      local buffID = tonumber(buffKey) or buffKey
+      if buffID then
+        list[#list + 1] = buffID
+
+        local aura = ClassHUD:GetAuraForSpell(buffID)
+        if aura then
+          anyActive = true
+          local stackCount = aura.applications or aura.stackCount or aura.charges or aura.points
+          if stackCount and stackCount > 0 then
+            if not highestCount or stackCount > highestCount then
+              highestCount = stackCount
+            end
+          end
+        end
+      end
+    end
+  end
+
+  if anyActive then
+    frame._linkedBuffActive = true
+    frame._linkedBuffCount = highestCount
+    return true, highestCount, list
+  end
+
+  frame._linkedBuffActive = false
+  frame._linkedBuffCount = nil
+  return false, nil, list
+end
+
+ClassHUD.EvaluateBuffLinks = EvaluateBuffLinks
+
 local function UpdateGlow(frame, aura, sid, data)
   -- 1) Samme semantikk som original: aura tilstede → glow
   local shouldGlow = (aura ~= nil)
@@ -509,18 +578,8 @@ local function UpdateGlow(frame, aura, sid, data)
   end
 
   -- 2) Manuelle buffLinks kan holde glow (som originalt "keepGlow")
-  if allowExtraGlowLogic and not shouldGlow then
-    local class, specID = ClassHUD:GetPlayerClassSpec()
-    local tracking = ClassHUD.db.profile.tracking or {}
-    local buffLinks = tracking.buffs and tracking.buffs.links or {}
-    local links = (buffLinks[class] and buffLinks[class][specID]) or {}
-    -- links: [buffID] = linkedSpellID
-    for buffID, linkedSpellID in pairs(links) do
-      if linkedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
-        shouldGlow = true
-        break
-      end
-    end
+  if allowExtraGlowLogic and not shouldGlow and frame._linkedBuffActive then
+    shouldGlow = true
   end
 
   -- 3) Auto-mapping fallback (som i originalens "keepGlow")
@@ -610,6 +669,7 @@ local function CreateSpellFrame(spellID)
   frame._updateKind = "spell"
   frame._pandemicBaseDuration = frame._pandemicBaseDuration or nil
   frame._soundState = frame._soundState or { wasReady = nil, auraWasActive = nil, lastPlayedAt = 0 }
+  frame._gcdActive = false
 
   ClassHUD.spellFrames[spellID] = frame
 
@@ -1489,7 +1549,89 @@ local function UpdateSpellFrame(frame)
     auraUnits = harmfulTracksAura and SPELL_AURA_UNITS_HARMFUL or SPELL_AURA_UNITS_DEFAULT
   end
   frame._auraUnitList = auraUnits
-  RegisterFrameAuraWatchers(frame, auraCandidates, auraUnits)
+
+  local linkedBuffActive, linkedBuffCount, linkedBuffIDs = EvaluateBuffLinks(frame, sid)
+
+  local watcherCandidates = auraCandidates
+  if linkedBuffIDs and #linkedBuffIDs > 0 then
+    local combined = frame._linkedWatcherCandidates
+    if not combined then
+      combined = {}
+      frame._linkedWatcherCandidates = combined
+    else
+      wipe(combined)
+    end
+
+    if type(auraCandidates) == "table" then
+      for i = 1, #auraCandidates do
+        combined[#combined + 1] = auraCandidates[i]
+      end
+    end
+
+    for i = 1, #linkedBuffIDs do
+      local buffID = linkedBuffIDs[i]
+      local duplicate = false
+      if type(auraCandidates) == "table" then
+        for j = 1, #auraCandidates do
+          if auraCandidates[j] == buffID then
+            duplicate = true
+            break
+          end
+        end
+      end
+      if not duplicate then
+        for j = 1, #combined do
+          if combined[j] == buffID then
+            duplicate = true
+            break
+          end
+        end
+      end
+      if not duplicate then
+        combined[#combined + 1] = buffID
+      end
+    end
+
+    watcherCandidates = combined
+  elseif frame._linkedWatcherCandidates then
+    wipe(frame._linkedWatcherCandidates)
+  end
+
+  local watcherUnits = auraUnits
+  if linkedBuffIDs and #linkedBuffIDs > 0 then
+    local combinedUnits = frame._linkedWatcherUnits
+    if not combinedUnits then
+      combinedUnits = {}
+      frame._linkedWatcherUnits = combinedUnits
+    else
+      wipe(combinedUnits)
+    end
+
+    if type(auraUnits) == "table" then
+      for i = 1, #auraUnits do
+        combinedUnits[#combinedUnits + 1] = auraUnits[i]
+      end
+    end
+
+    local function ensureUnit(unit)
+      if not unit then return end
+      for j = 1, #combinedUnits do
+        if combinedUnits[j] == unit then
+          return
+        end
+      end
+      combinedUnits[#combinedUnits + 1] = unit
+    end
+
+    ensureUnit("player")
+    ensureUnit("pet")
+
+    watcherUnits = combinedUnits
+  elseif frame._linkedWatcherUnits then
+    wipe(frame._linkedWatcherUnits)
+  end
+
+  RegisterFrameAuraWatchers(frame, watcherCandidates, watcherUnits)
 
   local iconID = entry and entry.iconID
   if not iconID then
@@ -1616,7 +1758,14 @@ local function UpdateSpellFrame(frame)
     end
   end
 
-  if not chargesShown then
+  if linkedBuffActive and not chargesShown then
+    if linkedBuffCount and linkedBuffCount > 0 then
+      countText = tostring(linkedBuffCount)
+      countShown = true
+    end
+  end
+
+  if not chargesShown and not linkedBuffActive then
     local manualCount = ClassHUD.GetManualCountForSpell and ClassHUD:GetManualCountForSpell(sid)
     if manualCount ~= nil then
       if manualCount > 0 then
@@ -1780,6 +1929,7 @@ local function UpdateSpellFrame(frame)
   end
 
   local isGCDCooldown = cooldownSource == "gcd"
+  frame._gcdActive = hasCooldown and isGCDCooldown or false
 
   local showNumbers = ShouldShowCooldownNumbers()
   local cooldownTextRemaining = nil
@@ -1788,6 +1938,10 @@ local function UpdateSpellFrame(frame)
     if remaining > 0 then
       cooldownTextRemaining = remaining
     end
+  end
+
+  if frame._gcdActive then
+    cooldownTextRemaining = nil
   end
 
   local totemOverride = false
