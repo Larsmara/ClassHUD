@@ -677,6 +677,9 @@ local defaults = {
         offset  = 6,
         spells  = {},
       },
+      utility = {
+        spells = {},
+      },
       classbars = {
         DRUID = {
           [102] = { eclipse = true, combo = false },
@@ -804,6 +807,9 @@ function ClassHUD:SeedProfileFromCooldownManager()
   layout.topBar = layout.topBar or {}
   layout.topBar.spells = layout.topBar.spells or {}
 
+  layout.utility = layout.utility or {}
+  layout.utility.spells = layout.utility.spells or {}
+
   layout.bottomBar = layout.bottomBar or {}
   layout.bottomBar.spells = layout.bottomBar.spells or {}
 
@@ -817,12 +823,33 @@ function ClassHUD:SeedProfileFromCooldownManager()
   end
 
   local topList = ensureSpecList(layout.topBar.spells)
-  local bottomList = ensureSpecList(layout.bottomBar.spells)
+  local utilityList = ensureSpecList(layout.utility.spells)
   local trackedOrder = ensureSpecList(layout.trackedBuffBar.buffs)
 
-  local function fillList(target, category)
-    if type(target) ~= "table" or #target > 0 then return end
+  local function scrubList(target)
+    local lookup = {}
+    if type(target) ~= "table" then
+      return lookup
+    end
 
+    for index = #target, 1, -1 do
+      local value = tonumber(target[index]) or target[index]
+      if value then
+        target[index] = value
+        lookup[value] = true
+      else
+        table.remove(target, index)
+      end
+    end
+
+    return lookup
+  end
+
+  local topLookup = scrubList(topList)
+  local utilityLookup = scrubList(utilityList)
+  local trackedLookup = scrubList(trackedOrder)
+
+  local function buildEntries(category)
     local entries = {}
     for spellID, entry in pairs(snapshot) do
       local cat = entry.categories and entry.categories[category]
@@ -842,54 +869,72 @@ function ClassHUD:SeedProfileFromCooldownManager()
       return a.order < b.order
     end)
 
-    for _, info in ipairs(entries) do
-      table.insert(target, info.id)
-    end
-
-    if #entries > 0 then
-      seeded = true
-    end
+    return entries
   end
 
-  fillList(topList, "essential")
-  fillList(bottomList, "bar")
+  local function appendEntries(target, lookup, entries)
+    local changed = false
+    if type(target) ~= "table" then
+      return changed
+    end
 
-  if type(trackedOrder) == "table" and #trackedOrder == 0 then
-    local entries = {}
-    for buffID, entry in pairs(snapshot) do
-      local cat = entry.categories and entry.categories.buff
-      if cat then
-        entries[#entries + 1] = {
-          id    = tonumber(buffID) or buffID,
-          order = tonumber(cat.order) or math.huge,
-          name  = entry.name or tostring(buffID),
-        }
+    for _, info in ipairs(entries) do
+      local id = tonumber(info.id) or info.id
+      if id and not lookup[id] then
+        table.insert(target, id)
+        lookup[id] = true
+        changed = true
       end
     end
 
-    table.sort(entries, function(a, b)
-      if a.order == b.order then
-        return a.name < b.name
-      end
-      return a.order < b.order
-    end)
+    return changed
+  end
 
-    if #entries > 0 then
-      self.db.profile.tracking = self.db.profile.tracking or {}
-      local tracking = self.db.profile.tracking
-      tracking.buffs = tracking.buffs or {}
-      tracking.buffs.tracked = tracking.buffs.tracked or {}
-      tracking.buffs.tracked[class] = tracking.buffs.tracked[class] or {}
-      tracking.buffs.tracked[class][specID] = tracking.buffs.tracked[class][specID] or {}
-      local trackedConfigs = tracking.buffs.tracked[class][specID]
+  if appendEntries(topList, topLookup, buildEntries("essential")) then
+    seeded = true
+  end
 
+  if appendEntries(utilityList, utilityLookup, buildEntries("utility")) then
+    seeded = true
+  end
+
+  local trackedEntries = buildEntries("buff")
+  local trackedBarEntries = buildEntries("bar")
+
+  if (#trackedEntries > 0 or #trackedBarEntries > 0) then
+    self.db.profile.tracking = self.db.profile.tracking or {}
+    local tracking = self.db.profile.tracking
+    tracking.buffs = tracking.buffs or {}
+    tracking.buffs.tracked = tracking.buffs.tracked or {}
+    tracking.buffs.tracked[class] = tracking.buffs.tracked[class] or {}
+    tracking.buffs.tracked[class][specID] = tracking.buffs.tracked[class][specID] or {}
+    local trackedConfigs = tracking.buffs.tracked[class][specID]
+
+    local function appendTracked(entries)
+      local changed = false
       for _, info in ipairs(entries) do
-        table.insert(trackedOrder, info.id)
-        if trackedConfigs[info.id] == nil then
-          trackedConfigs[info.id] = true
+        local id = tonumber(info.id) or info.id
+        if id then
+          if not trackedLookup[id] then
+            table.insert(trackedOrder, id)
+            trackedLookup[id] = true
+            changed = true
+          end
+          if trackedConfigs[id] == nil then
+            trackedConfigs[id] = true
+            changed = true
+          end
         end
       end
+      return changed
+    end
 
+    local trackedChanged = appendTracked(trackedEntries)
+    if appendTracked(trackedBarEntries) then
+      trackedChanged = true
+    end
+
+    if trackedChanged then
       seeded = true
     end
   end
