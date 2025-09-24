@@ -18,8 +18,9 @@ local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
 
 local SUMMON_SPELLS = {
   -- Priest
-  [34433]  = { fallbackDuration = 15, class = "PRIEST" }, -- Shadowfiend
-  [123040] = { fallbackDuration = 12, class = "PRIEST" }, -- Mindbender
+  [34433]  = { fallbackDuration = 15, class = "PRIEST" },   -- Shadowfiend
+  [123040] = { fallbackDuration = 12, class = "PRIEST" },   -- Mindbender
+  [200174] = { fallbackDuration = 18, class = "PRIEST" },   -- Mindbender
 
   -- Warlock
   [193332] = { duration = 12, fallbackDuration = 12, class = "WARLOCK", name = "Dreadstalkers", npcID = 98035, displaySpellID = 104316, demon = true },              -- Call Dreadstalkers
