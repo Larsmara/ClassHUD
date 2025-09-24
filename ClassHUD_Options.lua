@@ -58,6 +58,10 @@ local function PlayerMatchesSpec(addon, class, specID)
 end
 
 local function PlayerHasClassbar(addon)
+  if addon and addon.PlayerHasClassBarSupport then
+    return addon:PlayerHasClassBarSupport()
+  end
+
   if not addon or not addon.db then return false end
 
   local class = select(1, addon:GetPlayerClassSpec())
@@ -78,6 +82,13 @@ local function PlayerHasClassbar(addon)
   end
 
   return false
+end
+
+local function SpecSupportsClassbar(addon)
+  if addon and addon.IsClassBarSpecSupported then
+    return addon:IsClassBarSpecSupported()
+  end
+  return true
 end
 
 local function EnsureSummonConfig(addon, class)
@@ -947,6 +958,8 @@ function ClassHUD_BuildOptions(addon)
   layout.height = layout.height or { cast = 18, hp = 14, resource = 14, power = 14 }
   layout.barOrder = layout.barOrder or { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" }
 
+  layout.classbars = layout.classbars or {}
+
   layout.topBar = layout.topBar or {}
   layout.topBar.perRow = layout.topBar.perRow or 8
   layout.topBar.spacingX = layout.topBar.spacingX or 4
@@ -1505,6 +1518,9 @@ function ClassHUD_BuildOptions(addon)
             name = "General",
             inline = true,
             order = 1,
+            disabled = function()
+              return not SpecSupportsClassbar(addon)
+            end,
             args = {
               show = {
                 type = "toggle",
@@ -1514,6 +1530,9 @@ function ClassHUD_BuildOptions(addon)
                 set = function(_, value)
                   layout.show.power = value
                   addon:FullUpdate()
+                end,
+                disabled = function()
+                  return not SpecSupportsClassbar(addon)
                 end,
               },
               height = {
@@ -1528,7 +1547,9 @@ function ClassHUD_BuildOptions(addon)
                   layout.height.power = value
                   addon:FullUpdate()
                 end,
-                disabled = function() return not layout.show.power end,
+                disabled = function()
+                  return not layout.show.power or not SpecSupportsClassbar(addon)
+                end,
               },
               spacing = {
                 type = "range",
@@ -1542,7 +1563,9 @@ function ClassHUD_BuildOptions(addon)
                   db.profile.powerSpacing = value
                   addon:FullUpdate()
                 end,
-                disabled = function() return not layout.show.power end,
+                disabled = function()
+                  return not layout.show.power or not SpecSupportsClassbar(addon)
+                end,
               },
             },
           },
@@ -1551,6 +1574,9 @@ function ClassHUD_BuildOptions(addon)
             name = "Colors",
             inline = true,
             order = 2,
+            disabled = function()
+              return not SpecSupportsClassbar(addon)
+            end,
             args = {
               power = {
                 type = "color",
@@ -1564,7 +1590,9 @@ function ClassHUD_BuildOptions(addon)
                   db.profile.colors.power = { r = r, g = g, b = b }
                   addon:UpdateSpecialPower()
                 end,
-                disabled = function() return not layout.show.power end,
+                disabled = function()
+                  return not layout.show.power or not SpecSupportsClassbar(addon)
+                end,
               },
             },
           },
@@ -1577,13 +1605,19 @@ function ClassHUD_BuildOptions(addon)
                 type = "header",
                 name = "Balance",
                 order = 1,
+                hidden = function()
+                  return not PlayerMatchesSpec(addon, "DRUID", 102)
+                end,
               },
               balanceEclipse = {
                 type = "toggle",
                 name = "Enable Eclipse Bar",
                 order = 2,
+                hidden = function()
+                  return not PlayerMatchesSpec(addon, "DRUID", 102)
+                end,
                 get = function()
-                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[102]
                   if spec and spec.eclipse ~= nil then
                     return spec.eclipse
@@ -1591,10 +1625,10 @@ function ClassHUD_BuildOptions(addon)
                   return true
                 end,
                 set = function(_, val)
-                  db.profile.classbars = db.profile.classbars or {}
-                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
-                  db.profile.classbars.DRUID[102] = db.profile.classbars.DRUID[102] or {}
-                  db.profile.classbars.DRUID[102].eclipse = val
+                  layout.classbars = layout.classbars or {}
+                  layout.classbars.DRUID = layout.classbars.DRUID or {}
+                  layout.classbars.DRUID[102] = layout.classbars.DRUID[102] or {}
+                  layout.classbars.DRUID[102].eclipse = val
                   addon:FullUpdate()
                 end,
               },
@@ -1602,16 +1636,17 @@ function ClassHUD_BuildOptions(addon)
                 type = "toggle",
                 name = "Enable Combo Points (Balance)",
                 order = 3,
+                hidden = true,
                 get = function()
-                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[102]
                   return spec and spec.combo or false
                 end,
                 set = function(_, val)
-                  db.profile.classbars = db.profile.classbars or {}
-                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
-                  db.profile.classbars.DRUID[102] = db.profile.classbars.DRUID[102] or {}
-                  db.profile.classbars.DRUID[102].combo = val
+                  layout.classbars = layout.classbars or {}
+                  layout.classbars.DRUID = layout.classbars.DRUID or {}
+                  layout.classbars.DRUID[102] = layout.classbars.DRUID[102] or {}
+                  layout.classbars.DRUID[102].combo = val
                   addon:FullUpdate()
                 end,
               },
@@ -1619,13 +1654,19 @@ function ClassHUD_BuildOptions(addon)
                 type = "header",
                 name = "Feral",
                 order = 4,
+                hidden = function()
+                  return not PlayerMatchesSpec(addon, "DRUID", 103)
+                end,
               },
               feralCombo = {
                 type = "toggle",
                 name = "Enable Combo Points (Feral)",
                 order = 5,
+                hidden = function()
+                  return not PlayerMatchesSpec(addon, "DRUID", 103)
+                end,
                 get = function()
-                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[103]
                   if spec and spec.combo ~= nil then
                     return spec.combo
@@ -1633,10 +1674,10 @@ function ClassHUD_BuildOptions(addon)
                   return true
                 end,
                 set = function(_, val)
-                  db.profile.classbars = db.profile.classbars or {}
-                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
-                  db.profile.classbars.DRUID[103] = db.profile.classbars.DRUID[103] or {}
-                  db.profile.classbars.DRUID[103].combo = val
+                  layout.classbars = layout.classbars or {}
+                  layout.classbars.DRUID = layout.classbars.DRUID or {}
+                  layout.classbars.DRUID[103] = layout.classbars.DRUID[103] or {}
+                  layout.classbars.DRUID[103].combo = val
                   addon:FullUpdate()
                 end,
               },
@@ -1644,13 +1685,19 @@ function ClassHUD_BuildOptions(addon)
                 type = "header",
                 name = "Guardian",
                 order = 6,
+                hidden = function()
+                  return not PlayerMatchesSpec(addon, "DRUID", 104)
+                end,
               },
               guardianCombo = {
                 type = "toggle",
                 name = "Enable Combo Points (Guardian)",
                 order = 7,
+                hidden = function()
+                  return not PlayerMatchesSpec(addon, "DRUID", 104)
+                end,
                 get = function()
-                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[104]
                   if spec and spec.combo ~= nil then
                     return spec.combo
@@ -1658,10 +1705,10 @@ function ClassHUD_BuildOptions(addon)
                   return true
                 end,
                 set = function(_, val)
-                  db.profile.classbars = db.profile.classbars or {}
-                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
-                  db.profile.classbars.DRUID[104] = db.profile.classbars.DRUID[104] or {}
-                  db.profile.classbars.DRUID[104].combo = val
+                  layout.classbars = layout.classbars or {}
+                  layout.classbars.DRUID = layout.classbars.DRUID or {}
+                  layout.classbars.DRUID[104] = layout.classbars.DRUID[104] or {}
+                  layout.classbars.DRUID[104].combo = val
                   addon:FullUpdate()
                 end,
               },
@@ -1669,21 +1716,23 @@ function ClassHUD_BuildOptions(addon)
                 type = "header",
                 name = "Restoration",
                 order = 8,
+                hidden = true,
               },
               restoCombo = {
                 type = "toggle",
                 name = "Enable Combo Points (Restoration)",
                 order = 9,
+                hidden = true,
                 get = function()
-                  local classbars = db.profile.classbars and db.profile.classbars.DRUID
+                  local classbars = layout.classbars and layout.classbars.DRUID
                   local spec = classbars and classbars[105]
                   return spec and spec.combo or false
                 end,
                 set = function(_, val)
-                  db.profile.classbars = db.profile.classbars or {}
-                  db.profile.classbars.DRUID = db.profile.classbars.DRUID or {}
-                  db.profile.classbars.DRUID[105] = db.profile.classbars.DRUID[105] or {}
-                  db.profile.classbars.DRUID[105].combo = val
+                  layout.classbars = layout.classbars or {}
+                  layout.classbars.DRUID = layout.classbars.DRUID or {}
+                  layout.classbars.DRUID[105] = layout.classbars.DRUID[105] or {}
+                  layout.classbars.DRUID[105].combo = val
                   addon:FullUpdate()
                 end,
               },

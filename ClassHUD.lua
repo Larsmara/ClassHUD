@@ -1000,7 +1000,11 @@ function ClassHUD:FullUpdate()
   if self.Layout then self:Layout() end
   if self.UpdateHP then self:UpdateHP() end
   if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
-  if self.UpdateSpecialPower then self:UpdateSpecialPower() end
+  if self.EvaluateClassBarVisibility then
+    self:EvaluateClassBarVisibility()
+  elseif self.UpdateSpecialPower then
+    self:UpdateSpecialPower()
+  end
 end
 
 ---Rebuilds the Cooldown Viewer snapshot for the current class/spec.
@@ -1155,7 +1159,9 @@ function ClassHUD:OnEnable()
   if not UI.cast and self.CreateCastBar then self:CreateCastBar() end
   if not UI.hp and self.CreateHPBar then self:CreateHPBar() end
   if not UI.resource and self.CreateResourceBar then self:CreateResourceBar() end
-  if not UI.power and self.CreatePowerContainer then self:CreatePowerContainer() end
+  if not UI.power and self.CreatePowerContainer and self.PlayerHasClassBarSupport and self:PlayerHasClassBarSupport() then
+    self:CreatePowerContainer()
+  end
 
   if self.Layout then self:Layout() end
   if self.ApplyBarSkins then self:ApplyBarSkins() end
@@ -1173,6 +1179,8 @@ for _, ev in pairs({
   -- World/spec
   "PLAYER_ENTERING_WORLD",
   "PLAYER_SPECIALIZATION_CHANGED",
+  "PLAYER_TALENT_UPDATE",
+  "TRAIT_CONFIG_UPDATED",
 
   -- Health
   "UNIT_HEALTH", "UNIT_MAXHEALTH",
@@ -1225,11 +1233,32 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    if ClassHUD.EvaluateClassBarVisibility then
+      ClassHUD:EvaluateClassBarVisibility()
+    elseif ClassHUD.UpdateSpecialPower then
+      ClassHUD:UpdateSpecialPower()
+    end
     ClassHUD:RefreshRegisteredOptions()
     ClassHUD:UpdateAllFrames()
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
+    return
+  end
+
+  if (event == "PLAYER_TALENT_UPDATE" and (unit == nil or unit == "player"))
+      or event == "TRAIT_CONFIG_UPDATED" then
+    ClassHUD:UpdateCDMSnapshot()
+    if ClassHUD.UpdateAllFrames then
+      ClassHUD:UpdateAllFrames()
+    end
+    if ClassHUD.RefreshSpellFrameVisibility then
+      ClassHUD:RefreshSpellFrameVisibility()
+    end
+    if ClassHUD.EvaluateClassBarVisibility then
+      ClassHUD:EvaluateClassBarVisibility()
+    elseif ClassHUD.UpdateSpecialPower then
+      ClassHUD:UpdateSpecialPower()
+    end
     return
   end
 
@@ -1253,7 +1282,11 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
 
   if event == "UPDATE_SHAPESHIFT_FORM" then
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if ClassHUD.EvaluateClassBarVisibility then
+      ClassHUD:EvaluateClassBarVisibility()
+    elseif ClassHUD.UpdateSpecialPower then
+      ClassHUD:UpdateSpecialPower()
+    end
     if ClassHUD.UpdateAllSpellFrames then
       ClassHUD:RequestUpdate("resource")
     end
@@ -1367,6 +1400,10 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
       ClassHUD:RefreshAllTotems()
     end
     return
+  end
+
+  if event == "PLAYER_REGEN_ENABLED" and ClassHUD.EvaluateClassBarVisibility then
+    ClassHUD:EvaluateClassBarVisibility()
   end
 
   -- Target
