@@ -2228,12 +2228,16 @@ function ClassHUD:RebuildTrackedBuffFrames()
 
   local tracking = ClassHUD.db.profile.tracking or {}
   local linkRoot = tracking.buffs and tracking.buffs.links or {}
-  local links = (linkRoot[class] and linkRoot[class][specID]) or {}
+  local links = linkRoot[class] and linkRoot[class][specID]
 
-  for buffID, spellID in pairs(links) do
-    local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
-    if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
-      aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
+  if type(links) == "table" then
+    ClassHUD:NormalizeBuffLinkTable(links)
+
+    for buffID in pairs(links) do
+      local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
+      if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
+        aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
+      end
     end
   end
 end
@@ -2468,6 +2472,8 @@ function ClassHUD:BuildFramesForSpec()
   self.db.profile.tracking.buffs.links = self.db.profile.tracking.buffs.links or {}
   self.db.profile.tracking.buffs.links[class] = self.db.profile.tracking.buffs.links[class] or {}
   self.db.profile.tracking.buffs.links[class][specID] = self.db.profile.tracking.buffs.links[class][specID] or {}
+  local specLinks = self.db.profile.tracking.buffs.links[class][specID]
+  ClassHUD:NormalizeBuffLinkTable(specLinks)
 
   for buffID, entry in pairs(snapshot) do
     if entry.categories and entry.categories.buff then
@@ -2479,9 +2485,11 @@ function ClassHUD:BuildFramesForSpec()
             if spellName and string.find(desc, spellName, 1, true) then
               self.trackedBuffToSpell[buffID] = spellID
 
-              local links = self.db.profile.tracking.buffs.links[class][specID]
-              if not links[buffID] then
-                links[buffID] = spellID
+              local set = specLinks[buffID]
+              if set == nil or (type(set) == "table" and next(set) == nil) then
+                set = set or {}
+                specLinks[buffID] = set
+                set[spellID] = true
               end
               break
             end

@@ -149,6 +149,54 @@ ClassHUD._auraFlushTimer = ClassHUD._auraFlushTimer or nil
 local BUFF_LINK_HELPFUL_UNITS = { "player", "pet" }
 local BUFF_LINK_HARMFUL_UNITS = { "target", "focus", "mouseover" }
 
+---Normalizes a spec's buff link table so each buff maps to a set of spell IDs.
+---@param specLinks table|nil
+---@return table|nil
+function ClassHUD:NormalizeBuffLinkTable(specLinks)
+  if type(specLinks) ~= "table" then
+    return nil
+  end
+
+  local normalized = {}
+
+  for buffKey, value in pairs(specLinks) do
+    local buffID = tonumber(buffKey) or buffKey
+    if buffID then
+      local spellSet = normalized[buffID]
+      if not spellSet then
+        spellSet = {}
+        normalized[buffID] = spellSet
+      end
+
+      if type(value) == "table" then
+        for spellKey, enabled in pairs(value) do
+          if enabled then
+            local spellID = tonumber(spellKey) or spellKey
+            if spellID then
+              spellSet[spellID] = true
+            end
+          end
+        end
+      else
+        local spellID = tonumber(value) or value
+        if spellID then
+          spellSet[spellID] = true
+        end
+      end
+    end
+  end
+
+  wipe(specLinks)
+
+  for buffID, spellSet in pairs(normalized) do
+    if next(spellSet) then
+      specLinks[buffID] = spellSet
+    end
+  end
+
+  return specLinks
+end
+
 ---Collects all buff spell IDs linked to the provided spell for the current spec.
 ---@param spellID number
 ---@param reuse table|nil Optional table to reuse for output
@@ -183,12 +231,30 @@ function ClassHUD:GetLinkedBuffIDsForSpell(spellID, reuse)
     return list
   end
 
-  for buffKey, linkedSpellID in pairs(specLinks) do
-    local normalizedLink = tonumber(linkedSpellID) or linkedSpellID
-    if normalizedLink == spellID then
-      local buffID = tonumber(buffKey) or buffKey
-      if buffID then
-        list[#list + 1] = buffID
+  self:NormalizeBuffLinkTable(specLinks)
+
+  local normalizedSpellID = tonumber(spellID) or spellID
+  if not normalizedSpellID then
+    return list
+  end
+
+  for buffKey, spellSet in pairs(specLinks) do
+    if type(spellSet) == "table" then
+      local hasLink = spellSet[normalizedSpellID]
+      if not hasLink then
+        local altKey = tostring(normalizedSpellID)
+        if spellSet[altKey] then
+          spellSet[normalizedSpellID] = true
+          spellSet[altKey] = nil
+          hasLink = true
+        end
+      end
+
+      if hasLink then
+        local buffID = tonumber(buffKey) or buffKey
+        if buffID then
+          list[#list + 1] = buffID
+        end
       end
     end
   end
