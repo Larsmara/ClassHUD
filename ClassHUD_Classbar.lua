@@ -6,38 +6,18 @@ UI.attachments = UI.attachments or {}
 
 local function GetSpecSettings(class, specID)
   local db = ClassHUD.db
-if not db or not db.profile or not db.profile.layout or not db.profile.layout.classbars then return nil end
-local perClass = db.profile.layout.classbars[class]
+  if not db or not db.profile then return nil end
+  local layout = db.profile.layout
+  if not layout or not layout.classbars then return nil end
+  local perClass = layout.classbars[class]
   if not perClass then return nil end
   return perClass[specID]
-end
-
-local function IsComboEnabled(class, specID)
-  local settings = GetSpecSettings(class, specID)
-  if settings and settings.combo ~= nil then
-    return settings.combo
-  end
-  if class == "DRUID" then
-    -- Default to disabled for specs without explicit opt-in
-    return false
-  end
-  return true
-end
-
-local MOONKIN_FORM_ID = _G.MOONKIN_FORM or 31
-local INCARNATION_MOONKIN_FORM_ID = _G.INCARNATION_CHOSEN_OF_ELUNE or MOONKIN_FORM_ID
-
-local function IsMoonkinForm()
-  if not GetShapeshiftFormID then return false end
-  local formID = GetShapeshiftFormID()
-  if not formID or formID == 0 then return false end
-  return formID == MOONKIN_FORM_ID or formID == INCARNATION_MOONKIN_FORM_ID
 end
 
 -- ========= Advanced Class Resource System =========
 
 -- Map classes → special resource power types
-local CLASS_POWER_ID = {
+local CLASS_POWER_ID       = {
   MONK        = Enum.PowerType.Chi,
   PALADIN     = Enum.PowerType.HolyPower,
   WARLOCK     = Enum.PowerType.SoulShards,
@@ -49,15 +29,123 @@ local CLASS_POWER_ID = {
 }
 
 -- Specs that “unlock” the resource
-local REQUIRED_SPEC = {
+local REQUIRED_SPEC        = {
   MONK = 269, -- Windwalker
   MAGE = 62,  -- Arcane
 }
 
--- Specs that use partial resource (e.g., Destruction shards)
-local USES_PARTIAL_BY_SPEC = {
-  [267] = true, -- Warlock Destruction
-}
+-- ========= BALANCE DRUID: ECLIPSE =========
+local specID_BALANCE       = 102
+local ECLIPSE_SOLAR        = 48517
+local ECLIPSE_LUNAR        = 48518
+local LUNAR_CALLING_TALENT = 429523
+
+-- Wrath / Starfire IDs (kan variere, vi tar begge)
+local WRATH_IDS            = { [5176] = true, [190984] = true }
+local STARFIRE_IDS         = { [194153] = true, [197628] = true }
+
+ClassHUD.CLASS_POWER_ID    = ClassHUD.CLASS_POWER_ID or {}
+for classToken, powerType in pairs(CLASS_POWER_ID) do
+  ClassHUD.CLASS_POWER_ID[classToken] = powerType
+end
+
+function ClassHUD:PlayerHasClassBarSupport()
+  local _, class = UnitClass("player")
+  if not class or class == "" then
+    return false
+  end
+  return CLASS_POWER_ID[class] ~= nil
+end
+
+function ClassHUD:IsClassBarSpecSupported(class, specID)
+  local playerClass, playerSpec = self:GetPlayerClassSpec()
+  class = class or playerClass
+  specID = specID or playerSpec
+  if not class or not specID or specID == 0 then
+    return false
+  end
+  if not CLASS_POWER_ID[class] then
+    return false
+  end
+  if REQUIRED_SPEC[class] and REQUIRED_SPEC[class] ~= specID then
+    return false
+  end
+  if class == "DRUID" then
+    return true
+  end
+  return true
+end
+
+function ClassHUD:IsClassBarEnabledForSpec(class, specID)
+  local playerClass, playerSpec = self:GetPlayerClassSpec()
+  class = class or playerClass
+  specID = specID or playerSpec
+  if not class or not specID or specID == 0 then
+    return false
+  end
+  if not CLASS_POWER_ID[class] then
+    return false
+  end
+  if not self:IsClassBarSpecSupported(class, specID) then
+    return false
+  end
+
+  local layout = self.db and self.db.profile and self.db.profile.layout
+  if layout and layout.show and layout.show.power == false then
+    return false
+  end
+
+  local settings = GetSpecSettings(class, specID)
+  if class == "DRUID" then
+    if specID == 102 then
+      if settings and settings.eclipse ~= nil then
+        return settings.eclipse
+      end
+      return false
+    else
+      -- for 103, 104, 105: combo toggle
+      if settings and settings.combo ~= nil then
+        return settings.combo
+      end
+      return true
+    end
+  elseif class == "ROGUE" then
+    if settings and settings.combo ~= nil then
+      return settings.combo
+    end
+    return true
+  end
+
+  if settings then
+    if settings.combo ~= nil then return settings.combo end
+    if settings.enabled ~= nil then return settings.enabled end
+    if settings.show ~= nil then return settings.show end
+  end
+
+  return true
+end
+
+function ClassHUD:EvaluateClassBarVisibility()
+  local class, specID = self:GetPlayerClassSpec()
+  local shouldShow = self:IsClassBarEnabledForSpec(class, specID)
+
+  if shouldShow and not UI.power then
+    if InCombatLockdown and InCombatLockdown() then
+      self._pendingClassBarEval = true
+      return
+    end
+    if self.CreatePowerContainer then
+      self:CreatePowerContainer()
+    end
+  end
+
+  self._pendingClassBarEval = nil
+  self._classBarEnabled = shouldShow and true or false
+
+  if self.UpdateSpecialPower then
+    self:UpdateSpecialPower()
+  end
+end
 
 -- Charged Combo Points highlight color (Rogue)
 local CHARGED_CP_COLOR = { 1.0, 0.95, 0.35 }
@@ -227,12 +315,15 @@ local function ResolveSpecialPower()
 
   if REQUIRED_SPEC[class] and specID ~= REQUIRED_SPEC[class] then return nil end
 
-  if ptype == Enum.PowerType.ComboPoints then
-    if not IsComboEnabled(class, specID) then
-      return nil
+  if class == "DRUID" then
+    if specID == 102 then
+      return nil -- handled separately by Eclipse
     end
-    if class == "DRUID" and select(1, UnitPowerType("player")) ~= Enum.PowerType.Energy then
-      return nil
+    if ptype == Enum.PowerType.ComboPoints then
+      -- Allow ALL specs in Cat Form
+      if select(1, UnitPowerType("player")) ~= Enum.PowerType.Energy then
+        return nil
+      end
     end
   end
 
@@ -241,39 +332,75 @@ end
 
 -- Main update entry
 function ClassHUD:UpdateSpecialPower()
-  if not (self.db and self.db.profile and self.db.profile.layout and self.db.profile.layout.show.power) then
+  local prevActive = self._classBarDisplayActive or false
+
+  local layout = self.db and self.db.profile and self.db.profile.layout
+  if not (layout and layout.show and layout.show.power) then
     HideAllSegments(1)
     if UI.power then UI.power:Hide() end
     DeactivateEclipseBar()
+    self._classBarDisplayActive = false
+    if prevActive and self.Layout then self:Layout() end
     return
   end
 
-  local usingEclipse = self.InitBalanceEclipse and self:InitBalanceEclipse()
-  if usingEclipse then
+  local class, specID = self:GetPlayerClassSpec()
+  if not self:IsClassBarEnabledForSpec(class, specID) then
     HideAllSegments(1)
-    if UI.power then UI.power:Show() end
+    if UI.power then UI.power:Hide() end
+    DeactivateEclipseBar()
+    self._classBarDisplayActive = false
+    if prevActive and self.Layout then self:Layout() end
+    return
+  end
+
+  if class == "DRUID" and specID == specID_BALANCE then
+    local usingEclipse = self.InitBalanceEclipse and self:InitBalanceEclipse()
+    if usingEclipse then
+      HideAllSegments(1)
+      if UI.power then UI.power:Show() end
+      self._classBarDisplayActive = true
+    else
+      HideAllSegments(1)
+      if UI.power then UI.power:Hide() end
+      self._classBarDisplayActive = false
+    end
+    if (self._classBarDisplayActive or false) ~= prevActive and self.Layout then
+      self:Layout()
+    end
     return
   end
 
   DeactivateEclipseBar()
 
-  local ptype, specID = ResolveSpecialPower()
+  local ptype = ResolveSpecialPower()
   if not ptype then
     HideAllSegments(1)
     if UI.power then UI.power:Hide() end
+    self._classBarDisplayActive = false
+    if prevActive and self.Layout then self:Layout() end
     return
   end
-  if UI.power then UI.power:Show() end
+
+  if UI.power then
+    UI.power:Show()
+  end
+
   if ptype == Enum.PowerType.Runes then
     self:UpdateRunes()
-    return
   elseif ptype == Enum.PowerType.Essence then
     self:UpdateEssenceSegments(ptype)
-    return
+  else
+    local max = UnitPowerMax("player", ptype) or 0
+    local displayMod = UnitPowerDisplayMod and UnitPowerDisplayMod(ptype) or 1
+    local usePartial = displayMod and displayMod ~= 1
+    self:UpdateSegmentsAdvanced(ptype, max, usePartial)
   end
-  local max = UnitPowerMax("player", ptype) or 0
-  local usePartial = USES_PARTIAL_BY_SPEC[specID] or false
-  self:UpdateSegmentsAdvanced(ptype, max, usePartial)
+
+  self._classBarDisplayActive = UI.power and UI.power:IsShown() and true or false
+  if (self._classBarDisplayActive or false) ~= prevActive and self.Layout then
+    self:Layout()
+  end
 end
 
 function ClassHUD:UpdateRunes()
@@ -310,16 +437,6 @@ function ClassHUD:UpdateRunes()
   end
   HideAllSegments(max + 1)
 end
-
--- ========= BALANCE DRUID: ECLIPSE =========
-local specID_BALANCE       = 102
-local ECLIPSE_SOLAR        = 48517
-local ECLIPSE_LUNAR        = 48518
-local LUNAR_CALLING_TALENT = 429523
-
--- Wrath / Starfire IDs (kan variere, vi tar begge)
-local WRATH_IDS            = { [5176] = true, [190984] = true }
-local STARFIRE_IDS         = { [194153] = true, [197628] = true }
 
 local function HasLunarCalling()
   return C_Spell.IsPlayerSpell and C_Spell.IsPlayerSpell(LUNAR_CALLING_TALENT) or false
@@ -584,20 +701,11 @@ function DeactivateEclipseBar()
 end
 
 function ClassHUD:ShouldUseEclipseBar()
-  local db = self.db and self.db.profile
-  if not db or not db.show or not db.show.power then return false end
-
   local _, class = UnitClass("player")
   if class ~= "DRUID" then return false end
-
-  local spec = GetSpecialization()
-  local specID = spec and GetSpecializationInfo(spec) or 0
+  local specID = select(2, self:GetPlayerClassSpec())
   if specID ~= specID_BALANCE then return false end
-
-  local settings = GetSpecSettings(class, specID)
-  if not (settings and settings.eclipse) then return false end
-
-  return IsMoonkinForm()
+  return self:IsClassBarEnabledForSpec(class, specID)
 end
 
 function ClassHUD:EnsureEclipseBar()

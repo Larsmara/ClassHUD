@@ -607,7 +607,7 @@ local defaults = {
           [102] = { eclipse = true, combo = false },
           [103] = { combo = true },
           [104] = { combo = true },
-          [105] = {},
+          [105] = { combo = true },
         },
         ROGUE = {
           [259] = { combo = true },
@@ -860,6 +860,134 @@ function ClassHUD:SeedProfileFromCooldownManager()
   return seeded
 end
 
+---Ensures new snapshot spells are added to DB without overwriting user choices.
+function ClassHUD:SyncSnapshotToDB()
+  if not self:IsCooldownViewerAvailable() then return false end
+
+  local class, specID = self:GetPlayerClassSpec()
+  if not class or not specID or specID == 0 then return false end
+
+  local snapshot = self:GetSnapshotForSpec(class, specID, false)
+  if not snapshot or next(snapshot) == nil then return false end
+
+  local layout = self.db.profile.layout or {}
+  self.db.profile.layout = layout
+
+  layout.topBar = layout.topBar or {}
+  layout.topBar.spells = layout.topBar.spells or {}
+
+  layout.utility = layout.utility or {}
+  layout.utility.spells = layout.utility.spells or {}
+
+  layout.trackedBuffBar = layout.trackedBuffBar or {}
+  layout.trackedBuffBar.buffs = layout.trackedBuffBar.buffs or {}
+
+  local function ensureSpecList(root)
+    root[class] = root[class] or {}
+    root[class][specID] = root[class][specID] or {}
+    return root[class][specID]
+  end
+
+  local topList = ensureSpecList(layout.topBar.spells)
+  local utilityList = ensureSpecList(layout.utility.spells)
+  local trackedOrder = ensureSpecList(layout.trackedBuffBar.buffs)
+
+  -- Hidden lookup
+  local hidden = layout.hiddenSpells
+      and layout.hiddenSpells[class]
+      and layout.hiddenSpells[class][specID]
+  local hiddenLookup = {}
+  if type(hidden) == "table" then
+    for _, id in ipairs(hidden) do
+      hiddenLookup[id] = true
+    end
+  end
+
+  -- Convert list -> lookup
+  local function makeLookup(list)
+    local lookup = {}
+    if type(list) == "table" then
+      for _, id in ipairs(list) do
+        lookup[id] = true
+      end
+    end
+    return lookup
+  end
+
+  local topLookup = makeLookup(topList)
+  local utilityLookup = makeLookup(utilityList)
+  local trackedLookup = makeLookup(trackedOrder)
+
+  local function appendEntries(target, lookup, entries)
+    local changed = false
+    for _, info in ipairs(entries) do
+      local id = tonumber(info.id) or info.id
+      if id and not lookup[id] and not hiddenLookup[id] then
+        table.insert(target, id)
+        lookup[id] = true
+        changed = true
+      end
+    end
+    return changed
+  end
+
+  -- Build snapshot category lists
+  local function buildEntries(category)
+    local entries = {}
+    for spellID, entry in pairs(snapshot) do
+      if entry.categories and entry.categories[category] then
+        local cat = entry.categories[category]
+        entries[#entries + 1] = {
+          id    = tonumber(spellID) or spellID,
+          order = tonumber(cat.order) or math.huge,
+          name  = entry.name or tostring(spellID),
+        }
+      end
+    end
+    table.sort(entries, function(a, b)
+      if a.order == b.order then
+        return a.name < b.name
+      end
+      return a.order < b.order
+    end)
+    return entries
+  end
+
+  local changed = false
+  if appendEntries(topList, topLookup, buildEntries("essential")) then
+    changed = true
+  end
+  if appendEntries(utilityList, utilityLookup, buildEntries("utility")) then
+    changed = true
+  end
+
+  -- Tracked buffs
+  local trackedEntries = buildEntries("buff")
+  if #trackedEntries > 0 then
+    self.db.profile.tracking = self.db.profile.tracking or {}
+    local tracking = self.db.profile.tracking
+    tracking.buffs = tracking.buffs or {}
+    tracking.buffs.tracked = tracking.buffs.tracked or {}
+    tracking.buffs.tracked[class] = tracking.buffs.tracked[class] or {}
+    tracking.buffs.tracked[class][specID] = tracking.buffs.tracked[class][specID] or {}
+    local trackedConfigs = tracking.buffs.tracked[class][specID]
+
+    for _, info in ipairs(trackedEntries) do
+      local id = tonumber(info.id) or info.id
+      if id and not trackedLookup[id] and not hiddenLookup[id] then
+        table.insert(trackedOrder, id)
+        trackedLookup[id] = true
+        if trackedConfigs[id] == nil then
+          trackedConfigs[id] = true
+        end
+        changed = true
+      end
+    end
+  end
+
+  return changed
+end
+
 function ClassHUD:TrySeedPendingProfile()
   if not (self.db and self.db.GetCurrentProfile) then return false end
 
@@ -1000,7 +1128,11 @@ function ClassHUD:FullUpdate()
   if self.Layout then self:Layout() end
   if self.UpdateHP then self:UpdateHP() end
   if self.UpdatePrimaryResource then self:UpdatePrimaryResource() end
-  if self.UpdateSpecialPower then self:UpdateSpecialPower() end
+  if self.EvaluateClassBarVisibility then
+    self:EvaluateClassBarVisibility()
+  elseif self.UpdateSpecialPower then
+    self:UpdateSpecialPower()
+  end
 end
 
 ---Rebuilds the Cooldown Viewer snapshot for the current class/spec.
@@ -1155,7 +1287,9 @@ function ClassHUD:OnEnable()
   if not UI.cast and self.CreateCastBar then self:CreateCastBar() end
   if not UI.hp and self.CreateHPBar then self:CreateHPBar() end
   if not UI.resource and self.CreateResourceBar then self:CreateResourceBar() end
-  if not UI.power and self.CreatePowerContainer then self:CreatePowerContainer() end
+  if not UI.power and self.CreatePowerContainer and self.PlayerHasClassBarSupport and self:PlayerHasClassBarSupport() then
+    self:CreatePowerContainer()
+  end
 
   if self.Layout then self:Layout() end
   if self.ApplyBarSkins then self:ApplyBarSkins() end
@@ -1173,6 +1307,8 @@ for _, ev in pairs({
   -- World/spec
   "PLAYER_ENTERING_WORLD",
   "PLAYER_SPECIALIZATION_CHANGED",
+  "PLAYER_TALENT_UPDATE",
+  "TRAIT_CONFIG_UPDATED",
 
   -- Health
   "UNIT_HEALTH", "UNIT_MAXHEALTH",
@@ -1224,12 +1360,43 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:UpdateCDMSnapshot()
+    local updated = ClassHUD:SyncSnapshotToDB()
+    if updated then
+      ClassHUD:BuildFramesForSpec()
+      ClassHUD:RefreshRegisteredOptions()
+    end
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    if ClassHUD.EvaluateClassBarVisibility then
+      ClassHUD:EvaluateClassBarVisibility()
+    elseif ClassHUD.UpdateSpecialPower then
+      ClassHUD:UpdateSpecialPower()
+    end
     ClassHUD:RefreshRegisteredOptions()
     ClassHUD:UpdateAllFrames()
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
+    return
+  end
+
+  if (event == "PLAYER_TALENT_UPDATE" and (unit == nil or unit == "player"))
+      or event == "TRAIT_CONFIG_UPDATED" then
+    ClassHUD:UpdateCDMSnapshot()
+    local updated = ClassHUD:SyncSnapshotToDB()
+    if updated then
+      ClassHUD:BuildFramesForSpec()
+      ClassHUD:RefreshRegisteredOptions()
+    end
+    if ClassHUD.UpdateAllFrames then
+      ClassHUD:UpdateAllFrames()
+    end
+    if ClassHUD.RefreshSpellFrameVisibility then
+      ClassHUD:RefreshSpellFrameVisibility()
+    end
+    if ClassHUD.EvaluateClassBarVisibility then
+      ClassHUD:EvaluateClassBarVisibility()
+    elseif ClassHUD.UpdateSpecialPower then
+      ClassHUD:UpdateSpecialPower()
+    end
     return
   end
 
@@ -1253,7 +1420,11 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
 
   if event == "UPDATE_SHAPESHIFT_FORM" then
     if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
-    if ClassHUD.UpdateSpecialPower then ClassHUD:UpdateSpecialPower() end
+    if ClassHUD.EvaluateClassBarVisibility then
+      ClassHUD:EvaluateClassBarVisibility()
+    elseif ClassHUD.UpdateSpecialPower then
+      ClassHUD:UpdateSpecialPower()
+    end
     if ClassHUD.UpdateAllSpellFrames then
       ClassHUD:RequestUpdate("resource")
     end
@@ -1367,6 +1538,10 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
       ClassHUD:RefreshAllTotems()
     end
     return
+  end
+
+  if event == "PLAYER_REGEN_ENABLED" and ClassHUD.EvaluateClassBarVisibility then
+    ClassHUD:EvaluateClassBarVisibility()
   end
 
   -- Target

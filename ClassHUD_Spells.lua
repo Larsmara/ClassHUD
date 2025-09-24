@@ -769,9 +769,75 @@ function ClassHUD:ApplyTrackedBuffLayout()
   self:UpdateTrackedLayoutSnapshot()
 end
 
+local function SpellMatchesPlayer(spellID)
+  if not spellID then
+    return false
+  end
+
+  if C_Spell and C_Spell.GetSpellInfo then
+    local info = C_Spell.GetSpellInfo(spellID)
+    if not info then
+      return false
+    end
+  end
+
+  local hasCheck = false
+  if IsPlayerSpell then
+    hasCheck = true
+    if IsPlayerSpell(spellID) then
+      return true
+    end
+  end
+  if IsSpellKnown then
+    hasCheck = true
+    if IsSpellKnown(spellID) then
+      return true
+    end
+  end
+  if FindSpellOverrideByID then
+    hasCheck = true
+    local overrideID = FindSpellOverrideByID(spellID)
+    if overrideID and overrideID ~= spellID then
+      if (IsPlayerSpell and IsPlayerSpell(overrideID)) or (IsSpellKnown and IsSpellKnown(overrideID)) then
+        return true
+      end
+    end
+  end
+
+  if not hasCheck then
+    return true
+  end
+
+  return false
+end
+
+local function FilterSpellFrames(frames)
+  if type(frames) ~= "table" then
+    return {}
+  end
+
+  local visible = {}
+  for _, frame in ipairs(frames) do
+    if frame then
+      local spellID = frame.spellID
+      local allow = SpellMatchesPlayer(spellID)
+      frame._layoutConditionHidden = not allow
+      if allow then
+        visible[#visible + 1] = frame
+      else
+        frame:Hide()
+      end
+    end
+  end
+
+  return visible
+end
+
 local function LayoutTopBar(frames)
   local container = EnsureAttachment("TOP")
   if not container then return end
+
+  frames = FilterSpellFrames(frames)
 
   local profile  = ClassHUD.db.profile
   local layout   = profile.layout or {}
@@ -833,6 +899,7 @@ end
 
 local function LayoutSideBar(frames, side)
   if not UI.attachments or not UI.attachments[side] then return end
+  frames = FilterSpellFrames(frames)
   local layout  = ClassHUD.db.profile.layout or {}
   local sideCfg = layout.sideBars or {}
   local size    = sideCfg.size or 36
@@ -854,6 +921,8 @@ end
 local function LayoutBottomBar(frames)
   local container = EnsureAttachment("BOTTOM")
   if not container then return end
+
+  frames = FilterSpellFrames(frames)
 
   local profile  = ClassHUD.db.profile
   local bottom   = profile.layout and profile.layout.bottomBar or {}
@@ -2026,6 +2095,14 @@ function ClassHUD:BuildFramesForSpec()
   if #sideFrames.RIGHT > 0 then LayoutSideBar(sideFrames.RIGHT, "RIGHT") end
 
 
+  self._layoutFrameBuckets = {
+    TOP = topFrames,
+    BOTTOM = bottomFrames,
+    LEFT = sideFrames.LEFT,
+    RIGHT = sideFrames.RIGHT,
+  }
+
+
   -- Auto-map tracked buffs to spells using snapshot descriptions
   self.db.profile.tracking = self.db.profile.tracking or {}
   self.db.profile.tracking.buffs = self.db.profile.tracking.buffs or {}
@@ -2063,5 +2140,19 @@ function ClassHUD:BuildFramesForSpec()
 
   if self.RefreshAllTotems then
     self:RefreshAllTotems()
+  end
+end
+
+function ClassHUD:RefreshSpellFrameVisibility()
+  local buckets = self._layoutFrameBuckets
+  if not buckets then return end
+
+  LayoutTopBar(buckets.TOP or {})
+  LayoutBottomBar(buckets.BOTTOM or {})
+  LayoutSideBar(buckets.LEFT or {}, "LEFT")
+  LayoutSideBar(buckets.RIGHT or {}, "RIGHT")
+
+  if self.Layout then
+    self:Layout()
   end
 end
