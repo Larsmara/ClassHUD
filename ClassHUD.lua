@@ -28,6 +28,7 @@ _G.ClassHUD = ClassHUD -- explicit global bridge so split files can always find 
 ClassHUDDebugLog = ClassHUDDebugLog or {}
 ClassHUD.debugEnabled = ClassHUD.debugEnabled or false
 ClassHUD._loggedUntrackedSummons = ClassHUD._loggedUntrackedSummons or {}
+ClassHUD._pendingProfileSeeds = ClassHUD._pendingProfileSeeds or {}
 
 local MAX_DEBUG_LOG_ENTRIES = 2000
 
@@ -637,11 +638,8 @@ end
 -- ---------------------------------------------------------------------------
 -- Defaults & DB
 -- ---------------------------------------------------------------------------
-local CURRENT_DB_VERSION = 2
-
 local defaults = {
   profile = {
-    schemaVersion = CURRENT_DB_VERSION,
     locked       = false,
     position     = { x = 0, y = -50 },
     width        = 250,
@@ -786,303 +784,135 @@ local function CopyTableRecursive(tbl)
   return copy
 end
 
-local function MergeMissing(target, source)
-  if type(target) ~= "table" or type(source) ~= "table" then return end
 
-  for k, v in pairs(source) do
-    local existing = target[k]
-    if existing == nil then
-      if type(v) == "table" then
-        target[k] = CopyTableRecursive(v)
-      else
-        target[k] = v
+function ClassHUD:SeedProfileFromCooldownManager()
+  if not (self.db and self.db.profile) then return false end
+  if not (self.IsCooldownViewerAvailable and self:IsCooldownViewerAvailable()) then return false end
+
+  local class, specID = self:GetPlayerClassSpec()
+  if not class or not specID or specID == 0 then return false end
+
+  self:UpdateCDMSnapshot()
+  local snapshot = self:GetSnapshotForSpec(class, specID, false)
+  if not snapshot or next(snapshot) == nil then return false end
+
+  local seeded = false
+
+  local layout = self.db.profile.layout or {}
+  self.db.profile.layout = layout
+
+  layout.topBar = layout.topBar or {}
+  layout.topBar.spells = layout.topBar.spells or {}
+
+  layout.bottomBar = layout.bottomBar or {}
+  layout.bottomBar.spells = layout.bottomBar.spells or {}
+
+  layout.trackedBuffBar = layout.trackedBuffBar or {}
+  layout.trackedBuffBar.buffs = layout.trackedBuffBar.buffs or {}
+
+  local function ensureSpecList(root)
+    root[class] = root[class] or {}
+    root[class][specID] = root[class][specID] or {}
+    return root[class][specID]
+  end
+
+  local topList = ensureSpecList(layout.topBar.spells)
+  local bottomList = ensureSpecList(layout.bottomBar.spells)
+  local trackedOrder = ensureSpecList(layout.trackedBuffBar.buffs)
+
+  local function fillList(target, category)
+    if type(target) ~= "table" or #target > 0 then return end
+
+    local entries = {}
+    for spellID, entry in pairs(snapshot) do
+      local cat = entry.categories and entry.categories[category]
+      if cat then
+        entries[#entries + 1] = {
+          id    = tonumber(spellID) or spellID,
+          order = tonumber(cat.order) or math.huge,
+          name  = entry.name or tostring(spellID),
+        }
       end
-    elseif type(v) == "table" and type(existing) == "table" then
-      MergeMissing(existing, v)
+    end
+
+    table.sort(entries, function(a, b)
+      if a.order == b.order then
+        return a.name < b.name
+      end
+      return a.order < b.order
+    end)
+
+    for _, info in ipairs(entries) do
+      table.insert(target, info.id)
+    end
+
+    if #entries > 0 then
+      seeded = true
     end
   end
+
+  fillList(topList, "essential")
+  fillList(bottomList, "bar")
+
+  if type(trackedOrder) == "table" and #trackedOrder == 0 then
+    local entries = {}
+    for buffID, entry in pairs(snapshot) do
+      local cat = entry.categories and entry.categories.buff
+      if cat then
+        entries[#entries + 1] = {
+          id    = tonumber(buffID) or buffID,
+          order = tonumber(cat.order) or math.huge,
+          name  = entry.name or tostring(buffID),
+        }
+      end
+    end
+
+    table.sort(entries, function(a, b)
+      if a.order == b.order then
+        return a.name < b.name
+      end
+      return a.order < b.order
+    end)
+
+    if #entries > 0 then
+      self.db.profile.tracking = self.db.profile.tracking or {}
+      local tracking = self.db.profile.tracking
+      tracking.buffs = tracking.buffs or {}
+      tracking.buffs.tracked = tracking.buffs.tracked or {}
+      tracking.buffs.tracked[class] = tracking.buffs.tracked[class] or {}
+      tracking.buffs.tracked[class][specID] = tracking.buffs.tracked[class][specID] or {}
+      local trackedConfigs = tracking.buffs.tracked[class][specID]
+
+      for _, info in ipairs(entries) do
+        table.insert(trackedOrder, info.id)
+        if trackedConfigs[info.id] == nil then
+          trackedConfigs[info.id] = true
+        end
+      end
+
+      seeded = true
+    end
+  end
+
+  return seeded
 end
 
-local function EnsureChildTable(parent, key)
-  if type(parent) ~= "table" then return {} end
-  local value = parent[key]
-  if type(value) ~= "table" then
-    value = {}
-    parent[key] = value
-  end
-  return value
-end
+function ClassHUD:TrySeedPendingProfile()
+  if not (self.db and self.db.GetCurrentProfile) then return false end
 
-local function SortPlacementEntries(entries)
-  if type(entries) ~= "table" then return {} end
+  local profileName = self.db:GetCurrentProfile()
+  if not profileName then return false end
 
-  table.sort(entries, function(a, b)
-    local ao = tonumber(a.order) or math.huge
-    local bo = tonumber(b.order) or math.huge
-    if ao == bo then
-      return (a.index or 0) < (b.index or 0)
-    end
-    return ao < bo
-  end)
-
-  local ordered = {}
-  local seen = {}
-  for _, entry in ipairs(entries) do
-    local spellID = tonumber(entry.spellID) or entry.spellID
-    if spellID and not seen[spellID] then
-      ordered[#ordered + 1] = spellID
-      seen[spellID] = true
-    end
-  end
-  return ordered
-end
-
-function ClassHUD:MigrateProfile(profile)
-  if type(profile) ~= "table" then return end
-
-  local version = tonumber(profile.schemaVersion) or 0
-  if version >= CURRENT_DB_VERSION then
-    return
+  if not (self._pendingProfileSeeds and self._pendingProfileSeeds[profileName]) then
+    return false
   end
 
-  if version < 1 then
-    MergeMissing(profile, defaults.profile)
+  local seeded = self:SeedProfileFromCooldownManager()
+  if seeded then
+    self._pendingProfileSeeds[profileName] = nil
   end
 
-  if version < 2 then
-    local colors = EnsureChildTable(profile, "colors")
-    if type(profile.borderColor) == "table" and colors.border == nil then
-      colors.border = CopyTableRecursive(profile.borderColor)
-    end
-    profile.borderColor = nil
-
-    local layout = EnsureChildTable(profile, "layout")
-
-    if type(profile.barOrder) == "table" then
-      layout.barOrder = CopyTableRecursive(profile.barOrder)
-      profile.barOrder = nil
-    end
-
-    if type(profile.show) == "table" then
-      local dest = EnsureChildTable(layout, "show")
-      for k, v in pairs(profile.show) do dest[k] = v end
-      profile.show = nil
-    end
-
-    if type(profile.height) == "table" then
-      local dest = EnsureChildTable(layout, "height")
-      for k, v in pairs(profile.height) do dest[k] = v end
-      profile.height = nil
-    end
-
-    if type(profile.sideBars) == "table" then
-      local dest = EnsureChildTable(layout, "sideBars")
-      for k, v in pairs(profile.sideBars) do
-        if k ~= "spells" then
-          dest[k] = v
-        end
-      end
-      profile.sideBars = nil
-    end
-    local sideBars = EnsureChildTable(layout, "sideBars")
-    sideBars.spells = EnsureChildTable(sideBars, "spells")
-
-    if type(profile.classbars) == "table" then
-      local dest = EnsureChildTable(layout, "classbars")
-      for k, v in pairs(profile.classbars) do dest[k] = CopyTableRecursive(v) end
-      profile.classbars = nil
-    end
-
-    local topBar = EnsureChildTable(layout, "topBar")
-    topBar.spells = EnsureChildTable(topBar, "spells")
-    if type(profile.topBar) == "table" then
-      for k, v in pairs(profile.topBar) do
-        if k ~= "spells" then
-          topBar[k] = v
-        end
-      end
-      profile.topBar = nil
-    end
-
-    local bottomBar = EnsureChildTable(layout, "bottomBar")
-    bottomBar.spells = EnsureChildTable(bottomBar, "spells")
-    if type(profile.bottomBar) == "table" then
-      for k, v in pairs(profile.bottomBar) do
-        if k ~= "spells" then
-          bottomBar[k] = v
-        end
-      end
-      profile.bottomBar = nil
-    end
-
-    local trackedBuffBar = EnsureChildTable(layout, "trackedBuffBar")
-    trackedBuffBar.buffs = EnsureChildTable(trackedBuffBar, "buffs")
-    if type(profile.trackedBuffBar) == "table" then
-      for k, v in pairs(profile.trackedBuffBar) do
-        if k ~= "buffs" then
-          trackedBuffBar[k] = v
-        end
-      end
-      profile.trackedBuffBar = nil
-    end
-
-    layout.hiddenSpells = EnsureChildTable(layout, "hiddenSpells")
-
-    if type(profile.utilityPlacement) == "table" then
-      for class, bySpec in pairs(profile.utilityPlacement) do
-        for specKey, spells in pairs(bySpec) do
-          local specID = tonumber(specKey) or specKey
-          local buckets = {
-            TOP = {},
-            BOTTOM = {},
-            LEFT = {},
-            RIGHT = {},
-            HIDDEN = {},
-          }
-          local index = 0
-          for spellKey, data in pairs(spells) do
-            local placement = data
-            local order
-            if type(data) == "table" then
-              placement = data.placement or data.position or data.place or data.slot
-              order = data.order
-            end
-            placement = (type(placement) == "string" and placement:upper()) or "TOP"
-            if not buckets[placement] then
-              placement = "TOP"
-            end
-            index = index + 1
-            local entry = {
-              spellID = tonumber(spellKey) or spellKey,
-              order   = order,
-              index   = index,
-            }
-            buckets[placement][#buckets[placement] + 1] = entry
-          end
-
-          local topRoot = EnsureChildTable(topBar.spells, class)
-          if type(topRoot[specID]) ~= "table" or #topRoot[specID] == 0 then
-            topRoot[specID] = SortPlacementEntries(buckets.TOP)
-          end
-
-          local bottomRoot = EnsureChildTable(bottomBar.spells, class)
-          if type(bottomRoot[specID]) ~= "table" or #bottomRoot[specID] == 0 then
-            bottomRoot[specID] = SortPlacementEntries(buckets.BOTTOM)
-          end
-
-          local sideRoot = EnsureChildTable(sideBars.spells, class)
-          local sideSpec = EnsureChildTable(sideRoot, specID)
-          if type(sideSpec.left) ~= "table" or #sideSpec.left == 0 then
-            sideSpec.left = SortPlacementEntries(buckets.LEFT)
-          end
-          if type(sideSpec.right) ~= "table" or #sideSpec.right == 0 then
-            sideSpec.right = SortPlacementEntries(buckets.RIGHT)
-          end
-
-          local hiddenRoot = EnsureChildTable(layout.hiddenSpells, class)
-          if type(hiddenRoot[specID]) ~= "table" or #hiddenRoot[specID] == 0 then
-            hiddenRoot[specID] = SortPlacementEntries(buckets.HIDDEN)
-          end
-        end
-      end
-      profile.utilityPlacement = nil
-    end
-
-    local tracking = EnsureChildTable(profile, "tracking")
-    MergeMissing(tracking, defaults.profile.tracking)
-
-    local summons = EnsureChildTable(tracking, "summons")
-    if profile.trackSummons ~= nil then
-      summons.enabled = not not profile.trackSummons
-      profile.trackSummons = nil
-    end
-    summons.byClass = EnsureChildTable(summons, "byClass")
-    if type(profile.summonTracking) == "table" then
-      for class, config in pairs(profile.summonTracking) do
-        summons.byClass[class] = CopyTableRecursive(config)
-      end
-      profile.summonTracking = nil
-    end
-
-    local wildImps = EnsureChildTable(tracking, "wildImps")
-    if profile.trackWildImps ~= nil then
-      wildImps.enabled = not not profile.trackWildImps
-      profile.trackWildImps = nil
-    end
-    if profile.wildImpTrackingMode then
-      wildImps.mode = profile.wildImpTrackingMode
-      profile.wildImpTrackingMode = nil
-    end
-
-    local totems = EnsureChildTable(tracking, "totems")
-    if profile.trackTotems ~= nil then
-      totems.enabled = not not profile.trackTotems
-      profile.trackTotems = nil
-    end
-    if profile.totemOverlayStyle then
-      totems.overlayStyle = profile.totemOverlayStyle
-      profile.totemOverlayStyle = nil
-    end
-    if type(profile.totems) == "table" and profile.totems.showDuration ~= nil then
-      totems.showDuration = not not profile.totems.showDuration
-    end
-    profile.totems = nil
-
-    local buffTracking = EnsureChildTable(tracking, "buffs")
-    buffTracking.links = EnsureChildTable(buffTracking, "links")
-    buffTracking.tracked = EnsureChildTable(buffTracking, "tracked")
-
-    if type(profile.buffLinks) == "table" then
-      for class, config in pairs(profile.buffLinks) do
-        buffTracking.links[class] = CopyTableRecursive(config)
-      end
-      profile.buffLinks = nil
-    end
-
-    if type(profile.trackedBuffs) == "table" then
-      for class, bySpec in pairs(profile.trackedBuffs) do
-        local destClass = EnsureChildTable(buffTracking.tracked, class)
-        local orderClass = EnsureChildTable(trackedBuffBar.buffs, class)
-        for specKey, config in pairs(bySpec) do
-          local specID = tonumber(specKey) or specKey
-          local existing = destClass[specID]
-          if type(existing) ~= "table" or next(existing) == nil then
-            destClass[specID] = CopyTableRecursive(config)
-          end
-
-          local existingOrder = orderClass[specID]
-          if type(existingOrder) ~= "table" or #existingOrder == 0 then
-            local ordered = {}
-            for buffID in pairs(config) do
-              ordered[#ordered + 1] = tonumber(buffID) or buffID
-            end
-            table.sort(ordered, function(a, b)
-              if type(a) == "number" and type(b) == "number" then
-                return a < b
-              end
-              return tostring(a) < tostring(b)
-            end)
-            orderClass[specID] = ordered
-          end
-        end
-      end
-      profile.trackedBuffs = nil
-    end
-
-    if type(profile.cdmSnapshot) == "table" then
-      profile.cdmSnapshot = nil
-    end
-
-    local cooldowns = EnsureChildTable(profile, "cooldowns")
-    MergeMissing(cooldowns, defaults.profile.cooldowns)
-  end
-
-  profile.schemaVersion = CURRENT_DB_VERSION
-end
-
-function ClassHUD:MigrateDatabase()
-  if not (self.db and self.db.profile) then return end
-  self:MigrateProfile(self.db.profile)
+  return seeded
 end
 
 
@@ -1116,14 +946,24 @@ function ClassHUD:EnsureActiveSpecProfile()
   local desiredProfile = self:GetActiveSpecProfileName()
   if not desiredProfile then return end
 
+  self.db.profiles = self.db.profiles or {}
+  self._pendingProfileSeeds = self._pendingProfileSeeds or {}
+
+  if not self.db.profiles[desiredProfile] then
+    self.db.profiles[desiredProfile] = CopyTableRecursive(defaults.profile)
+    self._pendingProfileSeeds[desiredProfile] = true
+  end
+
   local currentProfile = self.db:GetCurrentProfile()
-  if currentProfile ~= desiredProfile or not (self.db.profiles and self.db.profiles[desiredProfile]) then
+  if currentProfile ~= desiredProfile then
     self.db:SetProfile(desiredProfile)
   end
+
+  self:TrySeedPendingProfile()
 end
 
 function ClassHUD:OnProfileChanged()
-  self:MigrateDatabase()
+  self:TrySeedPendingProfile()
   if self.ResetSummonTracking then self:ResetSummonTracking() end
   if self.ResetTotemTracking then self:ResetTotemTracking() end
   if self.BuildFramesForSpec then self:BuildFramesForSpec() end
@@ -1185,12 +1025,11 @@ end
 -- Lifecycle
 -- ---------------------------------------------------------------------------
 function ClassHUD:OnInitialize()
-  self.db = AceDB:New("ClassHUDDB", defaults, true)
+  self.db = AceDB:New("ClassHUDDB2", defaults, true)
   self.db.RegisterCallback(self, "OnProfileChanged")
   self.db.RegisterCallback(self, "OnProfileCopied", "OnProfileChanged")
   self.db.RegisterCallback(self, "OnProfileReset", "OnProfileChanged")
 
-  self:MigrateDatabase()
   self:EnsureActiveSpecProfile()
 end
 
@@ -1407,7 +1246,6 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   -- Full refresh after world load
   if event == "PLAYER_ENTERING_WORLD" then
     ClassHUD:EnsureActiveSpecProfile()
-    ClassHUD:MigrateDatabase()
     if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:FullUpdate()
@@ -1422,7 +1260,6 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
   -- Spec change
   if event == "PLAYER_SPECIALIZATION_CHANGED" and unit == "player" then
     ClassHUD:EnsureActiveSpecProfile()
-    ClassHUD:MigrateDatabase()
     if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:UpdateCDMSnapshot()
