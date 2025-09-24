@@ -7,7 +7,8 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 ClassHUD._lastSpecID = ClassHUD._lastSpecID or 0
 ClassHUD._snapshotStore = ClassHUD._snapshotStore or {}
 
-local C_Spell, C_UnitAuras, GetTime, floor, tostring, ipairs, pairs = C_Spell, C_UnitAuras, GetTime, floor, tostring, ipairs, pairs
+local C_Spell, C_UnitAuras, GetTime, floor, tostring, ipairs, pairs = C_Spell, C_UnitAuras, GetTime, floor, tostring,
+    ipairs, pairs
 
 local DEFAULT_TRACKED_BAR_COLOR = { r = 0.25, g = 0.65, b = 1.00, a = 1 }
 
@@ -134,12 +135,6 @@ function ClassHUD:GetSnapshotEntry(spellID, class, specID)
   return snapshot[spellID]
 end
 
----Returns a fresh copy of the default tracked-bar color settings.
----@return table
-function ClassHUD:GetDefaultTrackedBarColor()
-  return CopyColorTemplate(DEFAULT_TRACKED_BAR_COLOR)
-end
-
 local function NormalizeTrackedConfigTable(config)
   config.showIcon = not not config.showIcon
   config.showBar = not not config.showBar
@@ -218,61 +213,6 @@ function ClassHUD:GetTrackedEntryConfig(class, specID, buffID, create)
   end
 
   return nil
-end
-
----Determines the best spell information to represent a tracked bar entry.
----@param entry table|nil Cooldown snapshot entry.
----@param primaryID number|nil Fallback spellID if no better match is found.
----@param candidates number[]|nil Pre-computed aura candidate list.
----@return number|nil displaySpellID
----@return string displayName
----@return number|nil iconID
----@return number[]|nil candidateList
-function ClassHUD:ResolveTrackedBarDisplay(entry, primaryID, candidates)
-  candidates = candidates or self:GetAuraCandidatesForEntry(entry, primaryID)
-
-  local displaySpellID, displayName, iconID
-
-  if candidates then
-    for i = 1, #candidates do
-      local spellID = candidates[i]
-      if type(spellID) == "number" and spellID > 0 then
-        local info = C_Spell.GetSpellInfo(spellID)
-        if info and info.name then
-          displaySpellID = spellID
-          displayName = info.name
-          iconID = info.iconID
-          break
-        end
-      end
-    end
-  end
-
-  if not displaySpellID and primaryID then
-    local info = C_Spell.GetSpellInfo(primaryID)
-    if info and info.name then
-      displaySpellID = primaryID
-      displayName = displayName or info.name
-      iconID = iconID or info.iconID
-    end
-  end
-
-  if entry then
-    displayName = displayName or entry.name
-    iconID = iconID or entry.iconID
-  end
-
-  if not displayName then
-    if displaySpellID then
-      displayName = C_Spell.GetSpellName(displaySpellID)
-    elseif primaryID then
-      displayName = C_Spell.GetSpellName(primaryID)
-    end
-  end
-
-  displayName = displayName or (primaryID and ("Spell " .. primaryID)) or "Unknown"
-
-  return displaySpellID, displayName, iconID, candidates
 end
 
 ---Iterates over snapshot entries for a given category and calls the handler.
@@ -547,7 +487,7 @@ function ClassHUD:LacksResources(spellID)
   if type(costs) ~= "table" then return false end
 
   for i = 1, #costs do
-    local c = costs[i]
+    local c     = costs[i]
     -- Feltnavn varierer litt mellom patches
     local ptype = c.type or c.powerType
     local cost  = c.cost or c.minCost or 0

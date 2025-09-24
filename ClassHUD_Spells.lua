@@ -5,13 +5,10 @@ local UI = ClassHUD.UI
 
 ClassHUD.spellFrames = ClassHUD.spellFrames or {}
 ClassHUD.trackedBuffFrames = ClassHUD.trackedBuffFrames or {}
-ClassHUD.trackedBarFrames = ClassHUD.trackedBarFrames or {}
 ClassHUD._trackedBuffFramePool = ClassHUD._trackedBuffFramePool or {}
-ClassHUD._trackedBarFramePool = ClassHUD._trackedBarFramePool or {}
 
 local activeFrames = {}
 local trackedBuffPool = ClassHUD._trackedBuffFramePool
-local trackedBarPool = ClassHUD._trackedBarFramePool
 
 local bit_band = bit and bit.band or (bit32 and bit32.band)
 local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
@@ -658,112 +655,6 @@ local function CreateBuffFrame(buffID)
   return f
 end
 ClassHUD.CreateBuffFrame = CreateBuffFrame
-local function CreateTrackedBarFrame(buffID)
-  if trackedBarPool[buffID] then
-    return trackedBarPool[buffID]
-  end
-
-  local parent = (UI.attachments and UI.attachments.TRACKED_BARS) or UI.anchor
-  local layout = ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.layout
-  local trackedCfg = layout and layout.trackedBuffBar
-  local height = trackedCfg and trackedCfg.height or 16
-
-  local bar = ClassHUD:CreateStatusBar(parent, height)
-  bar.buffID = buffID
-  bar._updateKind = "trackedBar"
-  bar._auraUnitList = TRACKED_UNITS
-  bar._layoutActive = false
-  bar.auraSpellIDs = { buffID }
-  bar._trackedAuraCandidates = bar.auraSpellIDs
-  bar.text:Hide()
-  bar.icon = bar:CreateTexture(nil, "ARTWORK")
-  bar.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-  bar.icon:Hide()
-
-  bar.label = bar:CreateFontString(nil, "OVERLAY")
-  bar.label:SetFont(ClassHUD:FetchFont(12))
-  bar.label:SetJustifyH("LEFT")
-  bar.label:SetPoint("LEFT", bar, "LEFT", 4, 0)
-
-  bar.timer = bar:CreateFontString(nil, "OVERLAY")
-  bar.timer:SetFont(ClassHUD:FetchFont(12))
-  bar.timer:SetJustifyH("RIGHT")
-  bar.timer:SetPoint("TOPRIGHT", bar, "TOPRIGHT", -4, -2)
-  bar.timer:Hide()
-
-  bar.stacks = bar:CreateFontString(nil, "OVERLAY")
-  bar.stacks:SetFont(ClassHUD:FetchFont(12))
-  bar.stacks:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", -4, 2)
-  bar.stacks:SetJustifyH("RIGHT")
-  bar.stacks:Hide()
-
-  bar._duration = nil
-  bar._expiration = nil
-  bar._showTimer = true
-  bar._activeColor = CopyColor(ClassHUD:GetDefaultTrackedBarColor())
-  bar._inactiveColor = CopyColor(INACTIVE_BAR_COLOR)
-  bar.cooldownSpellID = buffID
-  bar._timerTextValue = nil
-
-  bar:SetMinMaxValues(0, 1)
-  bar:SetValue(0)
-  bar:SetScript("OnUpdate", nil)
-
-  trackedBarPool[buffID] = bar
-  return bar
-end
-
-local function LayoutTrackedBars(barFrames, opts)
-  local container = EnsureAttachment("TRACKED_BARS")
-  if not container then return end
-
-  local layout   = ClassHUD.db.profile.layout or {}
-  local settings = layout.trackedBuffBar or {}
-  local width      = ClassHUD.db.profile.width or 250
-  local spacingY   = settings.spacingY or 4
-  local barHeight  = settings.height or 16
-  local topPadding = 0
-
-  if #barFrames > 0 then
-    topPadding = (opts and opts.topPadding) or 0
-  end
-
-  container:SetWidth(width)
-
-  local currentY = topPadding
-  local totalHeight = (#barFrames > 0) and topPadding or 0
-
-  for index, frame in ipairs(barFrames) do
-    frame:SetParent(container)
-    frame:ClearAllPoints()
-    frame:SetHeight(barHeight)
-    frame:SetWidth(width)
-    frame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -currentY)
-    frame:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, -currentY)
-    frame:Show()
-
-    currentY = currentY + barHeight
-    totalHeight = currentY
-
-    if index < #barFrames then
-      currentY = currentY + spacingY
-      totalHeight = currentY
-    end
-  end
-
-  if #barFrames == 0 then
-    container._height = 0
-    container:SetHeight(0)
-    container._afterGap = nil
-  else
-    totalHeight = math.max(totalHeight, 0)
-    container._height = totalHeight
-    container:SetHeight(totalHeight)
-    container._afterGap = nil
-  end
-
-  container:Show()
-end
 
 local function LayoutTrackedIcons(iconFrames, opts)
   local container = EnsureAttachment("TRACKED_ICONS")
@@ -826,12 +717,9 @@ function ClassHUD:UpdateTrackedLayoutSnapshot()
   end
 
   local iconsContainer = EnsureAttachment("TRACKED_ICONS")
-  local barsContainer  = EnsureAttachment("TRACKED_BARS")
 
   local iconsHeight    = iconsContainer and iconsContainer._height or 0
   local iconsGap       = iconsContainer and iconsContainer._afterGap or nil
-  local barsHeight     = barsContainer and barsContainer._height or 0
-  local barsGap        = barsContainer and barsContainer._afterGap or nil
 
   local changed        = snapshot.iconsHeight ~= iconsHeight
       or snapshot.iconsGap ~= iconsGap
@@ -876,7 +764,6 @@ function ClassHUD:ApplyTrackedBuffLayout()
   local barTopPadding = (#barFrames > 0) and yOffset or 0
   local iconTopPadding = (#barFrames == 0 and #iconFrames > 0) and yOffset or 0
 
-  LayoutTrackedBars(barFrames, { topPadding = barTopPadding })
   LayoutTrackedIcons(iconFrames, { topPadding = iconTopPadding })
   self:UpdateTrackedLayoutSnapshot()
 end
@@ -1216,83 +1103,6 @@ local function UpdateTrackedIconFrame(frame)
   return false
 end
 
-local function UpdateTrackedBarFrame(frame)
-  local buffID = frame.buffID
-  if not buffID then return false end
-
-  local candidates = frame._trackedAuraCandidates or frame.auraSpellIDs
-  local units = frame._auraUnitList or TRACKED_UNITS
-  local aura, auraSpellID = FindAuraFromCandidates(candidates, units)
-  if aura then
-    frame:Show()
-
-    local texture = aura.icon or (auraSpellID and C_Spell.GetSpellTexture(auraSpellID))
-    if frame.icon and frame.icon:IsShown() and texture then
-      frame.icon:SetTexture(texture)
-    end
-
-    local displayName = aura.name or (auraSpellID and C_Spell.GetSpellName(auraSpellID)) or frame.defaultLabel
-    if displayName then
-      frame.label:SetText(displayName)
-    end
-
-    local stacks = aura.applications or aura.stackCount or aura.charges
-    stacks = tonumber(stacks)
-    if frame.stacks then
-      if stacks and stacks > 1 then
-        frame.stacks:SetText(tostring(stacks))
-        frame.stacks:Show()
-      else
-        frame.stacks:SetText("")
-        frame.stacks:Hide()
-      end
-    end
-
-    frame:SetStatusBarColor(frame._activeColor.r, frame._activeColor.g, frame._activeColor.b, frame._activeColor.a)
-
-    if aura.duration and aura.duration > 0 and aura.expirationTime then
-      frame._duration = aura.duration
-      frame._expiration = aura.expirationTime
-      frame:SetMinMaxValues(0, aura.duration)
-      frame:SetValue(math.max(0, aura.expirationTime - GetTime()))
-      frame._timerTextValue = nil
-      if frame.timer then
-        frame.timer:SetText("")
-        frame.timer:Hide()
-      end
-      ClassHUD:RegisterTrackedBarFrame(frame)
-      frame._layoutActive = true
-    else
-      frame._duration = nil
-      frame._expiration = nil
-      frame:SetMinMaxValues(0, 1)
-      frame:SetValue(1)
-      ClassHUD:UnregisterTrackedBarFrame(frame)
-    end
-
-    return true
-  end
-
-  frame._duration = nil
-  frame._expiration = nil
-  frame:SetMinMaxValues(0, 1)
-  frame:SetValue(0)
-  frame:SetStatusBarColor(frame._inactiveColor.r, frame._inactiveColor.g, frame._inactiveColor.b, frame._inactiveColor.a)
-  ClassHUD:UnregisterTrackedBarFrame(frame)
-  if frame.stacks then
-    frame.stacks:SetText("")
-    frame.stacks:Hide()
-  end
-
-  if frame.defaultLabel then
-    frame.label:SetText(frame.defaultLabel)
-  end
-
-  frame:Hide()
-  frame._layoutActive = false
-  return false
-end
-
 function ClassHUD:BuildTrackedBuffFrames()
   local trackedIDs = self._trackedAuraIDs
   if not trackedIDs then
@@ -1330,24 +1140,13 @@ function ClassHUD:BuildTrackedBuffFrames()
       end
     end
   end
-  if self.trackedBarFrames then
-    for _, frame in ipairs(self.trackedBarFrames) do
-      self:ClearFrameAuraWatchers(frame)
-      frame:Hide()
-      frame._layoutActive = false
-      ClassHUD:UnregisterTrackedBarFrame(frame)
-    end
-  end
 
   wipe(self.trackedBuffFrames)
-  wipe(self.trackedBarFrames)
 
   -- Sørg for containere
   EnsureAttachment("TRACKED_ICONS")
-  EnsureAttachment("TRACKED_BARS")
 
   local function resetLayouts()
-    LayoutTrackedBars({}, nil)
     LayoutTrackedIcons({}, nil)
     self:UpdateTrackedLayoutSnapshot()
   end
@@ -1440,7 +1239,6 @@ function ClassHUD:BuildTrackedBuffFrames()
   end)
 
   local iconFrames = {}
-  local barFrames  = {}
 
   for _, info in ipairs(ordered) do
     local buffID         = info.buffID
@@ -1453,17 +1251,6 @@ function ClassHUD:BuildTrackedBuffFrames()
       for _, candidateID in ipairs(auraCandidates) do
         if type(candidateID) == "number" then
           trackedIDs[candidateID] = true
-        end
-      end
-    end
-
-    if info.config and info.config.showBar and self.ResolveTrackedBarDisplay then
-      local _, _, _, barCandidates = self:ResolveTrackedBarDisplay(entry, buffID, auraCandidates)
-      if barCandidates then
-        for _, candidateID in ipairs(barCandidates) do
-          if type(candidateID) == "number" then
-            trackedIDs[candidateID] = true
-          end
         end
       end
     end
@@ -1493,7 +1280,6 @@ function ClassHUD:BuildTrackedBuffFrames()
   end
 
   self.trackedBuffFrames = iconFrames
-  self.trackedBarFrames  = barFrames
 
   self:RefreshTemporaryBuffs(true)
   self:ApplyTrackedBuffLayout()
@@ -1860,7 +1646,6 @@ end
 -- ==================================================
 -- Public API (kalles fra ClassHUD.lua events)
 -- ==================================================
-ClassHUD.UpdateTrackedBarFrame = UpdateTrackedBarFrame
 
 function ClassHUD:UpdateCooldown(spellID)
   if not self.spellFrames then return end
@@ -1976,12 +1761,6 @@ function ClassHUD:FlushAuraChanges()
     elseif frame and frame._updateKind == "trackedIcon" then
       local previous = frame._layoutActive
       local active = UpdateTrackedIconFrame(frame)
-      if active ~= previous then
-        layoutDirty = true
-      end
-    elseif frame and frame._updateKind == "trackedBar" then
-      local previous = frame._layoutActive
-      local active = UpdateTrackedBarFrame(frame)
       if active ~= previous then
         layoutDirty = true
       end

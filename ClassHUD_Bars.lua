@@ -151,9 +151,9 @@ end
 
 -- Layout (top→bottom): tracked buffs → cast → hp → resource → power
 function ClassHUD:ApplyBarSkins()
-  local tex = self:FetchStatusbar()
+  local tex    = self:FetchStatusbar()
   local colors = self.db.profile.colors or {}
-  local c   = colors.border or { r = 0, g = 0, b = 0, a = 1 }
+  local c      = colors.border or { r = 0, g = 0, b = 0, a = 1 }
   for _, sb in pairs({ UI.cast, UI.hp, UI.resource }) do
     if sb and sb.SetStatusBarTexture then
       sb:SetStatusBarTexture(tex)
@@ -181,7 +181,7 @@ function ClassHUD:Layout()
   local UI      = self.UI
   local profile = self.db.profile
   local layout  = profile.layout or {}
-  layout.show = layout.show or {}
+  layout.show   = layout.show or {}
   layout.height = layout.height or {}
   local w       = profile.width or 250
   local gap     = profile.spacing or 2
@@ -287,7 +287,6 @@ function ClassHUD:Layout()
 
   -- Buff containers
   local trackedIcons = UI.attachments.TRACKED_ICONS
-  local trackedBars  = UI.attachments.TRACKED_BARS
   local anchor       = UI.anchor
   local y            = 0
 
@@ -304,7 +303,6 @@ function ClassHUD:Layout()
 
   -- Alltid: Icons først, så Buff bars
   place(trackedIcons)
-  place(trackedBars)
 
   -- Sanitér barOrder
   local order = layout.barOrder

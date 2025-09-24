@@ -16,11 +16,11 @@ local PLACEMENTS = {
 }
 
 local SUMMON_CLASS_CONFIG = {
-  { class = "PRIEST",      label = "Priest Summons",      spells = { 34433, 123040 } },
-  { class = "WARLOCK",     label = "Warlock Summons",     spells = { 193332, 264119, 455476, 265187, 111898, 205180 } },
+  { class = "PRIEST",      label = "Priest Summons",       spells = { 34433, 123040 } },
+  { class = "WARLOCK",     label = "Warlock Summons",      spells = { 193332, 264119, 455476, 265187, 111898, 205180 } },
   { class = "DEATHKNIGHT", label = "Death Knight Summons", spells = { 42650, 49206 } },
-  { class = "DRUID",       label = "Druid Summons",       spells = { 205636 } },
-  { class = "MONK",        label = "Monk Summons",        spells = { 115313 } },
+  { class = "DRUID",       label = "Druid Summons",        spells = { 205636 } },
+  { class = "MONK",        label = "Monk Summons",         spells = { 115313 } },
 }
 
 local TOTEM_OVERLAY_OPTIONS = {
@@ -1196,19 +1196,6 @@ function ClassHUD_BuildOptions(addon)
               addon:BuildFramesForSpec()
             end,
           },
-          trackedBarHeight = {
-            type = "range",
-            name = "Tracked Bar Height",
-            order = 6,
-            min = 8,
-            max = 40,
-            step = 1,
-            get = function() return layout.trackedBuffBar.height or 16 end,
-            set = function(_, value)
-              layout.trackedBuffBar.height = value
-              addon:BuildTrackedBuffFrames()
-            end,
-          },
           spacing = {
             type = "range",
             name = "Vertical Spacing",
@@ -1765,17 +1752,17 @@ function ClassHUD_BuildOptions(addon)
                 order = 2,
                 width = "half",
                 get   = function() return "" end,
-              set   = function(_, value)
-                local spellID = tonumber(value)
-                if not spellID then return end
-                local class, specID = addon:GetPlayerClassSpec()
-                local lists = EnsurePlacementLists(addon, class, specID)
-                SetSpellPlacement(addon, class, specID, spellID, "TOP", #lists.TOP + 1)
-                BuildTopBarSpellsEditor(addon, topBarEditorContainer)
-                addon:BuildFramesForSpec()
-                local ACR = LibStub("AceConfigRegistry-3.0", true)
-                if ACR then ACR:NotifyChange("ClassHUD") end
-              end,
+                set   = function(_, value)
+                  local spellID = tonumber(value)
+                  if not spellID then return end
+                  local class, specID = addon:GetPlayerClassSpec()
+                  local lists = EnsurePlacementLists(addon, class, specID)
+                  SetSpellPlacement(addon, class, specID, spellID, "TOP", #lists.TOP + 1)
+                  BuildTopBarSpellsEditor(addon, topBarEditorContainer)
+                  addon:BuildFramesForSpec()
+                  local ACR = LibStub("AceConfigRegistry-3.0", true)
+                  if ACR then ACR:NotifyChange("ClassHUD") end
+                end,
               },
               editor = {
                 type   = "group",
@@ -1799,17 +1786,17 @@ function ClassHUD_BuildOptions(addon)
                 order = 1,
                 width = "half",
                 get = function() return "" end,
-              set = function(_, value)
-                local spellID = tonumber(value)
-                if not spellID then return end
-                local class, specID = addon:GetPlayerClassSpec()
-                local lists = EnsurePlacementLists(addon, class, specID)
-                SetSpellPlacement(addon, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
-                addon:BuildFramesForSpec()
-                BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
-                  "No utility cooldowns reported by the snapshot for this spec.")
-                NotifyOptionsChanged()
-              end,
+                set = function(_, value)
+                  local spellID = tonumber(value)
+                  if not spellID then return end
+                  local class, specID = addon:GetPlayerClassSpec()
+                  local lists = EnsurePlacementLists(addon, class, specID)
+                  SetSpellPlacement(addon, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
+                  addon:BuildFramesForSpec()
+                  BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
+                    "No utility cooldowns reported by the snapshot for this spec.")
+                  NotifyOptionsChanged()
+                end,
               },
               list = {
                 type = "group",
@@ -1820,11 +1807,11 @@ function ClassHUD_BuildOptions(addon)
               },
             },
           },
-      trackedBuffs = {
-        type = "group",
-        name = "Tracked Buffs",
-        order = 3,
-        args = {
+          trackedBuffs = {
+            type = "group",
+            name = "Tracked Buffs",
+            order = 3,
+            args = {
               description = {
                 type = "description",
                 name = "Configure which buffs appear on the tracked buff bar.",
@@ -1836,28 +1823,28 @@ function ClassHUD_BuildOptions(addon)
                 order = 2,
                 width = "half",
                 get = function() return "" end,
-              set = function(_, value)
-                local buffID = tonumber(value)
-                if not buffID then return end
-                local class, specID = addon:GetPlayerClassSpec()
-                local tracked = EnsureBuffTracking(addon, class, specID)
-                local orderList = EnsureTrackedBuffOrder(addon, class, specID)
-                tracked[buffID] = tracked[buffID] or true
-                local exists = false
-                for _, existing in ipairs(orderList) do
-                  if (tonumber(existing) or existing) == buffID then
-                    exists = true
-                    break
+                set = function(_, value)
+                  local buffID = tonumber(value)
+                  if not buffID then return end
+                  local class, specID = addon:GetPlayerClassSpec()
+                  local tracked = EnsureBuffTracking(addon, class, specID)
+                  local orderList = EnsureTrackedBuffOrder(addon, class, specID)
+                  tracked[buffID] = tracked[buffID] or true
+                  local exists = false
+                  for _, existing in ipairs(orderList) do
+                    if (tonumber(existing) or existing) == buffID then
+                      exists = true
+                      break
+                    end
                   end
-                end
-                if not exists then
-                  orderList[#orderList + 1] = buffID
-                end
-                addon:BuildTrackedBuffFrames()
-                BuildTrackedBuffArgs(addon, trackedContainer)
-                NotifyOptionsChanged()
-              end,
-            },
+                  if not exists then
+                    orderList[#orderList + 1] = buffID
+                  end
+                  addon:BuildTrackedBuffFrames()
+                  BuildTrackedBuffArgs(addon, trackedContainer)
+                  NotifyOptionsChanged()
+                end,
+              },
               list = {
                 type = "group",
                 name = "Entries",

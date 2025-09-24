@@ -131,7 +131,6 @@ ClassHUD._framesByConcern.cooldown = ClassHUD._framesByConcern.cooldown or {}
 ClassHUD._framesByConcern.range = ClassHUD._framesByConcern.range or {}
 ClassHUD._framesByConcern.resource = ClassHUD._framesByConcern.resource or {}
 ClassHUD._framesByConcern.aura = ClassHUD._framesByConcern.aura or {}
-ClassHUD._trackedBarFrames = ClassHUD._trackedBarFrames or {}
 ClassHUD._trackedAuraIDs = ClassHUD._trackedAuraIDs or {}
 ClassHUD._trackedLayoutSnapshot = ClassHUD._trackedLayoutSnapshot or nil
 ClassHUD._barTickerToken = ClassHUD._barTickerToken or nil
@@ -361,83 +360,6 @@ local function EnsureTicker(self, field, method, interval, registry)
   end
 end
 
-function ClassHUD:RegisterTrackedBarFrame(frame)
-  if not frame then return end
-  self._trackedBarFrames[frame] = true
-  EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, self._trackedBarFrames)
-end
-
-function ClassHUD:UnregisterTrackedBarFrame(frame)
-  if not frame then return end
-  self._trackedBarFrames[frame] = nil
-
-  if frame.timer then
-    frame.timer:SetText("")
-    frame.timer:Hide()
-  end
-  frame._timerTextValue = nil
-
-  EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, self._trackedBarFrames)
-end
-
-function ClassHUD:TickTrackedBars()
-  local frames = self._trackedBarFrames
-  if not frames or not next(frames) then
-    EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, frames or {})
-    return
-  end
-
-  local now = GetTime()
-  local pendingRefresh = nil
-
-  for frame in pairs(frames) do
-    if not frame or not frame._duration or not frame._expiration then
-      frames[frame] = nil
-    else
-      local remaining = frame._expiration - now
-      if remaining < 0 then remaining = 0 end
-
-      if frame.SetValue then
-        local current = frame:GetValue()
-        if current ~= remaining then
-          frame:SetValue(remaining)
-        end
-      end
-
-      if frame._showTimer and frame.timer then
-        local formatted = ClassHUD.FormatSeconds(remaining)
-        if frame._timerTextValue ~= formatted then
-          frame.timer:SetText(formatted or "")
-          frame._timerTextValue = formatted
-        end
-        if not frame.timer:IsShown() then
-          frame.timer:Show()
-        end
-      elseif frame.timer then
-        if frame.timer:IsShown() then
-          frame.timer:Hide()
-        end
-        frame._timerTextValue = nil
-      end
-
-      if remaining <= 0 then
-        pendingRefresh = pendingRefresh or {}
-        table.insert(pendingRefresh, frame)
-      end
-    end
-  end
-
-  if pendingRefresh and self.UpdateTrackedBarFrame then
-    for _, frame in ipairs(pendingRefresh) do
-      if frames[frame] then
-        self:UpdateTrackedBarFrame(frame)
-      end
-    end
-  end
-
-  EnsureTicker(self, "_barTickerToken", "TickTrackedBars", BAR_TICK_INTERVAL, frames)
-end
-
 function ClassHUD:RegisterCooldownTextFrame(frame)
   if not frame or not frame.cooldownText then return end
 
@@ -640,23 +562,23 @@ end
 -- ---------------------------------------------------------------------------
 local defaults = {
   profile = {
-    locked       = false,
-    position     = { x = 0, y = -50 },
-    width        = 250,
-    spacing      = 2,
-    powerSpacing = 2,
-    textures     = {
+    locked        = false,
+    position      = { x = 0, y = -50 },
+    width         = 250,
+    spacing       = 2,
+    powerSpacing  = 2,
+    textures      = {
       bar  = "Blizzard",
       font = "Friz Quadrata TT",
     },
-    colors = {
-      border       = { r = 0, g = 0, b = 0, a = 1 },
-      hp           = { r = 0.10, g = 0.80, b = 0.10 },
+    colors        = {
+      border        = { r = 0, g = 0, b = 0, a = 1 },
+      hp            = { r = 0.10, g = 0.80, b = 0.10 },
       resourceClass = true,
-      resource     = { r = 0.00, g = 0.55, b = 1.00 },
-      power        = { r = 1.00, g = 0.85, b = 0.10 },
+      resource      = { r = 0.00, g = 0.55, b = 1.00 },
+      power         = { r = 1.00, g = 0.85, b = 0.10 },
     },
-    layout = {
+    layout        = {
       barOrder = { "TOP", "CAST", "HP", "RESOURCE", "CLASS", "BOTTOM" },
       show = {
         cast     = true,
@@ -719,7 +641,7 @@ local defaults = {
       },
       hiddenSpells = {},
     },
-    tracking = {
+    tracking      = {
       summons = {
         enabled = true,
         byClass = {
@@ -737,7 +659,7 @@ local defaults = {
           },
           DEATHKNIGHT = {
             [42650] = true,
-            [49206]  = true,
+            [49206] = true,
           },
           DRUID = {
             [205636] = true,
@@ -761,7 +683,7 @@ local defaults = {
         tracked = {},
       },
     },
-    cooldowns = {
+    cooldowns     = {
       showSwipe   = true,
       showCharges = true,
       showText    = true,
@@ -899,9 +821,8 @@ function ClassHUD:SeedProfileFromCooldownManager()
   end
 
   local trackedEntries = buildEntries("buff")
-  local trackedBarEntries = buildEntries("bar")
 
-  if (#trackedEntries > 0 or #trackedBarEntries > 0) then
+  if (#trackedEntries > 0) then
     self.db.profile.tracking = self.db.profile.tracking or {}
     local tracking = self.db.profile.tracking
     tracking.buffs = tracking.buffs or {}
@@ -930,9 +851,6 @@ function ClassHUD:SeedProfileFromCooldownManager()
     end
 
     local trackedChanged = appendTracked(trackedEntries)
-    if appendTracked(trackedBarEntries) then
-      trackedChanged = true
-    end
 
     if trackedChanged then
       seeded = true
@@ -959,7 +877,6 @@ function ClassHUD:TrySeedPendingProfile()
 
   return seeded
 end
-
 
 function ClassHUD:FetchStatusbar()
   return self.LSM:Fetch("statusbar", self.db.profile.textures.bar)
@@ -1102,7 +1019,6 @@ function ClassHUD:UpdateCDMSnapshot()
     [Enum.CooldownViewerCategory.Essential]   = "essential",
     [Enum.CooldownViewerCategory.Utility]     = "utility",
     [Enum.CooldownViewerCategory.TrackedBuff] = "buff",
-    [Enum.CooldownViewerCategory.TrackedBar]  = "bar",
   }
 
   local orderByCategory = {}
