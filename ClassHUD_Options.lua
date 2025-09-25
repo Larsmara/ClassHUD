@@ -2079,6 +2079,25 @@ function ClassHUD_BuildOptions(addon)
         name = "Spells & Buffs",
         order = 4,
         args = {
+          rescanSnapshot = {
+            type = "execute",
+            name = "Rescan from Cooldown Manager",
+            order = 0,
+            width = "full",
+            desc = "Import newly available spells from Blizzard's Cooldown Manager snapshot without altering your existing layout.",
+            func = function()
+              if not (addon and addon.RescanFromCDM) then return end
+              local ok, result = pcall(addon.RescanFromCDM, addon)
+              if not ok then
+                print("|cff00ff88ClassHUD|r Rescan failed:", result)
+              elseif not result then
+                -- RescanFromCDM prints its own feedback when no changes occur
+              end
+            end,
+            disabled = function()
+              return not (addon and addon.IsCooldownViewerAvailable and addon:IsCooldownViewerAvailable())
+            end,
+          },
           -- topBar = {
           --   type = "group",
           --   name = "Top Bar Spells",

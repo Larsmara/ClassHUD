@@ -1292,6 +1292,33 @@ function ClassHUD:SyncSnapshotToDB()
   return changed
 end
 
+---Manually updates the snapshot from Cooldown Manager and merges new entries into the DB.
+---@return boolean changed True if new spells or buffs were added to the profile.
+function ClassHUD:RescanFromCDM()
+  if not (self.IsCooldownViewerAvailable and self:IsCooldownViewerAvailable()) then
+    print("|cff00ff88ClassHUD|r Cooldown Manager is not available on this client.")
+    return false
+  end
+
+  self:UpdateCDMSnapshot()
+
+  local changed = self:SyncSnapshotToDB()
+  if not changed then
+    print("|cff00ff88ClassHUD|r No new spells were found in the Cooldown Manager snapshot.")
+    return false
+  end
+
+  if self.BuildFramesForSpec then self:BuildFramesForSpec() end
+  if self.BuildTrackedBuffFrames then self:BuildTrackedBuffFrames() end
+  if self.RefreshRegisteredOptions then self:RefreshRegisteredOptions() end
+  if self.UpdateAllFrames then self:UpdateAllFrames() end
+  if self.RefreshSpellFrameVisibility then self:RefreshSpellFrameVisibility() end
+  if self.RefreshAllTotems then self:RefreshAllTotems() end
+
+  print("|cff00ff88ClassHUD|r Imported new spells from the Cooldown Manager snapshot.")
+  return true
+end
+
 function ClassHUD:TrySeedPendingProfile()
   if not (self.db and self.db.GetCurrentProfile) then return false end
 
@@ -1664,32 +1691,23 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     if ClassHUD.ResetSummonTracking then ClassHUD:ResetSummonTracking() end
     if ClassHUD.ResetTotemTracking then ClassHUD:ResetTotemTracking() end
     ClassHUD:UpdateCDMSnapshot()
-    local updated = ClassHUD:SyncSnapshotToDB()
-    if updated then
-      ClassHUD:BuildFramesForSpec()
-      ClassHUD:RefreshRegisteredOptions()
-    end
-    if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    if ClassHUD.BuildTrackedBuffFrames then ClassHUD:BuildTrackedBuffFrames() end
+    if ClassHUD.RefreshRegisteredOptions then ClassHUD:RefreshRegisteredOptions() end
+    if ClassHUD.UpdatePrimaryResource then ClassHUD:UpdatePrimaryResource() end
     if ClassHUD.EvaluateClassBarVisibility then
       ClassHUD:EvaluateClassBarVisibility()
     elseif ClassHUD.UpdateSpecialPower then
       ClassHUD:UpdateSpecialPower()
     end
-    ClassHUD:RefreshRegisteredOptions()
-    ClassHUD:UpdateAllFrames()
+    if ClassHUD.UpdateAllFrames then ClassHUD:UpdateAllFrames() end
+    if ClassHUD.RefreshSpellFrameVisibility then ClassHUD:RefreshSpellFrameVisibility() end
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
   end
 
   if (event == "PLAYER_TALENT_UPDATE" and (unit == nil or unit == "player"))
       or event == "TRAIT_CONFIG_UPDATED" then
-    ClassHUD:UpdateCDMSnapshot()
-    local updated = ClassHUD:SyncSnapshotToDB()
-    if updated then
-      ClassHUD:BuildFramesForSpec()
-      ClassHUD:RefreshRegisteredOptions()
-    end
     if ClassHUD.UpdateAllFrames then
       ClassHUD:UpdateAllFrames()
     end
