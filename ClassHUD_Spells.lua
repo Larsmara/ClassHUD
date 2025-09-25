@@ -1489,9 +1489,10 @@ local function UpdateSpellFrame(frame)
   end
   frame._auraUnitList = auraUnits
 
-  local linkedBuffIDs = ClassHUD:GetLinkedBuffIDsForSpell(sid, frame._linkedBuffIDs)
+  local linkedBuffIDs, linkedBuffMeta = ClassHUD:GetLinkedBuffIDsForSpell(sid, frame._linkedBuffIDs, frame._linkedBuffMeta)
   if frame then
     frame._linkedBuffIDs = linkedBuffIDs
+    frame._linkedBuffMeta = linkedBuffMeta
   end
 
   local watcherCandidates = auraCandidates
@@ -1581,6 +1582,7 @@ local function UpdateSpellFrame(frame)
     iconID = info and info.iconID
   end
   iconID = iconID or 134400
+  local baseIconID = iconID
   if cache.iconID ~= iconID then
     frame.icon:SetTexture(iconID)
     cache.iconID = iconID
@@ -2056,6 +2058,15 @@ local function UpdateSpellFrame(frame)
   end
 
   ClassHUD:EvaluateBuffLinks(frame, sid)
+
+  local overrideIconID = frame._linkedBuffSwapIconID
+  if overrideIconID and overrideIconID ~= cache.iconID then
+    frame.icon:SetTexture(overrideIconID)
+    cache.iconID = overrideIconID
+  elseif (not overrideIconID) and cache.iconID ~= baseIconID then
+    frame.icon:SetTexture(baseIconID)
+    cache.iconID = baseIconID
+  end
 end
 
 -- ==================================================
@@ -2497,15 +2508,15 @@ function ClassHUD:BuildFramesForSpec()
             if spellName and string.find(desc, spellName, 1, true) then
               self.trackedBuffToSpell[buffID] = spellID
 
-              local set = specLinks[buffID]
-              if set == nil or (type(set) == "table" and next(set) == nil) then
-                set = set or {}
-                specLinks[buffID] = set
-                set[spellID] = true
+              local linkEntry = specLinks[buffID]
+              if type(linkEntry) ~= "table" or not linkEntry.spells then
+                linkEntry = { spells = {}, perSpell = {} }
+                specLinks[buffID] = linkEntry
               end
-              break
+              linkEntry.spells[spellID] = true
+                break
+              end
             end
-          end
         end
       end
     end

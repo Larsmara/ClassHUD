@@ -165,6 +165,107 @@ local function EnsureBuffTracking(addon, class, specID)
   return buffs.tracked[class][specID], specLinks
 end
 
+local function CloneTableRecursive(source)
+  if type(source) ~= "table" then
+    return nil
+  end
+
+  local copy = {}
+  for key, value in pairs(source) do
+    if type(value) == "table" then
+      copy[key] = CloneTableRecursive(value)
+    else
+      copy[key] = value
+    end
+  end
+
+  return copy
+end
+
+local function EnsureBuffLinkEntry(linkTable, buffID)
+  if type(linkTable) ~= "table" then return nil end
+  if not buffID then return nil end
+
+  local entry = linkTable[buffID]
+  if type(entry) ~= "table" then
+    entry = {}
+    linkTable[buffID] = entry
+  end
+
+  if type(entry.spells) ~= "table" then
+    entry.spells = {}
+  end
+  if type(entry.perSpell) ~= "table" then
+    entry.perSpell = {}
+  end
+
+  return entry
+end
+
+local function EnsureBuffLinkConfig(linkTable, buffID, spellID)
+  local entry = EnsureBuffLinkEntry(linkTable, buffID)
+  if not entry then return nil, nil end
+
+  local normalizedSpellID = tonumber(spellID) or spellID
+  if not normalizedSpellID then return entry, nil end
+
+  entry.spells[normalizedSpellID] = true
+  entry.perSpell[normalizedSpellID] = entry.perSpell[normalizedSpellID] or {}
+
+  return entry, entry.perSpell[normalizedSpellID], normalizedSpellID
+end
+
+local function RemoveBuffLink(linkTable, buffID, spellID)
+  if type(linkTable) ~= "table" then return end
+
+  local entry = linkTable[buffID]
+  if type(entry) ~= "table" then
+    linkTable[buffID] = nil
+    return
+  end
+
+  local normalizedSpellID = tonumber(spellID) or spellID
+  if not normalizedSpellID then return end
+
+  if type(entry.spells) == "table" then
+    entry.spells[normalizedSpellID] = nil
+  end
+
+  if type(entry.perSpell) == "table" then
+    entry.perSpell[normalizedSpellID] = nil
+  end
+
+  if not (entry.spells and next(entry.spells)) then
+    linkTable[buffID] = nil
+  end
+end
+
+local function GetMaxLinkedBuffOrder(linkTable, normalizedSpellID)
+  local maxOrder = 0
+  local count = 0
+  if type(linkTable) ~= "table" then
+    return maxOrder
+  end
+
+  for _, entry in pairs(linkTable) do
+    if type(entry) == "table" and entry.spells and entry.spells[normalizedSpellID] then
+      count = count + 1
+      local config = entry.perSpell and entry.perSpell[normalizedSpellID]
+      if config and type(config.order) == "number" then
+        if config.order > maxOrder then
+          maxOrder = config.order
+        end
+      end
+    end
+  end
+
+  if maxOrder < count then
+    maxOrder = count
+  end
+
+  return maxOrder
+end
+
 local function EnsureSoundConfig(addon, class, specID)
   addon.db.profile.soundAlerts = addon.db.profile.soundAlerts or { enabled = false }
   local root = addon.db.profile.soundAlerts
@@ -600,60 +701,115 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
   end
 
   local linkedArgs = {}
-  local linkedOrder = 1
-  if linkTable and spellID then
-    local normalizedSpellID = tonumber(spellID) or spellID
-    local buffIDs = {}
-    for buffID, spellSet in pairs(linkTable) do
-      if normalizedSpellID then
-        if type(spellSet) == "table" then
-          if spellSet[normalizedSpellID] then
-            buffIDs[#buffIDs + 1] = buffID
-          end
-        else
-          local resolved = tonumber(spellSet) or spellSet
-          if resolved == normalizedSpellID then
-            buffIDs[#buffIDs + 1] = buffID
-          end
+  local normalizedSpellID = tonumber(spellID) or spellID
+  local linkedEntries = {}
+
+  if linkTable and normalizedSpellID then
+    for buffID, entry in pairs(linkTable) do
+      if type(entry) == "table" then
+        local spells = entry.spells
+        if type(spells) == "table" and spells[normalizedSpellID] then
+          local config = entry.perSpell and entry.perSpell[normalizedSpellID]
+          local orderValue = config and tonumber(config.order) or 0
+          linkedEntries[#linkedEntries + 1] = {
+            buffID = buffID,
+            order = orderValue,
+          }
         end
       end
     end
-    table.sort(buffIDs, function(a, b)
-      return (tonumber(a) or a) < (tonumber(b) or b)
-    end)
-
-    for _, buffID in ipairs(buffIDs) do
-      local buffInfo = GetSpellInfoSafe(buffID)
-      local buffIcon = buffInfo and buffInfo.iconID and ("|T" .. buffInfo.iconID .. ":16|t ") or ""
-      local buffName = (buffInfo and buffInfo.name) or GetSpellDisplayName(buffID)
-      linkedArgs["buff" .. buffID] = {
-        type = "execute",
-        name = string.format("%s%s (%s)", buffIcon, buffName, tostring(buffID)),
-        desc = "Click to remove this link",
-        order = linkedOrder,
-        func = function()
-          local set = linkTable[buffID]
-          if type(set) == "table" then
-            set[normalizedSpellID] = nil
-            if not next(set) then
-              linkTable[buffID] = nil
-            end
-          end
-          addon:BuildFramesForSpec()
-          rebuild()
-          NotifyOptionsChanged()
-        end,
-      }
-      linkedOrder = linkedOrder + 1
-    end
   end
 
-  if linkedOrder == 1 then
+  table.sort(linkedEntries, function(a, b)
+    if a.order ~= b.order then
+      return a.order < b.order
+    end
+    local aID = tonumber(a.buffID) or a.buffID
+    local bID = tonumber(b.buffID) or b.buffID
+    return aID < bID
+  end)
+
+  if #linkedEntries == 0 then
     linkedArgs.none = {
       type = "description",
       name = "No linked buffs yet.",
-      order = linkedOrder,
+      order = 1,
     }
+  else
+    for index, payload in ipairs(linkedEntries) do
+      local buffID = payload.buffID
+      local buffInfo = GetSpellInfoSafe(buffID)
+      local buffIcon = buffInfo and buffInfo.iconID and ("|T" .. buffInfo.iconID .. ":16|t ") or ""
+      local buffName = (buffInfo and buffInfo.name) or GetSpellDisplayName(buffID)
+
+      local groupKey = "buff" .. tostring(buffID)
+      linkedArgs[groupKey] = {
+        type = "group",
+        name = string.format("%s%s (%s)", buffIcon, buffName, tostring(buffID)),
+        order = index,
+        inline = true,
+        args = {
+          order = {
+            type = "range",
+            name = "Order",
+            order = 1,
+            min = 1,
+            max = 50,
+            step = 1,
+            get = function()
+              if not normalizedSpellID then return index end
+              local entry = linkTable[buffID]
+              local config = entry and entry.perSpell and entry.perSpell[normalizedSpellID]
+              local value = config and tonumber(config.order)
+              return value or index
+            end,
+            set = function(_, value)
+              local _, config = EnsureBuffLinkConfig(linkTable, buffID, normalizedSpellID)
+              if not config then return end
+              local clamped = math.max(1, math.min(50, math.floor(value + 0.5)))
+              config.order = clamped
+              addon:BuildFramesForSpec()
+              rebuild()
+              NotifyOptionsChanged()
+            end,
+          },
+          swapIcon = {
+            type = "toggle",
+            name = "Swap Icon",
+            order = 2,
+            get = function()
+              if not normalizedSpellID then return false end
+              local entry = linkTable[buffID]
+              local config = entry and entry.perSpell and entry.perSpell[normalizedSpellID]
+              return config and config.swapIcon == true
+            end,
+            set = function(_, value)
+              local _, config = EnsureBuffLinkConfig(linkTable, buffID, normalizedSpellID)
+              if not config then return end
+              if value then
+                config.swapIcon = true
+              else
+                config.swapIcon = nil
+              end
+              addon:BuildFramesForSpec()
+              rebuild()
+              NotifyOptionsChanged()
+            end,
+          },
+          remove = {
+            type = "execute",
+            name = REMOVE or "Remove",
+            order = 99,
+            func = function()
+              RemoveBuffLink(linkTable, buffID, normalizedSpellID)
+              addon:BuildFramesForSpec()
+              rebuild()
+              NotifyOptionsChanged()
+            end,
+          },
+        },
+      }
+    end
   end
 
   args.addBuff = {
@@ -669,16 +825,13 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
       if not buffID then return end
       local normalized = tonumber(spellID) or spellID
       if not normalized then return end
-      local set = linkTable[buffID]
-      if type(set) ~= "table" then
-        local previous = tonumber(set) or set
-        set = {}
-        if previous then
-          set[previous] = true
+      local entry, config = EnsureBuffLinkConfig(linkTable, buffID, normalized)
+      if entry and config then
+        if type(config.order) ~= "number" then
+          local nextOrder = GetMaxLinkedBuffOrder(linkTable, normalized) + 1
+          config.order = math.max(1, math.min(50, nextOrder))
         end
-        linkTable[buffID] = set
       end
-      set[normalized] = true
       addon:BuildFramesForSpec()
       rebuild()
       NotifyOptionsChanged()
@@ -786,17 +939,21 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
       if type(hidden) == "table" then
         hidden[#hidden + 1] = spellID
       end
-      for buffID, linkedSpellID in pairs(linkTable) do
-        if type(linkedSpellID) == "table" then
-          linkedSpellID[spellID] = nil
-          if not next(linkedSpellID) then
+      for buffID, entry in pairs(linkTable) do
+        if type(entry) == "table" then
+          if entry.spells then
+            entry.spells[spellID] = nil
+            entry.spells[tostring(spellID)] = nil
+          end
+          if entry.perSpell then
+            entry.perSpell[spellID] = nil
+            entry.perSpell[tostring(spellID)] = nil
+          end
+          if not (entry.spells and next(entry.spells)) then
             linkTable[buffID] = nil
           end
         else
-          local resolved = tonumber(linkedSpellID) or linkedSpellID
-          if resolved == spellID then
-            linkTable[buffID] = nil
-          end
+          linkTable[buffID] = nil
         end
       end
       addon:BuildFramesForSpec()
@@ -1326,20 +1483,12 @@ local function BuildBuffLinkArgs(addon, container)
   end
 
   local sorted = {}
-  for buffKey, spellSet in pairs(links) do
-    if type(spellSet) ~= "table" then
-      local resolved = tonumber(spellSet) or spellSet
-      if resolved then
-        spellSet = { [resolved] = true }
-      else
-        spellSet = {}
-      end
-      links[buffKey] = spellSet
-    end
-
-    if type(spellSet) == "table" then
+  for buffKey, entry in pairs(links) do
+    if type(entry) ~= "table" or type(entry.spells) ~= "table" then
+      links[buffKey] = nil
+    else
       local spells = {}
-      for spellID, enabled in pairs(spellSet) do
+      for spellID, enabled in pairs(entry.spells) do
         if enabled then
           spells[#spells + 1] = tonumber(spellID) or spellID
         end
@@ -1384,31 +1533,36 @@ local function BuildBuffLinkArgs(addon, container)
           local current = links[buffID]
           links[buffID] = nil
 
-          local target = links[newID]
-          if type(target) ~= "table" then
-            local resolved = tonumber(target) or target
-            target = {}
-            if resolved then
-              target[resolved] = true
-            end
-          end
-
           if type(current) == "table" then
-            target = target or {}
-            for spellKey, enabled in pairs(current) do
-              if enabled then
-                local normalizedSpell = tonumber(spellKey) or spellKey
-                if normalizedSpell then
-                  target[normalizedSpell] = true
+            local target = EnsureBuffLinkEntry(links, newID)
+
+            if type(current.spells) == "table" then
+              for spellKey, enabled in pairs(current.spells) do
+                if enabled then
+                  local normalizedSpell = tonumber(spellKey) or spellKey
+                  if normalizedSpell then
+                    target.spells[normalizedSpell] = true
+                  end
                 end
               end
             end
-          end
 
-          if target and next(target) then
-            links[newID] = target
-          else
-            links[newID] = nil
+            if type(current.perSpell) == "table" then
+              for spellKey, config in pairs(current.perSpell) do
+                local normalizedSpell = tonumber(spellKey) or spellKey
+                if normalizedSpell then
+                  if type(config) == "table" then
+                    target.perSpell[normalizedSpell] = CloneTableRecursive(config)
+                  elseif config then
+                    target.perSpell[normalizedSpell] = { order = tonumber(config) }
+                  end
+                end
+              end
+            end
+
+            if not (target.spells and next(target.spells)) then
+              links[newID] = nil
+            end
           end
 
           addon:BuildFramesForSpec()
@@ -1427,12 +1581,7 @@ local function BuildBuffLinkArgs(addon, container)
       set = function(_, value)
         local newID = tonumber(value)
         if newID then
-          local set = links[buffID]
-          if type(set) ~= "table" then
-            set = {}
-            links[buffID] = set
-          end
-          set[newID] = true
+          EnsureBuffLinkConfig(links, buffID, newID)
           addon:BuildFramesForSpec()
           BuildBuffLinkArgs(addon, container)
           NotifyOptionsChanged()
@@ -1453,14 +1602,7 @@ local function BuildBuffLinkArgs(addon, container)
         desc = "Click to remove this link",
         order = spellOrder,
         func = function()
-          local set = links[buffID]
-          if type(set) == "table" then
-            local normalized = tonumber(spellID) or spellID
-            set[normalized] = nil
-            if not next(set) then
-              links[buffID] = nil
-            end
-          end
+          RemoveBuffLink(links, buffID, spellID)
           addon:BuildFramesForSpec()
           BuildBuffLinkArgs(addon, container)
           NotifyOptionsChanged()
@@ -1471,7 +1613,7 @@ local function BuildBuffLinkArgs(addon, container)
 
     args.remove = {
       type = "execute",
-      name = "Remove",
+      name = REMOVE or "Remove",
       confirm = true,
       order = 99,
       func = function()

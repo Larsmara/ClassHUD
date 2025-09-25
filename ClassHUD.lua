@@ -149,7 +149,7 @@ ClassHUD._auraFlushTimer = ClassHUD._auraFlushTimer or nil
 local BUFF_LINK_HELPFUL_UNITS = { "player", "pet" }
 local BUFF_LINK_HARMFUL_UNITS = { "target", "focus", "mouseover" }
 
----Normalizes a spec's buff link table so each buff maps to a set of spell IDs.
+---Normalizes a spec's buff link table so each buff maps to spell metadata.
 ---@param specLinks table|nil
 ---@return table|nil
 function ClassHUD:NormalizeBuffLinkTable(specLinks)
@@ -162,25 +162,64 @@ function ClassHUD:NormalizeBuffLinkTable(specLinks)
   for buffKey, value in pairs(specLinks) do
     local buffID = tonumber(buffKey) or buffKey
     if buffID then
-      local spellSet = normalized[buffID]
-      if not spellSet then
-        spellSet = {}
-        normalized[buffID] = spellSet
+      local entry = normalized[buffID]
+      if not entry then
+        entry = { spells = {}, perSpell = {} }
+        normalized[buffID] = entry
       end
 
+      local spells = entry.spells
+      local perSpell = entry.perSpell
+
       if type(value) == "table" then
-        for spellKey, enabled in pairs(value) do
-          if enabled then
+        local sourceSpells = value.spells
+        local sourcePerSpell = value.perSpell
+
+        if type(sourceSpells) == "table" then
+          for spellKey, enabled in pairs(sourceSpells) do
+            if enabled then
+              local spellID = tonumber(spellKey) or spellKey
+              if spellID then
+                spells[spellID] = true
+              end
+            end
+          end
+        end
+
+        if type(sourcePerSpell) == "table" then
+          for spellKey, config in pairs(sourcePerSpell) do
             local spellID = tonumber(spellKey) or spellKey
             if spellID then
-              spellSet[spellID] = true
+              local target = perSpell[spellID]
+              if type(config) == "table" then
+                target = target or {}
+                if type(config.order) == "number" then
+                  target.order = math.floor(config.order + 0.5)
+                end
+                if config.swapIcon ~= nil then
+                  target.swapIcon = config.swapIcon == true
+                end
+                perSpell[spellID] = target
+              elseif config == true then
+                target = target or {}
+                perSpell[spellID] = target
+              end
+            end
+          end
+        end
+
+        for spellKey, enabled in pairs(value) do
+          if spellKey ~= "spells" and spellKey ~= "perSpell" and enabled then
+            local spellID = tonumber(spellKey) or spellKey
+            if spellID then
+              spells[spellID] = true
             end
           end
         end
       else
         local spellID = tonumber(value) or value
         if spellID then
-          spellSet[spellID] = true
+          spells[spellID] = true
         end
       end
     end
@@ -188,9 +227,17 @@ function ClassHUD:NormalizeBuffLinkTable(specLinks)
 
   wipe(specLinks)
 
-  for buffID, spellSet in pairs(normalized) do
-    if next(spellSet) then
-      specLinks[buffID] = spellSet
+  for buffID, entry in pairs(normalized) do
+    local spells = entry.spells
+    if type(spells) == "table" then
+      for spellID in pairs(entry.perSpell) do
+        if not spells[spellID] then
+          entry.perSpell[spellID] = nil
+        end
+      end
+      if next(spells) then
+        specLinks[buffID] = entry
+      end
     end
   end
 
@@ -200,8 +247,9 @@ end
 ---Collects all buff spell IDs linked to the provided spell for the current spec.
 ---@param spellID number
 ---@param reuse table|nil Optional table to reuse for output
----@return table list
-function ClassHUD:GetLinkedBuffIDsForSpell(spellID, reuse)
+---@param reuseMeta table|nil Optional table to reuse for metadata output
+---@return table list, table meta
+function ClassHUD:GetLinkedBuffIDsForSpell(spellID, reuse, reuseMeta)
   local list = reuse
   if type(list) ~= "table" then
     list = {}
@@ -209,57 +257,106 @@ function ClassHUD:GetLinkedBuffIDsForSpell(spellID, reuse)
     wipe(list)
   end
 
+  local meta = reuseMeta
+  if type(meta) ~= "table" then
+    meta = { _ordered = {} }
+  else
+    for key in pairs(meta) do
+      if key ~= "_ordered" then
+        meta[key] = nil
+      end
+    end
+    if type(meta._ordered) == "table" then
+      wipe(meta._ordered)
+    else
+      meta._ordered = {}
+    end
+  end
+
   if not spellID then
-    return list
+    return list, meta
   end
 
   local db = self.db
   local profile = db and db.profile
   if not profile then
-    return list
+    return list, meta
   end
 
   local class, specID = self:GetPlayerClassSpec()
   if not class or not specID or specID == 0 then
-    return list
+    return list, meta
   end
 
   local tracking = profile.tracking
   local linkRoot = tracking and tracking.buffs and tracking.buffs.links
   local specLinks = linkRoot and linkRoot[class] and linkRoot[class][specID]
   if type(specLinks) ~= "table" then
-    return list
+    return list, meta
   end
 
   self:NormalizeBuffLinkTable(specLinks)
 
   local normalizedSpellID = tonumber(spellID) or spellID
   if not normalizedSpellID then
-    return list
+    return list, meta
   end
 
-  for buffKey, spellSet in pairs(specLinks) do
-    if type(spellSet) == "table" then
-      local hasLink = spellSet[normalizedSpellID]
-      if not hasLink then
-        local altKey = tostring(normalizedSpellID)
-        if spellSet[altKey] then
-          spellSet[normalizedSpellID] = true
-          spellSet[altKey] = nil
+  local ordered = meta._ordered
+
+  for buffID, entry in pairs(specLinks) do
+    if type(entry) == "table" then
+      local spells = entry.spells
+      if type(spells) == "table" then
+        local hasLink = spells[normalizedSpellID]
+        if not hasLink and spells[tostring(normalizedSpellID)] then
+          spells[normalizedSpellID] = true
+          spells[tostring(normalizedSpellID)] = nil
           hasLink = true
         end
-      end
 
-      if hasLink then
-        local buffID = tonumber(buffKey) or buffKey
-        if buffID then
-          list[#list + 1] = buffID
+        if hasLink then
+          local config = nil
+          if type(entry.perSpell) == "table" then
+            config = entry.perSpell[normalizedSpellID] or entry.perSpell[tostring(normalizedSpellID)]
+          end
+
+          local item = ordered[#ordered + 1]
+          if not item then
+            item = {}
+            ordered[#ordered + 1] = item
+          end
+
+          item.buffID = buffID
+          local orderValue = config and tonumber(config.order)
+          if orderValue then
+            orderValue = math.max(1, math.min(50, math.floor(orderValue + 0.5)))
+          else
+            orderValue = 0
+          end
+          item.order = orderValue
+          item.swapIcon = config and config.swapIcon == true
         end
       end
     end
   end
 
-  return list
+  table.sort(ordered, function(a, b)
+    if a.order ~= b.order then
+      return a.order < b.order
+    end
+    local aID = tonumber(a.buffID) or a.buffID
+    local bID = tonumber(b.buffID) or b.buffID
+    return aID < bID
+  end)
+
+  for index = 1, #ordered do
+    local item = ordered[index]
+    list[index] = item.buffID
+    meta[item.buffID] = item
+  end
+
+  return list, meta
 end
 
 local function RestoreBuffLinkCount(frame)
@@ -304,9 +401,11 @@ end
 ---@param spellID number
 ---@return boolean active, number|nil charges, table linkedBuffIDs
 function ClassHUD:EvaluateBuffLinks(frame, spellID)
-  local list = self:GetLinkedBuffIDsForSpell(spellID, frame and frame._linkedBuffIDs)
+  local list, meta = self:GetLinkedBuffIDsForSpell(spellID, frame and frame._linkedBuffIDs, frame and frame._linkedBuffMeta)
   if frame then
     frame._linkedBuffIDs = list
+    frame._linkedBuffMeta = meta
+    frame._linkedBuffSwapIconID = nil
   end
 
   local cache
@@ -334,6 +433,8 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
   local anyActive = false
   local highestCount = nil
 
+  local swapIconID = nil
+
   for i = 1, #list do
     local buffID = list[i]
     local isHarmful = false
@@ -355,6 +456,17 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
       if stackCount and stackCount > 0 then
         if not highestCount or stackCount > highestCount then
           highestCount = stackCount
+        end
+      end
+
+      if not swapIconID then
+        local info = meta and meta[buffID]
+        if info and info.swapIcon then
+          swapIconID = aura.icon
+          if not swapIconID and C_Spell and C_Spell.GetSpellInfo then
+            local spellInfo = C_Spell.GetSpellInfo(buffID)
+            swapIconID = spellInfo and spellInfo.iconID or swapIconID
+          end
         end
       end
     end
@@ -393,6 +505,10 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
   if not anyActive then
     frame._linkedBuffRestoreText = nil
     frame._linkedBuffRestoreShown = nil
+  end
+
+  if frame then
+    frame._linkedBuffSwapIconID = swapIconID
   end
 
   return anyActive, highestCount, list
