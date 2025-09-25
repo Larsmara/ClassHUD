@@ -481,16 +481,15 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
     end,
   }
 
-  args.reorder = {
-    type = "group",
-    name = "",
-    order = 0.25,
-    inline = true,
-    args = {
+  group.treeButtons = function()
+    local list, index = GetMutableOrderList()
+    if type(list) ~= "table" or not index then
+      return nil
+    end
+
+    return {
       up = {
-        type = "execute",
-        name = "↑",
-        width = "half",
+        label = "↑",
         disabled = function()
           return not CanMove(-1)
         end,
@@ -499,9 +498,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
         end,
       },
       down = {
-        type = "execute",
-        name = "↓",
-        width = "half",
+        label = "↓",
         disabled = function()
           return not CanMove(1)
         end,
@@ -509,8 +506,8 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
           Move(1)
         end,
       },
-    },
-  }
+    }
+  end
 
   args.placement = {
     type = "select",

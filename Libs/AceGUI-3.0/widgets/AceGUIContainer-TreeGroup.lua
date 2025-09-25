@@ -51,70 +51,163 @@ local function GetButtonUniqueValue(line)
 end
 
 local function UpdateButton(button, treeline, selected, canExpand, isExpanded)
-	local self = button.obj
-	local toggle = button.toggle
-	local text = treeline.text or ""
-	local icon = treeline.icon
-	local iconCoords = treeline.iconCoords
-	local level = treeline.level
-	local value = treeline.value
-	local uniquevalue = treeline.uniquevalue
-	local disabled = treeline.disabled
+        local self = button.obj
+        local toggle = button.toggle
+        local text = treeline.text or ""
+        local icon = treeline.icon
+        local iconCoords = treeline.iconCoords
+        local level = treeline.level
+        local value = treeline.value
+        local uniquevalue = treeline.uniquevalue
+        local disabled = treeline.disabled
+        local treeButtons = treeline.treeButtons
 
-	button.treeline = treeline
-	button.value = value
-	button.uniquevalue = uniquevalue
-	if selected then
-		button:LockHighlight()
-		button.selected = true
-	else
-		button:UnlockHighlight()
-		button.selected = false
-	end
-	button.level = level
-	if ( level == 1 ) then
-		button:SetNormalFontObject("GameFontNormal")
-		button:SetHighlightFontObject("GameFontHighlight")
-		button.text:SetPoint("LEFT", (icon and 16 or 0) + 8, 2)
-	else
-		button:SetNormalFontObject("GameFontHighlightSmall")
-		button:SetHighlightFontObject("GameFontHighlightSmall")
-		button.text:SetPoint("LEFT", (icon and 16 or 0) + 8 * level, 2)
-	end
+        button.treeline = treeline
+        button.value = value
+        button.uniquevalue = uniquevalue
+        if selected then
+                button:LockHighlight()
+                button.selected = true
+        else
+                button:UnlockHighlight()
+                button.selected = false
+        end
+        button.level = level
 
-	if disabled then
-		button:EnableMouse(false)
-		button.text:SetText("|cff808080"..text..FONT_COLOR_CODE_CLOSE)
-	else
-		button.text:SetText(text)
-		button:EnableMouse(true)
-	end
+        button.text:ClearAllPoints()
+        if ( level == 1 ) then
+                button:SetNormalFontObject("GameFontNormal")
+                button:SetHighlightFontObject("GameFontHighlight")
+                button.text:SetPoint("LEFT", (icon and 16 or 0) + 8, 2)
+        else
+                button:SetNormalFontObject("GameFontHighlightSmall")
+                button:SetHighlightFontObject("GameFontHighlightSmall")
+                button.text:SetPoint("LEFT", (icon and 16 or 0) + 8 * level, 2)
+        end
 
-	if icon then
-		button.icon:SetTexture(icon)
-		button.icon:SetPoint("LEFT", 8 * level, (level == 1) and 0 or 1)
-	else
-		button.icon:SetTexture(nil)
-	end
+        if disabled then
+                button:EnableMouse(false)
+                button.text:SetText("|cff808080"..text..FONT_COLOR_CODE_CLOSE)
+        else
+                button.text:SetText(text)
+                button:EnableMouse(true)
+        end
 
-	if iconCoords then
-		button.icon:SetTexCoord(unpack(iconCoords))
-	else
-		button.icon:SetTexCoord(0, 1, 0, 1)
-	end
+        if icon then
+                button.icon:SetTexture(icon)
+                button.icon:SetPoint("LEFT", 8 * level, (level == 1) and 0 or 1)
+        else
+                button.icon:SetTexture(nil)
+        end
 
-	if canExpand then
-		if not isExpanded then
-			toggle:SetNormalTexture(130838) -- Interface\\Buttons\\UI-PlusButton-UP
-			toggle:SetPushedTexture(130836) -- Interface\\Buttons\\UI-PlusButton-DOWN
-		else
-			toggle:SetNormalTexture(130821) -- Interface\\Buttons\\UI-MinusButton-UP
-			toggle:SetPushedTexture(130820) -- Interface\\Buttons\\UI-MinusButton-DOWN
-		end
-		toggle:Show()
-	else
-		toggle:Hide()
-	end
+        if iconCoords then
+                button.icon:SetTexCoord(unpack(iconCoords))
+        else
+                button.icon:SetTexCoord(0, 1, 0, 1)
+        end
+
+        local textRightAnchor = button
+        local textRightPoint = "RIGHT"
+        local textRightOffset = -8
+
+        if treeButtons and (treeButtons.up or treeButtons.down) then
+                local downInfo = treeButtons.down
+                if downInfo then
+                        local downButton = button.downButton
+                        if not downButton then
+                                downButton = CreateFrame("Button", nil, button, "UIPanelButtonTemplate")
+                                downButton:SetSize(24, 16)
+                                downButton:SetNormalFontObject(GameFontNormalSmall)
+                                downButton:SetHighlightFontObject(GameFontHighlightSmall)
+                                downButton:RegisterForClicks("AnyUp")
+                                downButton:SetScript("OnClick", function(btn)
+                                        local info = btn._info
+                                        if info and info.func then
+                                                info.func()
+                                        end
+                                end)
+                                button.downButton = downButton
+                        end
+                        local downDisabled = downInfo.disabled
+                        if type(downDisabled) == "function" then
+                                downDisabled = downDisabled()
+                        end
+                        downButton._info = downInfo
+                        downButton:SetText(downInfo.label or "↓")
+                        downButton:SetEnabled(not downDisabled)
+                        downButton:ClearAllPoints()
+                        downButton:SetPoint("RIGHT", button, "RIGHT", -4, 0)
+                        downButton:Show()
+                        textRightAnchor = downButton
+                        textRightPoint = "LEFT"
+                        textRightOffset = -2
+                elseif button.downButton then
+                        button.downButton:Hide()
+                end
+
+                local upInfo = treeButtons.up
+                if upInfo then
+                        local upButton = button.upButton
+                        if not upButton then
+                                upButton = CreateFrame("Button", nil, button, "UIPanelButtonTemplate")
+                                upButton:SetSize(24, 16)
+                                upButton:SetNormalFontObject(GameFontNormalSmall)
+                                upButton:SetHighlightFontObject(GameFontHighlightSmall)
+                                upButton:RegisterForClicks("AnyUp")
+                                upButton:SetScript("OnClick", function(btn)
+                                        local info = btn._info
+                                        if info and info.func then
+                                                info.func()
+                                        end
+                                end)
+                                button.upButton = upButton
+                        end
+                        local upDisabled = upInfo.disabled
+                        if type(upDisabled) == "function" then
+                                upDisabled = upDisabled()
+                        end
+                        upButton._info = upInfo
+                        upButton:SetText(upInfo.label or "↑")
+                        upButton:SetEnabled(not upDisabled)
+                        upButton:ClearAllPoints()
+                        if treeButtons.down and button.downButton and button.downButton:IsShown() then
+                                upButton:SetPoint("RIGHT", button.downButton, "LEFT", -2, 0)
+                        else
+                                upButton:SetPoint("RIGHT", button, "RIGHT", -4, 0)
+                                textRightAnchor = upButton
+                                textRightPoint = "LEFT"
+                                textRightOffset = -2
+                        end
+                        upButton:Show()
+                        textRightAnchor = upButton
+                        textRightPoint = "LEFT"
+                        textRightOffset = -2
+                elseif button.upButton then
+                        button.upButton:Hide()
+                end
+        else
+                if button.upButton then
+                        button.upButton:Hide()
+                end
+                if button.downButton then
+                        button.downButton:Hide()
+                end
+        end
+
+        if canExpand then
+                if not isExpanded then
+                        toggle:SetNormalTexture(130838) -- Interface\\Buttons\\UI-PlusButton-UP
+                        toggle:SetPushedTexture(130836) -- Interface\\Buttons\\UI-PlusButton-DOWN
+                else
+                        toggle:SetNormalTexture(130821) -- Interface\\Buttons\\UI-MinusButton-UP
+                        toggle:SetPushedTexture(130820) -- Interface\\Buttons\\UI-MinusButton-DOWN
+                end
+                toggle:Show()
+        else
+                toggle:Hide()
+        end
+
+        button.text:SetPoint("RIGHT", textRightAnchor, textRightPoint, textRightOffset, 2)
 end
 
 local function ShouldDisplayLevel(tree)
@@ -135,18 +228,19 @@ local function addLine(self, v, tree, level, parent)
 	line.value = v.value
 	line.text = v.text
 	line.icon = v.icon
-	line.iconCoords = v.iconCoords
-	line.disabled = v.disabled
-	line.tree = tree
-	line.level = level
-	line.parent = parent
-	line.visible = v.visible
-	line.uniquevalue = GetButtonUniqueValue(line)
-	if v.children then
-		line.hasChildren = true
-	else
-		line.hasChildren = nil
-	end
+        line.iconCoords = v.iconCoords
+        line.disabled = v.disabled
+        line.tree = tree
+        line.level = level
+        line.parent = parent
+        line.visible = v.visible
+        line.uniquevalue = GetButtonUniqueValue(line)
+        line.treeButtons = v.treeButtons
+        if v.children then
+                line.hasChildren = true
+        else
+                line.hasChildren = nil
+        end
 	self.lines[#self.lines+1] = line
 	return line
 end
