@@ -41,11 +41,11 @@ function ClassHUD:CreateCastBar()
 
   -- Tekster på selve baren
   b.spell = b:CreateFontString(nil, "OVERLAY")
-  b.spell:SetFont(self:FetchFont(12))
+  b.spell:SetFont(self:FetchFont())
   b.spell:SetPoint("LEFT", b, "LEFT", 4, 0)
 
   b.time = b:CreateFontString(nil, "OVERLAY")
-  b.time:SetFont(self:FetchFont(12))
+  b.time:SetFont(self:FetchFont())
   b.time:SetPoint("RIGHT", b, "RIGHT", -3, 0)
 
   UI.cast = b
@@ -163,11 +163,11 @@ function ClassHUD:ApplyBarSkins()
     end
   end
   if UI.cast then
-    UI.cast.spell:SetFont(self:FetchFont(12))
-    UI.cast.time:SetFont(self:FetchFont(12))
+    UI.cast.spell:SetFont(self:FetchFont())
+    UI.cast.time:SetFont(self:FetchFont())
   end
-  if UI.hp then UI.hp.text:SetFont(self:FetchFont(12)) end
-  if UI.resource then UI.resource.text:SetFont(self:FetchFont(12)) end
+  if UI.hp then UI.hp.text:SetFont(self:FetchFont()) end
+  if UI.resource then UI.resource.text:SetFont(self:FetchFont()) end
 
   local c = colors.border or { r = 0, g = 0, b = 0, a = 1 }
   for _, sb in pairs({ UI.cast, UI.hp, UI.resource }) do

@@ -957,8 +957,7 @@ local defaults = {
       showGCD     = false,
       timerStyle  = "Blizzard",
     },
-    spellFontSize = 12,
-    buffFontSize  = 12,
+    fontSize      = 12,
     soundAlerts   = {
       enabled = false,
     },
@@ -977,6 +976,251 @@ local function CopyTableRecursive(tbl)
     end
   end
   return copy
+end
+
+local SERIAL_PREFIX = "CHUD1"
+local TYPE_ORDER = {
+  boolean = 1,
+  number  = 2,
+  string  = 3,
+}
+
+local function SortKeys(tbl)
+  local keys = {}
+  for k in pairs(tbl) do
+    keys[#keys + 1] = k
+  end
+
+  table.sort(keys, function(a, b)
+    local ta, tb = type(a), type(b)
+    if ta == tb then
+      if ta == "number" or ta == "string" then
+        return a < b
+      end
+      if ta == "boolean" then
+        return (a and 1 or 0) < (b and 1 or 0)
+      end
+      return tostring(a) < tostring(b)
+    end
+
+    local wa = TYPE_ORDER[ta] or 10
+    local wb = TYPE_ORDER[tb] or 10
+    if wa ~= wb then
+      return wa < wb
+    end
+    return tostring(ta) < tostring(tb)
+  end)
+
+  return keys
+end
+
+local function EscapeString(value)
+  value = tostring(value or "")
+  value = value:gsub("~", "~~")
+  value = value:gsub("%^", "~^")
+  return value
+end
+
+local function SerializeValue(value, buffer, visited)
+  local t = type(value)
+
+  if t == "table" then
+    if visited[value] then
+      error("Cannot serialize profile table with recursive references", 0)
+    end
+    visited[value] = true
+    buffer[#buffer + 1] = "^T"
+    local keys = SortKeys(value)
+    for _, key in ipairs(keys) do
+      SerializeValue(key, buffer, visited)
+      SerializeValue(value[key], buffer, visited)
+    end
+    buffer[#buffer + 1] = "^t"
+    visited[value] = nil
+  elseif t == "string" then
+    buffer[#buffer + 1] = "^S"
+    buffer[#buffer + 1] = EscapeString(value)
+    buffer[#buffer + 1] = "^s"
+  elseif t == "number" then
+    buffer[#buffer + 1] = "^N"
+    buffer[#buffer + 1] = string.format("%.17g", value)
+    buffer[#buffer + 1] = "^n"
+  elseif t == "boolean" then
+    buffer[#buffer + 1] = value and "^B" or "^b"
+  elseif t == "nil" then
+    buffer[#buffer + 1] = "^Z"
+  else
+    error("Unsupported value type in profile: " .. t, 0)
+  end
+end
+
+local function DeserializeValue(data, index)
+  if index > #data then
+    return nil, index, "Unexpected end of data"
+  end
+
+  if data:sub(index, index) ~= "^" then
+    return nil, index, "Invalid control sequence"
+  end
+
+  local code = data:sub(index + 1, index + 1)
+  index = index + 2
+
+  if code == "T" then
+    local tbl = {}
+    while index <= #data do
+      if data:sub(index, index) == "^" and data:sub(index + 1, index + 1) == "t" then
+        index = index + 2
+        break
+      end
+
+      local key, err
+      key, index, err = DeserializeValue(data, index)
+      if err then
+        return nil, index, err
+      end
+
+      local value
+      value, index, err = DeserializeValue(data, index)
+      if err then
+        return nil, index, err
+      end
+
+      tbl[key] = value
+    end
+    return tbl, index
+  elseif code == "S" then
+    local buffer = {}
+    while true do
+      if index > #data then
+        return nil, index, "Unterminated string value"
+      end
+      local ch = data:sub(index, index)
+      if ch == "~" then
+        local nextChar = data:sub(index + 1, index + 1)
+        if nextChar == "" then
+          return nil, index, "Bad escape sequence"
+        end
+        buffer[#buffer + 1] = nextChar
+        index = index + 2
+      elseif ch == "^" and data:sub(index + 1, index + 1) == "s" then
+        index = index + 2
+        break
+      else
+        buffer[#buffer + 1] = ch
+        index = index + 1
+      end
+    end
+    return table.concat(buffer), index
+  elseif code == "N" then
+    local endPos = data:find("%^n", index, true)
+    if not endPos then
+      return nil, index, "Unterminated number value"
+    end
+    local numStr = data:sub(index, endPos - 1)
+    local value = tonumber(numStr)
+    if not value then
+      return nil, endPos + 2, "Invalid number value"
+    end
+    index = endPos + 2
+    return value, index
+  elseif code == "B" then
+    return true, index
+  elseif code == "b" then
+    return false, index
+  elseif code == "Z" then
+    return nil, index
+  elseif code == "t" then
+    return nil, index, "Unexpected table terminator"
+  else
+    return nil, index, "Unknown control code '" .. tostring(code) .. "'"
+  end
+end
+
+local function OverwriteTable(target, source)
+  for k in pairs(target) do
+    target[k] = nil
+  end
+  for k, v in pairs(source) do
+    if type(v) == "table" then
+      target[k] = CopyTableRecursive(v)
+    else
+      target[k] = v
+    end
+  end
+end
+
+function ClassHUD:SerializeCurrentProfile()
+  if not (self.db and self.db.profile) then
+    return nil, "No active profile"
+  end
+
+  local buffer = { SERIAL_PREFIX }
+  local visited = {}
+  local ok, err = pcall(SerializeValue, self.db.profile, buffer, visited)
+  if not ok then
+    return nil, err or "Failed to serialize profile"
+  end
+
+  return table.concat(buffer)
+end
+
+function ClassHUD:DeserializeProfileString(serialized)
+  if type(serialized) ~= "string" or serialized == "" then
+    return false, "Invalid profile string"
+  end
+
+  if serialized:sub(1, #SERIAL_PREFIX) ~= SERIAL_PREFIX then
+    return false, "Unrecognized profile format"
+  end
+
+  local payload = serialized:sub(#SERIAL_PREFIX + 1)
+  local profileTable, index, err = DeserializeValue(payload, 1)
+  if err then
+    return false, err
+  end
+
+  if index <= #payload then
+    local remainder = payload:sub(index)
+    if remainder:match("%S") then
+      return false, "Extra data at end of profile string"
+    end
+  end
+
+  if type(profileTable) ~= "table" then
+    return false, "Profile payload is not a table"
+  end
+
+  if not (self.db and self.db.GetCurrentProfile) then
+    return false, "Database not initialized"
+  end
+
+  local currentProfile = self.db:GetCurrentProfile()
+  if not currentProfile or currentProfile == "" then
+    return false, "No active profile"
+  end
+
+  self.db.profiles = self.db.profiles or {}
+  local storage = self.db.profiles[currentProfile]
+  if type(storage) ~= "table" then
+    storage = {}
+    self.db.profiles[currentProfile] = storage
+  end
+
+  OverwriteTable(storage, profileTable)
+  self.db.profile = storage
+
+  if self.ApplyAnchorPosition then self:ApplyAnchorPosition() end
+  if self.FullUpdate then self:FullUpdate() end
+  if self.BuildFramesForSpec then self:BuildFramesForSpec() end
+  if self.EvaluateClassBarVisibility then self:EvaluateClassBarVisibility() end
+
+  local registry = LibStub("AceConfigRegistry-3.0", true)
+  if registry then
+    registry:NotifyChange("ClassHUD")
+  end
+
+  return true
 end
 
 
@@ -1344,7 +1588,8 @@ end
 
 function ClassHUD:FetchFont(size, flags)
   local path = self.LSM:Fetch("font", self.db.profile.textures.font) or STANDARD_TEXT_FONT
-  return path, size, flags or "OUTLINE"
+  local resolvedSize = size or (self.db and self.db.profile and self.db.profile.fontSize) or 12
+  return path, resolvedSize, flags or "OUTLINE"
 end
 
 function ClassHUD:GetActiveSpecProfileName()
@@ -1435,7 +1680,7 @@ function ClassHUD:CreateStatusBar(parent, height, withBorder)
 
   bar.text = bar:CreateFontString(nil, "OVERLAY")
   bar.text:SetPoint("CENTER")
-  bar.text:SetFont(self:FetchFont(12))
+  bar.text:SetFont(self:FetchFont())
 
   bar._holder = holder
   bar._edge   = edge

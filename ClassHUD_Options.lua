@@ -7,6 +7,23 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local ACR = LibStub("AceConfigRegistry-3.0")
 local LSM = LibStub("LibSharedMedia-3.0", true)
 
+local TrimString do
+  if type(strtrim) == "function" then
+    TrimString = function(value)
+      return strtrim(value or "")
+    end
+  else
+    TrimString = function(value)
+      value = value or ""
+      local trimmed = value:match("^%s*(.-)%s*$")
+      if trimmed == nil then
+        return ""
+      end
+      return trimmed
+    end
+  end
+end
+
 local PLACEMENTS = {
   HIDDEN = "Hidden",
   TOP = "Top Bar",
@@ -332,6 +349,158 @@ local function BuildSummonSpellArgs(addon, classConfig)
     }
   end
   return args
+end
+
+local function BuildClassBarSpecialOptions(addon, container)
+  wipe(container)
+
+  local class, specID = addon:GetPlayerClassSpec()
+  local layout = addon.db and addon.db.profile and addon.db.profile.layout or {}
+  layout.classbars = layout.classbars or {}
+
+  if class == "DRUID" then
+    if specID == 102 then
+      container.eclipse = {
+        type = "toggle",
+        name = "Enable Eclipse Bar",
+        order = 1,
+        get = function()
+          local classbars = layout.classbars.DRUID
+          local spec = classbars and classbars[102]
+          if spec and spec.eclipse ~= nil then
+            return spec.eclipse
+          end
+          return true
+        end,
+        set = function(_, val)
+          layout.classbars.DRUID = layout.classbars.DRUID or {}
+          layout.classbars.DRUID[102] = layout.classbars.DRUID[102] or {}
+          layout.classbars.DRUID[102].eclipse = val
+          addon:FullUpdate()
+        end,
+      }
+      container.balanceCombo = {
+        type = "toggle",
+        name = "Enable Combo Points (Balance)",
+        order = 2,
+        get = function()
+          local classbars = layout.classbars.DRUID
+          local spec = classbars and classbars[102]
+          if spec and spec.combo ~= nil then
+            return spec.combo
+          end
+          return true
+        end,
+        set = function(_, val)
+          layout.classbars.DRUID = layout.classbars.DRUID or {}
+          layout.classbars.DRUID[102] = layout.classbars.DRUID[102] or {}
+          layout.classbars.DRUID[102].combo = val
+          addon:FullUpdate()
+        end,
+      }
+    elseif specID == 103 then
+      container.feralCombo = {
+        type = "toggle",
+        name = "Enable Combo Points (Feral)",
+        order = 1,
+        get = function()
+          local classbars = layout.classbars.DRUID
+          local spec = classbars and classbars[103]
+          if spec and spec.combo ~= nil then
+            return spec.combo
+          end
+          return true
+        end,
+        set = function(_, val)
+          layout.classbars.DRUID = layout.classbars.DRUID or {}
+          layout.classbars.DRUID[103] = layout.classbars.DRUID[103] or {}
+          layout.classbars.DRUID[103].combo = val
+          addon:FullUpdate()
+        end,
+      }
+    elseif specID == 104 then
+      container.guardianCombo = {
+        type = "toggle",
+        name = "Enable Combo Points (Guardian)",
+        order = 1,
+        get = function()
+          local classbars = layout.classbars.DRUID
+          local spec = classbars and classbars[104]
+          if spec and spec.combo ~= nil then
+            return spec.combo
+          end
+          return true
+        end,
+        set = function(_, val)
+          layout.classbars.DRUID = layout.classbars.DRUID or {}
+          layout.classbars.DRUID[104] = layout.classbars.DRUID[104] or {}
+          layout.classbars.DRUID[104].combo = val
+          addon:FullUpdate()
+        end,
+      }
+    elseif specID == 105 then
+      container.restoCombo = {
+        type = "toggle",
+        name = "Enable Combo Points (Restoration)",
+        order = 1,
+        get = function()
+          local classbars = layout.classbars.DRUID
+          local spec = classbars and classbars[105]
+          return spec and spec.combo or false
+        end,
+        set = function(_, val)
+          layout.classbars.DRUID = layout.classbars.DRUID or {}
+          layout.classbars.DRUID[105] = layout.classbars.DRUID[105] or {}
+          layout.classbars.DRUID[105].combo = val
+          addon:FullUpdate()
+        end,
+      }
+    end
+  end
+
+  if not next(container) then
+    container.none = {
+      type = "description",
+      name = "No class-specific options available.",
+      order = 1,
+    }
+  end
+end
+
+local function BuildSummonGroups(addon, container)
+  wipe(container)
+
+  local class = select(1, addon:GetPlayerClassSpec())
+  if not class or class == "" then
+    container.none = {
+      type = "description",
+      name = "No summon tracking options available.",
+      order = 1,
+    }
+    return
+  end
+
+  local order = 1
+  for _, classConfig in ipairs(SUMMON_CLASS_CONFIG) do
+    if classConfig.class == class then
+      container["summons_" .. classConfig.class .. "_" .. order] = {
+        type = "group",
+        name = classConfig.label,
+        order = order,
+        inline = false,
+        args = BuildSummonSpellArgs(addon, classConfig),
+      }
+      order = order + 1
+    end
+  end
+
+  if order == 1 then
+    container.none = {
+      type = "description",
+      name = "No summon tracking options available.",
+      order = 1,
+    }
+  end
 end
 
 local function NotifyOptionsChanged()
@@ -1238,6 +1407,9 @@ function ClassHUD_BuildOptions(addon)
   profile.colors.resource = profile.colors.resource or { r = 0.00, g = 0.55, b = 1.00 }
   profile.colors.power = profile.colors.power or { r = 1.00, g = 0.85, b = 0.10 }
   profile.colors.border = profile.colors.border or { r = 0, g = 0, b = 0, a = 1 }
+  profile.fontSize = profile.fontSize or profile.spellFontSize or profile.buffFontSize or 12
+  profile.spellFontSize = nil
+  profile.buffFontSize = nil
 
   profile.position = profile.position or { x = 0, y = -50 }
   profile.position.x = profile.position.x or 0
@@ -1309,6 +1481,43 @@ function ClassHUD_BuildOptions(addon)
   local utilityContainer = {}
   local trackedContainer = {}
   local barOrderContainer = {}
+  local classBarSpecialContainer = {}
+  local summonGroupContainer = {}
+  addon._optionsState = addon._optionsState or {}
+  local optionsState = addon._optionsState
+  optionsState.profileCopySource = optionsState.profileCopySource or ""
+  optionsState.profileDeleteTarget = optionsState.profileDeleteTarget or ""
+  optionsState.profileImportInput = optionsState.profileImportInput or ""
+
+  local function RefreshDynamicOptionEditors()
+    BuildTopBarSpellsEditor(addon, topBarEditorContainer)
+    BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
+      "No utility cooldowns reported by the snapshot for this spec.")
+    BuildTrackedBuffArgs(addon, trackedContainer)
+    BuildBarOrderEditor(addon, barOrderContainer)
+    BuildClassBarSpecialOptions(addon, classBarSpecialContainer)
+    BuildSummonGroups(addon, summonGroupContainer)
+  end
+
+  local function GetAvailableProfiles()
+    local values = {}
+    if addon.db and addon.db.GetProfiles then
+      local profiles = {}
+      addon.db:GetProfiles(profiles)
+      for _, name in ipairs(profiles) do
+        values[name] = name
+      end
+    end
+
+    if addon.db and addon.db.GetCurrentProfile then
+      local current = addon.db:GetCurrentProfile()
+      if current and current ~= "" then
+        values[current] = current
+      end
+    end
+
+    return values
+  end
 
   local opts = {
     type = "group",
@@ -1320,123 +1529,164 @@ function ClassHUD_BuildOptions(addon)
         name = "General",
         order = 1,
         args = {
-          locked = {
-            type = "toggle",
-            name = "Lock Frame",
-            order = 1,
-            get = function() return db.profile.locked end,
-            set = function(_, value)
-              db.profile.locked = value
-            end,
-          },
-          width = {
-            type = "range",
-            name = "Bar Width",
-            min = 200,
-            max = 600,
-            step = 1,
-            order = 2,
-            get = function() return db.profile.width end,
-            set = function(_, value)
-              db.profile.width = value
-              addon:FullUpdate()
-              addon:BuildFramesForSpec()
-            end,
-          },
-          positionX = {
-            type = "range",
-            name = "Position X",
-            order = 3,
-            min = -1000,
-            max = 1000,
-            step = 1,
-            get = function() return db.profile.position.x or 0 end,
-            set = function(_, value)
-              db.profile.position.x = value
-              addon:ApplyAnchorPosition()
-            end,
-          },
-          positionY = {
-            type = "range",
-            name = "Position Y",
-            order = 4,
-            min = -1000,
-            max = 1000,
-            step = 1,
-            get = function() return db.profile.position.y or 0 end,
-            set = function(_, value)
-              db.profile.position.y = value
-              addon:ApplyAnchorPosition()
-            end,
-          },
-          spacing = {
-            type = "range",
-            name = "Bar Spacing",
-            min = 0,
-            max = 12,
-            step = 1,
-            order = 5,
-            get = function() return db.profile.spacing or 2 end,
-            set = function(_, value)
-              db.profile.spacing = value
-              addon:FullUpdate()
-              addon:BuildFramesForSpec()
-            end,
-          },
-          texture = {
-            type = "select",
-            name = "Bar Texture",
-            dialogControl = "LSM30_Statusbar",
-            order = 6,
-            values = LSM and LSM:HashTable("statusbar") or {},
-            get = function() return db.profile.textures.bar end,
-            set = function(_, value)
-              db.profile.textures.bar = value
-              addon:ApplyBarSkins()
-            end,
-          },
-          font = {
-            type = "select",
-            name = "Font",
-            dialogControl = "LSM30_Font",
-            order = 7,
-            values = LSM and LSM:HashTable("font") or {},
-            get = function() return db.profile.textures.font end,
-            set = function(_, value)
-              db.profile.textures.font = value
-              addon:FullUpdate()
-              addon:BuildFramesForSpec()
-            end,
-          },
-          soundAlerts = {
-            type = "toggle",
-            name = "Enable Sound Alerts",
-            order = 8,
-            width = "full",
-            get = function()
-              return db.profile.soundAlerts and db.profile.soundAlerts.enabled
-            end,
-            set = function(_, value)
-              db.profile.soundAlerts = db.profile.soundAlerts or { enabled = false }
-              db.profile.soundAlerts.enabled = value and true or false
-              addon:UpdateAllSpellFrames()
-              NotifyOptionsChanged()
-            end,
-          },
-          bars = {
+          frameLayout = {
             type = "group",
-            name = "Bars",
+            name = "Frame & Layout",
+            order = 1,
+            inline = true,
+            args = {
+              locked = {
+                type = "toggle",
+                name = "Lock Frame",
+                order = 1,
+                get = function() return db.profile.locked end,
+                set = function(_, value)
+                  db.profile.locked = value
+                end,
+              },
+              width = {
+                type = "range",
+                name = "Bar Width",
+                min = 200,
+                max = 600,
+                step = 1,
+                order = 2,
+                get = function() return db.profile.width end,
+                set = function(_, value)
+                  db.profile.width = value
+                  addon:FullUpdate()
+                  addon:BuildFramesForSpec()
+                end,
+              },
+              positionX = {
+                type = "range",
+                name = "Position X",
+                order = 3,
+                min = -1000,
+                max = 1000,
+                step = 1,
+                get = function() return db.profile.position.x or 0 end,
+                set = function(_, value)
+                  db.profile.position.x = value
+                  addon:ApplyAnchorPosition()
+                end,
+              },
+              positionY = {
+                type = "range",
+                name = "Position Y",
+                order = 4,
+                min = -1000,
+                max = 1000,
+                step = 1,
+                get = function() return db.profile.position.y or 0 end,
+                set = function(_, value)
+                  db.profile.position.y = value
+                  addon:ApplyAnchorPosition()
+                end,
+              },
+              spacing = {
+                type = "range",
+                name = "Bar Spacing",
+                min = 0,
+                max = 12,
+                step = 1,
+                order = 5,
+                get = function() return db.profile.spacing or 2 end,
+                set = function(_, value)
+                  db.profile.spacing = value
+                  addon:FullUpdate()
+                  addon:BuildFramesForSpec()
+                end,
+              },
+            },
+          },
+          appearance = {
+            type = "group",
+            name = "Appearance",
             order = 2,
             inline = true,
             args = {
-              order = {
-                type   = "group",
-                name   = "Bar Order",
-                inline = true,
-                order  = 30,
-                args   = barOrderContainer,
+              texture = {
+                type = "select",
+                name = "Bar Texture",
+                dialogControl = "LSM30_Statusbar",
+                order = 1,
+                values = LSM and LSM:HashTable("statusbar") or {},
+                get = function() return db.profile.textures.bar end,
+                set = function(_, value)
+                  db.profile.textures.bar = value
+                  addon:ApplyBarSkins()
+                  NotifyOptionsChanged()
+                end,
+              },
+              font = {
+                type = "select",
+                name = "Font",
+                dialogControl = "LSM30_Font",
+                order = 2,
+                values = LSM and LSM:HashTable("font") or {},
+                get = function() return db.profile.textures.font end,
+                set = function(_, value)
+                  db.profile.textures.font = value
+                  addon:ApplyBarSkins()
+                  addon:UpdateAllSpellFrames()
+                  addon:BuildTrackedBuffFrames()
+                  NotifyOptionsChanged()
+                end,
+              },
+              fontSize = {
+                type = "range",
+                name = "Global Font Size",
+                order = 3,
+                min = 8,
+                max = 32,
+                step = 1,
+                get = function() return db.profile.fontSize or 12 end,
+                set = function(_, value)
+                  db.profile.fontSize = value
+                  addon:ApplyBarSkins()
+                  if addon.UpdateAllSpellFrames then addon:UpdateAllSpellFrames() end
+                  if addon.BuildTrackedBuffFrames then addon:BuildTrackedBuffFrames() end
+                  NotifyOptionsChanged()
+                end,
+              },
+              soundAlerts = {
+                type = "toggle",
+                name = "Enable Sound Alerts",
+                order = 4,
+                width = "full",
+                get = function()
+                  return db.profile.soundAlerts and db.profile.soundAlerts.enabled
+                end,
+                set = function(_, value)
+                  db.profile.soundAlerts = db.profile.soundAlerts or { enabled = false }
+                  db.profile.soundAlerts.enabled = value and true or false
+                  addon:UpdateAllSpellFrames()
+                  NotifyOptionsChanged()
+                end,
+              },
+              borderColor = {
+                type = "color",
+                name = "Bar Border Color",
+                order = 5,
+                hasAlpha = true,
+                get = function()
+                  local c = profile.colors.border or { r = 0, g = 0, b = 0, a = 1 }
+                  return c.r, c.g, c.b, c.a or 1
+                end,
+                set = function(_, r, g, b, a)
+                  profile.colors.border = { r = r, g = g, b = b, a = a or 1 }
+                  addon:ApplyBarSkins()
+                end,
               },
             },
+          },
+          barOrder = {
+            type = "group",
+            name = "Bar Order",
+            order = 3,
+            inline = true,
+            args = barOrderContainer,
           },
         },
       },
@@ -1446,144 +1696,130 @@ function ClassHUD_BuildOptions(addon)
         order = 2,
         inline = false,
         args = {
-          showCast = {
-            type = "toggle",
-            name = "Show Cast Bar",
+          castBar = {
+            type = "group",
+            name = "Cast Bar",
             order = 1,
-            get = function() return layout.show.cast end,
-            set = function(_, value)
-              layout.show.cast = value
-              addon:FullUpdate()
-            end,
+            inline = true,
+            args = {
+              showCast = {
+                type = "toggle",
+                name = "Show Cast Bar",
+                order = 1,
+                get = function() return layout.show.cast end,
+                set = function(_, value)
+                  layout.show.cast = value
+                  addon:FullUpdate()
+                end,
+              },
+              heightCast = {
+                type = "range",
+                name = "Cast Height",
+                order = 2,
+                min = 8,
+                max = 40,
+                step = 1,
+                get = function() return layout.height.cast end,
+                set = function(_, value)
+                  layout.height.cast = value
+                  addon:FullUpdate()
+                end,
+                disabled = function()
+                  return not layout.show.cast
+                end,
+              },
+            },
           },
-          showHP = {
-            type = "toggle",
-            name = "Show Health Bar",
+          healthBar = {
+            type = "group",
+            name = "Health Bar",
             order = 2,
-            get = function() return layout.show.hp end,
-            set = function(_, value)
-              layout.show.hp = value
-              addon:FullUpdate()
-            end,
+            inline = true,
+            args = {
+              showHP = {
+                type = "toggle",
+                name = "Show Health Bar",
+                order = 1,
+                get = function() return layout.show.hp end,
+                set = function(_, value)
+                  layout.show.hp = value
+                  addon:FullUpdate()
+                end,
+              },
+              heightHP = {
+                type = "range",
+                name = "Health Height",
+                order = 2,
+                min = 8,
+                max = 40,
+                step = 1,
+                get = function() return layout.height.hp end,
+                set = function(_, value)
+                  layout.height.hp = value
+                  addon:FullUpdate()
+                end,
+                disabled = function()
+                  return not layout.show.hp
+                end,
+              },
+            },
           },
-          showResource = {
-            type = "toggle",
-            name = "Show Primary Resource",
+          resourceBar = {
+            type = "group",
+            name = "Resource Bar",
             order = 3,
-            get = function() return layout.show.resource end,
-            set = function(_, value)
-              layout.show.resource = value
-              addon:FullUpdate()
-            end,
+            inline = true,
+            args = {
+              showResource = {
+                type = "toggle",
+                name = "Show Primary Resource",
+                order = 1,
+                get = function() return layout.show.resource end,
+                set = function(_, value)
+                  layout.show.resource = value
+                  addon:FullUpdate()
+                end,
+              },
+              heightResource = {
+                type = "range",
+                name = "Resource Height",
+                order = 2,
+                min = 8,
+                max = 40,
+                step = 1,
+                get = function() return layout.height.resource end,
+                set = function(_, value)
+                  layout.height.resource = value
+                  addon:FullUpdate()
+                end,
+                disabled = function()
+                  return not layout.show.resource
+                end,
+              },
+            },
           },
-          showBuffs = {
-            type = "toggle",
-            name = "Show Tracked Buff Bar",
-            order = 5,
-            get = function() return layout.show.buffs end,
-            set = function(_, value)
-              layout.show.buffs = value
-              addon:BuildTrackedBuffFrames()
-            end,
-          },
-          borderColor = {
-            type = "color",
-            name = "Bar Border Color",
-            order = 10,
-            hasAlpha = true,
-            get = function()
-              local c = profile.colors.border or { r = 0, g = 0, b = 0, a = 1 }
-              return c.r, c.g, c.b, c.a or 1
-            end,
-            set = function(_, r, g, b, a)
-              profile.colors.border = { r = r, g = g, b = b, a = a or 1 }
-              addon:ApplyBarSkins()
-            end,
-          },
-          spellFontSize = {
-            type = "range",
-            name = "Spell Text Size",
-            min = 8,
-            max = 24,
-            step = 1,
-            order = 8,
-            get = function() return db.profile.spellFontSize or 12 end,
-            set = function(_, v)
-              db.profile.spellFontSize = v
-              addon:BuildFramesForSpec()
-            end,
-          },
-          buffFontSize = {
-            type = "range",
-            name = "Buff Text Size",
-            min = 8,
-            max = 24,
-            step = 1,
-            order = 9,
-            get = function() return db.profile.buffFontSize or 12 end,
-            set = function(_, v)
-              db.profile.buffFontSize = v
-              addon:BuildFramesForSpec()
-            end,
-          },
-          spacing = {
-            type = "range",
-            name = "Vertical Spacing",
-            min = 0,
-            max = 30,
-            step = 1,
-            order = 5,
-            get = function() return db.profile.spacing or 2 end,
-            set = function(_, value)
-              db.profile.spacing = value
-              addon:FullUpdate()
-              addon:BuildFramesForSpec()
-            end,
-          },
-
-          heightCast = {
-            type = "range",
-            name = "Cast Height",
-            order = 8,
-            min = 8,
-            max = 40,
-            step = 1,
-            get = function() return layout.height.cast end,
-            set = function(_, value)
-              layout.height.cast = value
-              addon:FullUpdate()
-            end,
-          },
-          heightHP = {
-            type = "range",
-            name = "Health Height",
-            order = 9,
-            min = 8,
-            max = 40,
-            step = 1,
-            get = function() return layout.height.hp end,
-            set = function(_, value)
-              layout.height.hp = value
-              addon:FullUpdate()
-            end,
-          },
-          heightResource = {
-            type = "range",
-            name = "Resource Height",
-            order = 10,
-            min = 8,
-            max = 40,
-            step = 1,
-            get = function() return layout.height.resource end,
-            set = function(_, value)
-              layout.height.resource = value
-              addon:FullUpdate()
-            end,
+          buffsBar = {
+            type = "group",
+            name = "Tracked Buff Bar",
+            order = 4,
+            inline = true,
+            args = {
+              showBuffs = {
+                type = "toggle",
+                name = "Show Tracked Buff Bar",
+                order = 1,
+                get = function() return layout.show.buffs end,
+                set = function(_, value)
+                  layout.show.buffs = value
+                  addon:BuildTrackedBuffFrames()
+                end,
+              },
+            },
           },
           topLayout = {
             type = "group",
             name = "Top Bar Layout",
-            order = 20,
+            order = 10,
             inline = true,
             args = {
               perRow = {
@@ -1672,7 +1908,7 @@ function ClassHUD_BuildOptions(addon)
           bottomLayout = {
             type = "group",
             name = "Bottom Bar Layout",
-            order = 21,
+            order = 11,
             inline = true,
             args = {
               perRow = {
@@ -1732,7 +1968,7 @@ function ClassHUD_BuildOptions(addon)
           sideLayout = {
             type = "group",
             name = "Side Bars",
-            order = 22,
+            order = 12,
             inline = true,
             args = {
               size = {
@@ -1926,151 +2162,15 @@ function ClassHUD_BuildOptions(addon)
               },
             },
           },
-          druid = {
+          special = {
             type = "group",
-            name = "Druid",
-            order = 10,
-            args = {
-              balanceHeader = {
-                type = "header",
-                name = "Balance",
-                order = 1,
-                hidden = function()
-                  return not PlayerMatchesSpec(addon, "DRUID", 102)
-                end,
-              },
-              balanceEclipse = {
-                type = "toggle",
-                name = "Enable Eclipse Bar",
-                order = 2,
-                hidden = function()
-                  return not PlayerMatchesSpec(addon, "DRUID", 102)
-                end,
-                get = function()
-                  local classbars = layout.classbars and layout.classbars.DRUID
-                  local spec = classbars and classbars[102]
-                  if spec and spec.eclipse ~= nil then
-                    return spec.eclipse
-                  end
-                  return true
-                end,
-                set = function(_, val)
-                  layout.classbars = layout.classbars or {}
-                  layout.classbars.DRUID = layout.classbars.DRUID or {}
-                  layout.classbars.DRUID[102] = layout.classbars.DRUID[102] or {}
-                  layout.classbars.DRUID[102].eclipse = val
-                  addon:FullUpdate()
-                end,
-              },
-              balanceCombo = {
-                type = "toggle",
-                name = "Enable Combo Points (Balance)",
-                order = 3,
-                hidden = true,
-                get = function()
-                  local classbars = layout.classbars and layout.classbars.DRUID
-                  local spec = classbars and classbars[102]
-                  return spec and spec.combo or false
-                end,
-                set = function(_, val)
-                  layout.classbars = layout.classbars or {}
-                  layout.classbars.DRUID = layout.classbars.DRUID or {}
-                  layout.classbars.DRUID[102] = layout.classbars.DRUID[102] or {}
-                  layout.classbars.DRUID[102].combo = val
-                  addon:FullUpdate()
-                end,
-              },
-              feralHeader = {
-                type = "header",
-                name = "Feral",
-                order = 4,
-                hidden = function()
-                  return not PlayerMatchesSpec(addon, "DRUID", 103)
-                end,
-              },
-              feralCombo = {
-                type = "toggle",
-                name = "Enable Combo Points (Feral)",
-                order = 5,
-                hidden = function()
-                  return not PlayerMatchesSpec(addon, "DRUID", 103)
-                end,
-                get = function()
-                  local classbars = layout.classbars and layout.classbars.DRUID
-                  local spec = classbars and classbars[103]
-                  if spec and spec.combo ~= nil then
-                    return spec.combo
-                  end
-                  return true
-                end,
-                set = function(_, val)
-                  layout.classbars = layout.classbars or {}
-                  layout.classbars.DRUID = layout.classbars.DRUID or {}
-                  layout.classbars.DRUID[103] = layout.classbars.DRUID[103] or {}
-                  layout.classbars.DRUID[103].combo = val
-                  addon:FullUpdate()
-                end,
-              },
-              guardianHeader = {
-                type = "header",
-                name = "Guardian",
-                order = 6,
-                hidden = function()
-                  return not PlayerMatchesSpec(addon, "DRUID", 104)
-                end,
-              },
-              guardianCombo = {
-                type = "toggle",
-                name = "Enable Combo Points (Guardian)",
-                order = 7,
-                hidden = function()
-                  return not PlayerMatchesSpec(addon, "DRUID", 104)
-                end,
-                get = function()
-                  local classbars = layout.classbars and layout.classbars.DRUID
-                  local spec = classbars and classbars[104]
-                  if spec and spec.combo ~= nil then
-                    return spec.combo
-                  end
-                  return true
-                end,
-                set = function(_, val)
-                  layout.classbars = layout.classbars or {}
-                  layout.classbars.DRUID = layout.classbars.DRUID or {}
-                  layout.classbars.DRUID[104] = layout.classbars.DRUID[104] or {}
-                  layout.classbars.DRUID[104].combo = val
-                  addon:FullUpdate()
-                end,
-              },
-              restoHeader = {
-                type = "header",
-                name = "Restoration",
-                order = 8,
-                hidden = function()
-                  return not PlayerMatchesSpec(addon, "DRUID", 105)
-                end,
-              },
-              restoCombo = {
-                type = "toggle",
-                name = "Enable Combo Points (Restoration)",
-                order = 9,
-                hidden = function()
-                  return not PlayerMatchesSpec(addon, "DRUID", 105)
-                end,
-                get = function()
-                  local classbars = layout.classbars and layout.classbars.DRUID
-                  local spec = classbars and classbars[105]
-                  return spec and spec.combo or false
-                end,
-                set = function(_, val)
-                  layout.classbars = layout.classbars or {}
-                  layout.classbars.DRUID = layout.classbars.DRUID or {}
-                  layout.classbars.DRUID[105] = layout.classbars.DRUID[105] or {}
-                  layout.classbars.DRUID[105].combo = val
-                  addon:FullUpdate()
-                end,
-              },
-            },
+            name = "Class Options",
+            order = 3,
+            inline = true,
+            disabled = function()
+              return not SpecSupportsClassbar(addon)
+            end,
+            args = classBarSpecialContainer,
           },
         },
       },
@@ -2079,25 +2179,6 @@ function ClassHUD_BuildOptions(addon)
         name = "Spells & Buffs",
         order = 4,
         args = {
-          rescanSnapshot = {
-            type = "execute",
-            name = "Rescan from Cooldown Manager",
-            order = 0,
-            width = "full",
-            desc = "Import newly available spells from Blizzard's Cooldown Manager snapshot without altering your existing layout.",
-            func = function()
-              if not (addon and addon.RescanFromCDM) then return end
-              local ok, result = pcall(addon.RescanFromCDM, addon)
-              if not ok then
-                print("|cff00ff88ClassHUD|r Rescan failed:", result)
-              elseif not result then
-                -- RescanFromCDM prints its own feedback when no changes occur
-              end
-            end,
-            disabled = function()
-              return not (addon and addon.IsCooldownViewerAvailable and addon:IsCooldownViewerAvailable())
-            end,
-          },
           -- topBar = {
           --   type = "group",
           --   name = "Top Bar Spells",
@@ -2389,62 +2470,225 @@ function ClassHUD_BuildOptions(addon)
               NotifyOptionsChanged()
             end,
           },
+          summonGroups = {
+            type = "group",
+            name = "Summon Tracking",
+            order = 10,
+            inline = false,
+            hidden = function()
+              return tracking.summons.enabled == false
+            end,
+            args = summonGroupContainer,
+          },
         },
       },
-      snapshot = {
+      profiles = {
         type = "group",
-        name = "Snapshot",
+        name = "Profiles",
         order = 6,
         args = {
-          refresh = {
-            type = "execute",
-            name = "Refresh Snapshot",
+          activeProfile = {
+            type = "select",
+            name = "Active Profile",
             order = 1,
-            func = function()
-              addon:UpdateCDMSnapshot()
-              addon:BuildFramesForSpec()
-              BuildTopBarSpellsEditor(addon, topBarEditorContainer)
-              BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
-                "No utility cooldowns reported by the snapshot for this spec.")
-              BuildTrackedBuffArgs(addon, trackedContainer)
+            width = "full",
+            values = GetAvailableProfiles,
+            get = function()
+              if addon.db and addon.db.GetCurrentProfile then
+                return addon.db:GetCurrentProfile()
+              end
+              return "Default"
+            end,
+            set = function(_, value)
+              if not (addon.db and addon.db.SetProfile) then return end
+              addon.db:SetProfile(value)
+              RefreshDynamicOptionEditors()
+              if addon.ApplyAnchorPosition then addon:ApplyAnchorPosition() end
+              if addon.FullUpdate then addon:FullUpdate() end
+              if addon.BuildFramesForSpec then addon:BuildFramesForSpec() end
               NotifyOptionsChanged()
             end,
           },
-          note = {
-            type = "description",
+          actions = {
+            type = "group",
+            name = "Profile Actions",
             order = 2,
-            name =
-            "The snapshot is rebuilt automatically on login and specialization changes. Use this button if Blizzard updates the Cooldown Viewer data while you are logged in.",
+            inline = true,
+            args = {
+              copyFrom = {
+                type = "select",
+                name = "Copy From",
+                order = 1,
+                width = "double",
+                values = GetAvailableProfiles,
+                get = function()
+                  local values = GetAvailableProfiles()
+                  if optionsState.profileCopySource ~= "" and not values[optionsState.profileCopySource] then
+                    optionsState.profileCopySource = ""
+                  end
+                  return optionsState.profileCopySource ~= "" and optionsState.profileCopySource or nil
+                end,
+                set = function(_, value)
+                  optionsState.profileCopySource = value or ""
+                end,
+              },
+              copyButton = {
+                type = "execute",
+                name = "Copy From Profile",
+                order = 2,
+                func = function()
+                  local source = optionsState.profileCopySource
+                  if not source or source == "" then return end
+                  if addon.db and addon.db.CopyProfile then
+                    addon.db:CopyProfile(source)
+                    RefreshDynamicOptionEditors()
+                    if addon.ApplyAnchorPosition then addon:ApplyAnchorPosition() end
+                    if addon.FullUpdate then addon:FullUpdate() end
+                    if addon.BuildFramesForSpec then addon:BuildFramesForSpec() end
+                    NotifyOptionsChanged()
+                  end
+                end,
+                disabled = function()
+                  local source = optionsState.profileCopySource
+                  if not source or source == "" then return true end
+                  if addon.db and addon.db.GetCurrentProfile then
+                    return addon.db:GetCurrentProfile() == source
+                  end
+                  return false
+                end,
+              },
+              resetButton = {
+                type = "execute",
+                name = "Reset Profile",
+                order = 3,
+                func = function()
+                  if addon.db and addon.db.ResetProfile then
+                    addon.db:ResetProfile()
+                    RefreshDynamicOptionEditors()
+                    if addon.ApplyAnchorPosition then addon:ApplyAnchorPosition() end
+                    if addon.FullUpdate then addon:FullUpdate() end
+                    if addon.BuildFramesForSpec then addon:BuildFramesForSpec() end
+                    NotifyOptionsChanged()
+                  end
+                end,
+              },
+              deleteTarget = {
+                type = "select",
+                name = "Delete",
+                order = 4,
+                width = "double",
+                values = GetAvailableProfiles,
+                get = function()
+                  local values = GetAvailableProfiles()
+                  if optionsState.profileDeleteTarget ~= "" and not values[optionsState.profileDeleteTarget] then
+                    optionsState.profileDeleteTarget = ""
+                  end
+                  return optionsState.profileDeleteTarget ~= "" and optionsState.profileDeleteTarget or nil
+                end,
+                set = function(_, value)
+                  optionsState.profileDeleteTarget = value or ""
+                end,
+              },
+              deleteButton = {
+                type = "execute",
+                name = "Delete Profile",
+                order = 5,
+                func = function()
+                  local target = optionsState.profileDeleteTarget
+                  if not target or target == "" then return end
+                  if addon.db and addon.db.DeleteProfile then
+                    local current = addon.db.GetCurrentProfile and addon.db:GetCurrentProfile()
+                    if current ~= target then
+                      addon.db:DeleteProfile(target, true)
+                      optionsState.profileDeleteTarget = ""
+                      RefreshDynamicOptionEditors()
+                      NotifyOptionsChanged()
+                    end
+                  end
+                end,
+                disabled = function()
+                  local target = optionsState.profileDeleteTarget
+                  if not target or target == "" then return true end
+                  if addon.db and addon.db.GetCurrentProfile then
+                    return addon.db:GetCurrentProfile() == target
+                  end
+                  return false
+                end,
+              },
+            },
+          },
+          exportHeader = {
+            type = "description",
+            name = "Export your current profile to share or back up settings.",
+            order = 5,
+          },
+          exportProfile = {
+            type = "input",
+            name = "Export Current Profile",
+            order = 6,
+            width = "full",
+            multiline = true,
+            get = function()
+              local serialized, err = addon:SerializeCurrentProfile()
+              if not serialized then
+                return err and ("Error: " .. err) or ""
+              end
+              return serialized
+            end,
+            set = function() end,
+          },
+          importProfile = {
+            type = "input",
+            name = "Import Profile String",
+            order = 7,
+            width = "full",
+            multiline = true,
+            get = function()
+              return optionsState.profileImportInput or ""
+            end,
+            set = function(_, value)
+              value = TrimString(value)
+              optionsState.profileImportInput = value
+              if value == "" then return end
+              local ok, err = addon:DeserializeProfileString(value)
+              if not ok then
+                print("|cff00ff88ClassHUD|r Import failed:", err)
+                return
+              end
+              optionsState.profileImportInput = ""
+              RefreshDynamicOptionEditors()
+              if addon.ApplyAnchorPosition then addon:ApplyAnchorPosition() end
+              if addon.FullUpdate then addon:FullUpdate() end
+              if addon.BuildFramesForSpec then addon:BuildFramesForSpec() end
+            end,
+          },
+          rescanSnapshot = {
+            type = "execute",
+            name = "Rescan from Cooldown Manager",
+            order = 20,
+            width = "full",
+            desc = "Import newly available spells from Blizzard's Cooldown Manager snapshot without altering your existing layout.",
+            func = function()
+              if not (addon and addon.RescanFromCDM) then return end
+              local ok, result = pcall(addon.RescanFromCDM, addon)
+              if not ok then
+                print("|cff00ff88ClassHUD|r Rescan failed:", result)
+              elseif not result then
+                -- RescanFromCDM prints its own feedback when no changes occur
+              end
+              RefreshDynamicOptionEditors()
+              NotifyOptionsChanged()
+            end,
+            disabled = function()
+              return not (addon and addon.IsCooldownViewerAvailable and addon:IsCooldownViewerAvailable())
+            end,
           },
         },
       },
     },
   }
 
-  local summonArgs = opts.args.summonsTotems and opts.args.summonsTotems.args
-  if summonArgs then
-    for index, classConfig in ipairs(SUMMON_CLASS_CONFIG) do
-      summonArgs["summons_" .. classConfig.class] = {
-        type = "group",
-        name = classConfig.label,
-        inline = true,
-        order = 10 + index,
-        hidden = function()
-          if tracking.summons.enabled == false then
-            return true
-          end
-          return not PlayerMatchesClass(addon, classConfig.class)
-        end,
-        args = BuildSummonSpellArgs(addon, classConfig),
-      }
-    end
-  end
-
-  BuildTopBarSpellsEditor(addon, topBarEditorContainer)
-  BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
-    "No utility cooldowns reported by the snapshot for this spec.")
-  BuildTrackedBuffArgs(addon, trackedContainer)
-  BuildBarOrderEditor(addon, barOrderContainer)
+  RefreshDynamicOptionEditors()
 
   return opts
 end
