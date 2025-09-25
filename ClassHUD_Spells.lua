@@ -900,7 +900,7 @@ local function SpellIsCurrentlyUsable(spellID)
   return true, false
 end
 
-local function FilterSpellFrames(frames)
+local function FilterKnownFrames(frames)
   if type(frames) ~= "table" then
     return {}
   end
@@ -933,7 +933,7 @@ local function LayoutTopBar(frames)
   local container = EnsureAttachment("TOP")
   if not container then return end
 
-  frames = FilterSpellFrames(frames)
+  frames = FilterKnownFrames(frames)
 
   local profile  = ClassHUD.db.profile
   local layout   = profile.layout or {}
@@ -996,7 +996,7 @@ end
 
 local function LayoutSideBar(frames, side)
   if not UI.attachments or not UI.attachments[side] then return end
-  frames = FilterSpellFrames(frames)
+  frames = FilterKnownFrames(frames)
   local layout  = ClassHUD.db.profile.layout or {}
   local sideCfg = layout.sideBars or {}
   local size    = sideCfg.size or 36
@@ -1023,7 +1023,7 @@ local function LayoutBottomBar(frames)
   local container = EnsureAttachment("BOTTOM")
   if not container then return end
 
-  frames = FilterSpellFrames(frames)
+  frames = FilterKnownFrames(frames)
 
   local profile  = ClassHUD.db.profile
   local bottom   = profile.layout and profile.layout.bottomBar or {}
