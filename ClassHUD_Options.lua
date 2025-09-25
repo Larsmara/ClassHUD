@@ -4,7 +4,7 @@
 ---@type ClassHUD
 local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 
-local ACR = LibStub("AceConfigRegistry-3.0")
+local ACR = LibStub("AceConfigRegistry-3.0", true)
 local LSM = LibStub("LibSharedMedia-3.0", true)
 
 local TrimString do
