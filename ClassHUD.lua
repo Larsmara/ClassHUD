@@ -881,14 +881,14 @@ local defaults = {
         },
       },
       topBar = {
-        perRow   = 8,
-        spacingX = 4,
-        spacingY = 4,
-        yOffset  = 0,
-        grow     = "UP",
+        perRow            = 8,
+        spacingX          = 4,
+        spacingY          = 4,
+        yOffset           = 0,
+        grow              = "UP",
         pandemicHighlight = true,
-        spells   = {},
-        flags    = {},
+        spells            = {},
+        flags             = {},
       },
       bottomBar = {
         perRow   = 8,
@@ -1947,120 +1947,17 @@ SlashCmdList.CLASSHUDRESET = function()
 end
 
 -- ==================================================
--- Debug command: /chudlistbuffs
+-- Debug command: /classhudwipe
+-- Nukes the entire DB and restores defaults
 -- ==================================================
-SLASH_CHUDLISTBUFFS1 = "/chudlistbuffs"
-SlashCmdList.CHUDLISTBUFFS = function()
-  local enum = Enum and Enum.CooldownViewerCategory
-  if not enum then
-    print("|cff00ff88ClassHUD|r Enum.CooldownViewerCategory ikke tilgjengelig.")
-    return
-  end
-
-  local class, specID = ClassHUD:GetPlayerClassSpec()
-  local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
-  if not snapshot then
-    print("|cff00ff88ClassHUD|r Ingen snapshot tilgjengelig. Bruk /classhudreset eller relogg.")
-    return
-  end
-
-  print("|cff00ff88ClassHUD|r Liste over Tracked Buffs fra snapshot:")
-  for spellID, data in pairs(snapshot) do
-    if data.categories and data.categories.buff then
-      print(string.format("  SpellID=%d, Name=%s", spellID, data.name or "Unknown"))
-    end
-  end
-end
-
--- ==================================================
--- Debug command: /chudbuffdesc
--- ==================================================
-SLASH_CHUDBUFFDESC1 = "/chudbuffdesc"
-SlashCmdList.CHUDBUFFDESC = function()
-  local enum = Enum and Enum.CooldownViewerCategory
-  if not enum then
-    print("|cff00ff88ClassHUD|r Enum.CooldownViewerCategory ikke tilgjengelig.")
-    return
-  end
-
-  local class, specID = ClassHUD:GetPlayerClassSpec()
-  local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
-  if not snapshot then
-    print("|cff00ff88ClassHUD|r Ingen snapshot tilgjengelig.")
-    return
-  end
-
-  print("|cff00ff88ClassHUD|r Tracked Buff descriptions:")
-  for spellID, entry in pairs(snapshot) do
-    if entry.categories and entry.categories.buff then
-      local desc = entry.desc or C_Spell.GetSpellDescription(spellID) or "No description"
-      print(string.format("  [%d] %s → %s", spellID, entry.name or "Unknown", desc:gsub("\n", " ")))
-    end
-  end
-end
-
--- /chudmap : vis buff -> spell mapping
-SLASH_CHUDMAP1 = "/chudmap"
-SlashCmdList.CHUDMAP = function()
-  if not ClassHUD.trackedBuffToSpell or next(ClassHUD.trackedBuffToSpell) == nil then
-    print("|cff00ff88ClassHUD|r Ingen auto-mapping (buff → spell) er registrert.")
-    return
-  end
-  print("|cff00ff88ClassHUD|r Auto-mapping (buff → spell):")
-  for buffID, spellID in pairs(ClassHUD.trackedBuffToSpell) do
-    local bName = C_Spell.GetSpellName(buffID) or ("buff " .. buffID)
-    local sName = C_Spell.GetSpellName(spellID) or ("spell " .. spellID)
-    print(string.format("  %s (%d)  →  %s (%d)", bName, buffID, sName, spellID))
-  end
-end
-
--- ==================================================
--- Debug command: /chudtracked
--- Viser snapshot vs. aktive buffs
--- ==================================================
-SLASH_CHUDTRACKED1 = "/chudtracked"
-SlashCmdList.CHUDTRACKED = function()
-  local class, specID = ClassHUD:GetPlayerClassSpec()
-
-  print("|cff00ff88ClassHUD|r Debug: Tracked Buffs for", class, specID)
-
-  local snapshot = ClassHUD:GetSnapshotForSpec(class, specID, false)
-
-  local tracked = ClassHUD.db.profile.tracking
-      and ClassHUD.db.profile.tracking.buffs
-      and ClassHUD.db.profile.tracking.buffs.tracked
-      and ClassHUD.db.profile.tracking.buffs.tracked[class]
-      and ClassHUD.db.profile.tracking.buffs.tracked[class][specID]
-
-  if not snapshot then
-    print("  Ingen snapshot lagret for denne spec.")
-    return
-  end
-
-  for buffID, data in pairs(snapshot) do
-    if data.categories and data.categories.buff then
-      local name = data.name or ("Buff " .. buffID)
-      local candidates = ClassHUD:GetAuraCandidatesForEntry(data, buffID)
-      local aura = select(1, ClassHUD:FindAuraFromCandidates(candidates, { "player", "pet" }))
-      local active = aura and true or false
-
-      local config = tracked and ClassHUD.GetTrackedEntryConfig
-          and ClassHUD:GetTrackedEntryConfig(class, specID, buffID, false)
-
-      local enabled
-      if config and (config.showIcon or config.showBar) then
-        local modes = {}
-        if config.showIcon then table.insert(modes, "icon") end
-        if config.showBar then table.insert(modes, "bar") end
-        enabled = string.format("|cff00ff00ON (%s)|r", table.concat(modes, ", "))
-      else
-        enabled = "|cffff0000OFF|r"
-      end
-
-      local status = active and "|cff00ff00ACTIVE|r" or "inactive"
-
-      print(string.format("  [%d] %s → tracked=%s, %s",
-        buffID, name, enabled, status))
-    end
+SLASH_CLASSHUDWIPE1 = "/classhudwipe"
+SlashCmdList.CLASSHUDWIPE = function()
+  if ClassHUD and ClassHUD.db then
+    ClassHUD.db:ResetDB()
+    -- Rebuild frames and options after nuke
+    ClassHUD:BuildFramesForSpec()
+    local ACR = LibStub("AceConfigRegistry-3.0", true)
+    if ACR and ClassHUD._opts then ACR:NotifyChange("ClassHUD") end
+    print("|cffff0000ClassHUD: full database wiped. All profiles reset to defaults.|r")
   end
 end
