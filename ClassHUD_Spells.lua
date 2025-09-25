@@ -872,23 +872,35 @@ local function SpellMatchesPlayer(spellID)
   return false
 end
 
-local function SpellIsKnownAndUsable(spellID)
-  if not SpellMatchesPlayer(spellID) then
+local function SpellIsKnown(spellID)
+  if not spellID then
+    return false
+  end
+
+  if C_SpellBook and C_SpellBook.IsSpellKnown then
+    local ok, known = pcall(C_SpellBook.IsSpellKnown, spellID)
+    if ok then
+      return known == true
+    end
+  end
+
+  return SpellMatchesPlayer(spellID)
+end
+
+local function SpellIsCurrentlyUsable(spellID)
+  if not spellID then
     return false, false
   end
 
   if C_Spell and C_Spell.IsSpellUsable then
     local usable, insufficient = C_Spell.IsSpellUsable(spellID)
-    if usable or insufficient then
-      return true, insufficient
-    end
-    return false, insufficient and true or false
+    return usable == true, insufficient and true or false
   end
 
   return true, false
 end
 
-local function FilterSpellFrames(frames)
+local function FilterKnownFrames(frames)
   if type(frames) ~= "table" then
     return {}
   end
@@ -899,7 +911,7 @@ local function FilterSpellFrames(frames)
       local spellID = frame.spellID
       local allow = false
       if spellID then
-        allow = SpellIsKnownAndUsable(spellID)
+        allow = SpellIsKnown(spellID)
       end
       frame._layoutConditionHidden = not allow
       if allow then
@@ -921,7 +933,7 @@ local function LayoutTopBar(frames)
   local container = EnsureAttachment("TOP")
   if not container then return end
 
-  frames = FilterSpellFrames(frames)
+  frames = FilterKnownFrames(frames)
 
   local profile  = ClassHUD.db.profile
   local layout   = profile.layout or {}
@@ -984,7 +996,7 @@ end
 
 local function LayoutSideBar(frames, side)
   if not UI.attachments or not UI.attachments[side] then return end
-  frames = FilterSpellFrames(frames)
+  frames = FilterKnownFrames(frames)
   local layout  = ClassHUD.db.profile.layout or {}
   local sideCfg = layout.sideBars or {}
   local size    = sideCfg.size or 36
@@ -1011,7 +1023,7 @@ local function LayoutBottomBar(frames)
   local container = EnsureAttachment("BOTTOM")
   if not container then return end
 
-  frames = FilterSpellFrames(frames)
+  frames = FilterKnownFrames(frames)
 
   local profile  = ClassHUD.db.profile
   local bottom   = profile.layout and profile.layout.bottomBar or {}
@@ -1792,7 +1804,7 @@ local function UpdateSpellFrame(frame)
     cache.maxCharges = nil
   end
 
-  local usable, noMana = C_Spell and C_Spell.IsSpellUsable and C_Spell.IsSpellUsable(sid)
+  local usable, noMana = SpellIsCurrentlyUsable(sid)
   local resourceLimited = false
   if usable == false and noMana then
     resourceLimited = true
@@ -2352,7 +2364,7 @@ function ClassHUD:BuildFramesForSpec()
     for index = 1, #array do
       local spellID = tonumber(array[index]) or array[index]
       if spellID and not built[spellID] and not hiddenSet[spellID] then
-        local allow = SpellIsKnownAndUsable(spellID)
+        local allow = SpellIsKnown(spellID)
         if allow then
           local frame = acquire(spellID)
           frame._customOrder = index
@@ -2395,7 +2407,7 @@ function ClassHUD:BuildFramesForSpec()
 
   for _, item in ipairs(collectSnapshot("essential")) do
     local spellID = item.spellID
-    if not built[spellID] and not hiddenSet[spellID] and SpellIsKnownAndUsable(spellID) then
+    if not built[spellID] and not hiddenSet[spellID] and SpellIsKnown(spellID) then
       local frame = acquire(spellID)
       frame._customOrder = nil
       frame._trackOnTarget = shouldTrackOnTarget(spellID)
@@ -2406,7 +2418,7 @@ function ClassHUD:BuildFramesForSpec()
 
   for _, item in ipairs(collectSnapshot("utility")) do
     local spellID = item.spellID
-    if spellID and not built[spellID] and SpellIsKnownAndUsable(spellID) then
+    if spellID and not built[spellID] and SpellIsKnown(spellID) then
       hiddenSet[spellID] = true
       built[spellID] = true
     end
@@ -2414,7 +2426,7 @@ function ClassHUD:BuildFramesForSpec()
 
   for _, item in ipairs(collectSnapshot("bar")) do
     local spellID = item.spellID
-    if not built[spellID] and not hiddenSet[spellID] and SpellIsKnownAndUsable(spellID) then
+    if not built[spellID] and not hiddenSet[spellID] and SpellIsKnown(spellID) then
       local frame = acquire(spellID)
       frame._customOrder = nil
       frame._trackOnTarget = false
