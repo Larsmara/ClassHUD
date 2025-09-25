@@ -147,16 +147,40 @@ function ClassHUD:EvaluateClassBarVisibility()
   end
 end
 
--- Charged Combo Points highlight color (Rogue)
-local CHARGED_CP_COLOR = { 1.0, 0.95, 0.35 }
-
--- Base resource colors
-local RESOURCE_BASE_COLORS = {
-  [Enum.PowerType.HolyPower]     = { 1.00, 0.88, 0.25 },
-  [Enum.PowerType.SoulShards]    = { 0.60, 0.22, 1.00 },
-  [Enum.PowerType.ArcaneCharges] = { 0.25, 0.60, 1.00 },
-  [Enum.PowerType.Essence]       = { 0.50, 1.00, 0.90 },
+-- Normalized special resource colors
+local RESOURCE_SPECIAL_COLORS = {
+  ArcaneCharges = { 0 / 255, 158 / 255, 255 / 255 },   -- Bright blue
+  SoulShards    = { 147 / 255, 130 / 255, 204 / 255 }, -- Purple
+  HolyPower     = { 229 / 255, 226 / 255, 10 / 255 },  -- Yellow
+  Essence       = { 51 / 255, 145 / 255, 127 / 255 },  -- Teal
+  RuneBlood     = { 255 / 255, 61 / 255, 61 / 255 },   -- Red
+  RuneFrost     = { 61 / 255, 255 / 255, 100 / 255 },  -- Cyan-green
+  RuneUnholy    = { 61 / 255, 255 / 255, 61 / 255 },   -- Green
 }
+
+-- Combo Points (red → green gradient)
+local COMBO_POINT_COLORS = {
+  { 1.0, 0.2, 0.2 }, -- 1 Red
+  { 1.0, 0.5, 0.0 }, -- 2 Orange
+  { 1.0, 1.0, 0.2 }, -- 3 Yellow
+  { 0.6, 1.0, 0.2 }, -- 4 Yellow-Green
+  { 0.2, 1.0, 0.2 }, -- 5 Green
+  { 0.0, 0.9, 0.3 }, -- 6 Bright Green
+  { 0.0, 0.8, 0.4 }, -- 7 Deep Green (if 7 CPs)
+}
+
+-- Chi (as in your screenshot, more consistent green shades)
+local CHI_COLORS = {
+  { 0.90, 0.90, 0.40 }, -- 1 Yellow-Green
+  { 0.65, 0.85, 0.40 }, -- 2
+  { 0.45, 0.80, 0.40 }, -- 3
+  { 0.25, 0.75, 0.40 }, -- 4
+  { 0.10, 0.70, 0.40 }, -- 5
+  { 0.00, 0.65, 0.40 }, -- 6 Deep Teal Green
+}
+
+-- Charged CP highlight
+local CHARGED_CP_COLOR = { 0.2, 0.6, 1.0 } -- Blizzard PRB blue
 
 -- DK rune colors by spec
 local function RuneSpecColor(specID)
@@ -166,40 +190,49 @@ local function RuneSpecColor(specID)
   return 0.7, 0.7, 0.7
 end
 
--- Per-index color for CP/Chi/Arcane
-local function IndexedColor(i, max)
-  if max <= 1 then return 1, 1, 1 end
-  local t = (i - 1) / (max - 1)
-  local r = 1.0
-  local g = math.min(1, 0.1 + 0.9 * t)
-  local b = math.max(0, 0.05 + 0.25 * (1 - t))
-  return r, g, b
-end
-
--- Get charged CP indices (Rogue)
-local function GetChargedPoints()
-  if not GetUnitChargedPowerPoints then return nil end
-  return GetUnitChargedPowerPoints("player")
-end
 
 local function SegmentColor(i, max, ptype, class, specID, chargedPoints)
-  if ptype == Enum.PowerType.Runes then
-    return RuneSpecColor(specID)
-  end
-  if ptype == Enum.PowerType.ComboPoints or ptype == Enum.PowerType.Chi or ptype == Enum.PowerType.ArcaneCharges then
-    if ptype == Enum.PowerType.ComboPoints and chargedPoints then
+  if ptype == Enum.PowerType.ComboPoints then
+    if chargedPoints then
       for _, idx in ipairs(chargedPoints) do
         if idx == i then
           return unpack(CHARGED_CP_COLOR)
         end
       end
     end
-    return IndexedColor(i, max)
+    local color = COMBO_POINT_COLORS[i]
+    if color then return unpack(color) end
+    return 1, 1, 1
   end
+
+  if ptype == Enum.PowerType.Chi then
+    local color = CHI_COLORS[i]
+    if color then return unpack(color) end
+    return 1, 1, 1
+  end
+
+  if ptype == Enum.PowerType.ArcaneCharges then
+    return unpack(RESOURCE_SPECIAL_COLORS.ArcaneCharges)
+  end
+
+  if ptype == Enum.PowerType.HolyPower then
+    return unpack(RESOURCE_SPECIAL_COLORS.HolyPower)
+  end
+
+  if ptype == Enum.PowerType.SoulShards then
+    return unpack(RESOURCE_SPECIAL_COLORS.SoulShards)
+  end
+
+  if ptype == Enum.PowerType.Essence then
+    return unpack(RESOURCE_SPECIAL_COLORS.Essence)
+  end
+
   local base = RESOURCE_BASE_COLORS[ptype]
   if base then return unpack(base) end
   return ClassHUD:PowerColorBy(ptype)
 end
+
+
 
 local function EnsureSegment(i)
   if not UI.powerSegments[i] then
@@ -227,9 +260,8 @@ function ClassHUD:UpdateSegmentsAdvanced(ptype, max, partial)
   local _, class = UnitClass("player")
   local spec = GetSpecialization()
   local specID = spec and GetSpecializationInfo(spec) or 0
-  local charged = (ptype == Enum.PowerType.ComboPoints and (class == "ROGUE" or class == "DRUID"))
-      and GetChargedPoints()
-      or nil
+  local charged = GetUnitChargedPowerPoints("player")
+
   local cur = UnitPower("player", ptype, partial and true or false)
 
   local whole, frac = 0, 0
