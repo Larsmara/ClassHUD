@@ -472,75 +472,6 @@ end
 
 ClassHUD.SetFrameGlow = SetFrameGlow
 
-local function EvaluateBuffLinks(frame, spellID)
-  local list = frame and frame._linkedBuffIDs
-  if not list then
-    list = {}
-    if frame then
-      frame._linkedBuffIDs = list
-    end
-  else
-    wipe(list)
-  end
-
-  if frame then
-    frame._linkedBuffActive = false
-    frame._linkedBuffCount = nil
-  end
-
-  if not frame or not spellID or not ClassHUD.db or not ClassHUD.db.profile then
-    return false, nil, list
-  end
-
-  local class, specID = ClassHUD:GetPlayerClassSpec()
-  if not class or not specID or specID == 0 then
-    return false, nil, list
-  end
-
-  local tracking = ClassHUD.db.profile.tracking
-  local linkRoot = tracking and tracking.buffs and tracking.buffs.links
-  local specLinks = linkRoot and linkRoot[class] and linkRoot[class][specID]
-  if type(specLinks) ~= "table" then
-    return false, nil, list
-  end
-
-  local anyActive = false
-  local highestCount = nil
-
-  for buffKey, linkedSpellID in pairs(specLinks) do
-    local normalizedLink = tonumber(linkedSpellID) or linkedSpellID
-    if normalizedLink == spellID then
-      local buffID = tonumber(buffKey) or buffKey
-      if buffID then
-        list[#list + 1] = buffID
-
-        local aura = ClassHUD:GetAuraForSpell(buffID)
-        if aura then
-          anyActive = true
-          local stackCount = aura.applications or aura.stackCount or aura.charges or aura.points
-          if stackCount and stackCount > 0 then
-            if not highestCount or stackCount > highestCount then
-              highestCount = stackCount
-            end
-          end
-        end
-      end
-    end
-  end
-
-  if anyActive then
-    frame._linkedBuffActive = true
-    frame._linkedBuffCount = highestCount
-    return true, highestCount, list
-  end
-
-  frame._linkedBuffActive = false
-  frame._linkedBuffCount = nil
-  return false, nil, list
-end
-
-ClassHUD.EvaluateBuffLinks = EvaluateBuffLinks
-
 local function UpdateGlow(frame, aura, sid, data)
   -- 1) Samme semantikk som original: aura tilstede → glow
   local shouldGlow = (aura ~= nil)
@@ -578,10 +509,6 @@ local function UpdateGlow(frame, aura, sid, data)
   end
 
   -- 2) Manuelle buffLinks kan holde glow (som originalt "keepGlow")
-  if allowExtraGlowLogic and not shouldGlow and frame._linkedBuffActive then
-    shouldGlow = true
-  end
-
   -- 3) Auto-mapping fallback (som i originalens "keepGlow")
   if allowExtraGlowLogic and not shouldGlow and ClassHUD.trackedBuffToSpell then
     for buffID, mappedSpellID in pairs(ClassHUD.trackedBuffToSpell) do
@@ -1550,7 +1477,10 @@ local function UpdateSpellFrame(frame)
   end
   frame._auraUnitList = auraUnits
 
-  local linkedBuffActive, linkedBuffCount, linkedBuffIDs = EvaluateBuffLinks(frame, sid)
+  local linkedBuffIDs = ClassHUD:GetLinkedBuffIDsForSpell(sid, frame._linkedBuffIDs)
+  if frame then
+    frame._linkedBuffIDs = linkedBuffIDs
+  end
 
   local watcherCandidates = auraCandidates
   if linkedBuffIDs and #linkedBuffIDs > 0 then
@@ -1758,14 +1688,7 @@ local function UpdateSpellFrame(frame)
     end
   end
 
-  if linkedBuffActive and not chargesShown then
-    if linkedBuffCount and linkedBuffCount > 0 then
-      countText = tostring(linkedBuffCount)
-      countShown = true
-    end
-  end
-
-  if not chargesShown and not linkedBuffActive then
+  if not chargesShown then
     local manualCount = ClassHUD.GetManualCountForSpell and ClassHUD:GetManualCountForSpell(sid)
     if manualCount ~= nil then
       if manualCount > 0 then
@@ -2119,6 +2042,8 @@ local function UpdateSpellFrame(frame)
   else
     cache.glow = shouldGlow
   end
+
+  ClassHUD:EvaluateBuffLinks(frame, sid)
 end
 
 -- ==================================================
@@ -2303,12 +2228,16 @@ function ClassHUD:RebuildTrackedBuffFrames()
 
   local tracking = ClassHUD.db.profile.tracking or {}
   local linkRoot = tracking.buffs and tracking.buffs.links or {}
-  local links = (linkRoot[class] and linkRoot[class][specID]) or {}
+  local links = linkRoot[class] and linkRoot[class][specID]
 
-  for buffID, spellID in pairs(links) do
-    local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
-    if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
-      aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
+  if type(links) == "table" then
+    ClassHUD:NormalizeBuffLinkTable(links)
+
+    for buffID in pairs(links) do
+      local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
+      if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
+        aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
+      end
     end
   end
 end
@@ -2543,6 +2472,8 @@ function ClassHUD:BuildFramesForSpec()
   self.db.profile.tracking.buffs.links = self.db.profile.tracking.buffs.links or {}
   self.db.profile.tracking.buffs.links[class] = self.db.profile.tracking.buffs.links[class] or {}
   self.db.profile.tracking.buffs.links[class][specID] = self.db.profile.tracking.buffs.links[class][specID] or {}
+  local specLinks = self.db.profile.tracking.buffs.links[class][specID]
+  ClassHUD:NormalizeBuffLinkTable(specLinks)
 
   for buffID, entry in pairs(snapshot) do
     if entry.categories and entry.categories.buff then
@@ -2554,9 +2485,11 @@ function ClassHUD:BuildFramesForSpec()
             if spellName and string.find(desc, spellName, 1, true) then
               self.trackedBuffToSpell[buffID] = spellID
 
-              local links = self.db.profile.tracking.buffs.links[class][specID]
-              if not links[buffID] then
-                links[buffID] = spellID
+              local set = specLinks[buffID]
+              if set == nil or (type(set) == "table" and next(set) == nil) then
+                set = set or {}
+                specLinks[buffID] = set
+                set[spellID] = true
               end
               break
             end

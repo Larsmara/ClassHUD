@@ -146,6 +146,258 @@ ClassHUD._auraWatchersByUnit = ClassHUD._auraWatchersByUnit or {
 ClassHUD._pendingAuraFrames = ClassHUD._pendingAuraFrames or {}
 ClassHUD._auraFlushTimer = ClassHUD._auraFlushTimer or nil
 
+local BUFF_LINK_HELPFUL_UNITS = { "player", "pet" }
+local BUFF_LINK_HARMFUL_UNITS = { "target", "focus", "mouseover" }
+
+---Normalizes a spec's buff link table so each buff maps to a set of spell IDs.
+---@param specLinks table|nil
+---@return table|nil
+function ClassHUD:NormalizeBuffLinkTable(specLinks)
+  if type(specLinks) ~= "table" then
+    return nil
+  end
+
+  local normalized = {}
+
+  for buffKey, value in pairs(specLinks) do
+    local buffID = tonumber(buffKey) or buffKey
+    if buffID then
+      local spellSet = normalized[buffID]
+      if not spellSet then
+        spellSet = {}
+        normalized[buffID] = spellSet
+      end
+
+      if type(value) == "table" then
+        for spellKey, enabled in pairs(value) do
+          if enabled then
+            local spellID = tonumber(spellKey) or spellKey
+            if spellID then
+              spellSet[spellID] = true
+            end
+          end
+        end
+      else
+        local spellID = tonumber(value) or value
+        if spellID then
+          spellSet[spellID] = true
+        end
+      end
+    end
+  end
+
+  wipe(specLinks)
+
+  for buffID, spellSet in pairs(normalized) do
+    if next(spellSet) then
+      specLinks[buffID] = spellSet
+    end
+  end
+
+  return specLinks
+end
+
+---Collects all buff spell IDs linked to the provided spell for the current spec.
+---@param spellID number
+---@param reuse table|nil Optional table to reuse for output
+---@return table list
+function ClassHUD:GetLinkedBuffIDsForSpell(spellID, reuse)
+  local list = reuse
+  if type(list) ~= "table" then
+    list = {}
+  else
+    wipe(list)
+  end
+
+  if not spellID then
+    return list
+  end
+
+  local db = self.db
+  local profile = db and db.profile
+  if not profile then
+    return list
+  end
+
+  local class, specID = self:GetPlayerClassSpec()
+  if not class or not specID or specID == 0 then
+    return list
+  end
+
+  local tracking = profile.tracking
+  local linkRoot = tracking and tracking.buffs and tracking.buffs.links
+  local specLinks = linkRoot and linkRoot[class] and linkRoot[class][specID]
+  if type(specLinks) ~= "table" then
+    return list
+  end
+
+  self:NormalizeBuffLinkTable(specLinks)
+
+  local normalizedSpellID = tonumber(spellID) or spellID
+  if not normalizedSpellID then
+    return list
+  end
+
+  for buffKey, spellSet in pairs(specLinks) do
+    if type(spellSet) == "table" then
+      local hasLink = spellSet[normalizedSpellID]
+      if not hasLink then
+        local altKey = tostring(normalizedSpellID)
+        if spellSet[altKey] then
+          spellSet[normalizedSpellID] = true
+          spellSet[altKey] = nil
+          hasLink = true
+        end
+      end
+
+      if hasLink then
+        local buffID = tonumber(buffKey) or buffKey
+        if buffID then
+          list[#list + 1] = buffID
+        end
+      end
+    end
+  end
+
+  return list
+end
+
+local function RestoreBuffLinkCount(frame)
+  if not frame then return end
+
+  if frame._linkedBuffCountActive then
+    local cache = frame._last
+    local restoreText = frame._linkedBuffRestoreText
+    local restoreShown = frame._linkedBuffRestoreShown
+
+    if frame.count then
+      if restoreShown then
+        frame.count:SetText(restoreText or "")
+        frame.count:Show()
+      else
+        frame.count:SetText(restoreText or "")
+        frame.count:Hide()
+      end
+    elseif frame.cooldownText then
+      if restoreShown then
+        frame.cooldownText:SetText(restoreText or "")
+        frame.cooldownText:Show()
+      else
+        frame.cooldownText:SetText("")
+        frame.cooldownText:Hide()
+      end
+    end
+
+    if cache then
+      cache.countText = restoreText
+      cache.countShown = restoreShown or false
+    end
+
+    frame._linkedBuffCountActive = false
+    frame._linkedBuffRestoreText = nil
+    frame._linkedBuffRestoreShown = nil
+  end
+end
+
+---Evaluates linked buff state for a spell and applies any visual overlays/counts.
+---@param frame table
+---@param spellID number
+---@return boolean active, number|nil charges, table linkedBuffIDs
+function ClassHUD:EvaluateBuffLinks(frame, spellID)
+  local list = self:GetLinkedBuffIDsForSpell(spellID, frame and frame._linkedBuffIDs)
+  if frame then
+    frame._linkedBuffIDs = list
+  end
+
+  local cache
+  if frame then
+    cache = frame._last or {}
+    frame._last = cache
+    frame._linkedBuffRestoreText = cache.countText
+    frame._linkedBuffRestoreShown = cache.countShown
+  else
+    cache = {}
+  end
+
+  if not frame or not spellID or #list == 0 then
+    if frame then
+      frame._linkedBuffActive = false
+      frame._linkedBuffCount = nil
+      RestoreBuffLinkCount(frame)
+      ActionButton_HideOverlayGlow(frame)
+      frame._linkedBuffRestoreText = cache.countText
+      frame._linkedBuffRestoreShown = cache.countShown
+    end
+    return false, nil, list
+  end
+
+  local anyActive = false
+  local highestCount = nil
+
+  for i = 1, #list do
+    local buffID = list[i]
+    local isHarmful = false
+    if C_Spell and C_Spell.IsSpellHarmful then
+      local ok, harmfulFlag = pcall(C_Spell.IsSpellHarmful, buffID)
+      if ok and harmfulFlag then
+        isHarmful = true
+      end
+    end
+    local units = isHarmful and BUFF_LINK_HARMFUL_UNITS or BUFF_LINK_HELPFUL_UNITS
+    local aura = self:GetAuraForSpell(buffID, units)
+    if not aura and isHarmful then
+      aura = self:FindAuraByName(buffID, BUFF_LINK_HARMFUL_UNITS)
+    end
+
+    if aura then
+      anyActive = true
+      local stackCount = aura.charges or aura.applications or aura.stackCount or aura.points or aura.comboPoints
+      if stackCount and stackCount > 0 then
+        if not highestCount or stackCount > highestCount then
+          highestCount = stackCount
+        end
+      end
+    end
+  end
+
+  frame._linkedBuffActive = anyActive
+  frame._linkedBuffCount = highestCount
+
+  if anyActive then
+    ActionButton_ShowOverlayGlow(frame)
+  else
+    RestoreBuffLinkCount(frame)
+    ActionButton_HideOverlayGlow(frame)
+  end
+
+  if anyActive and highestCount and highestCount > 0 then
+    local countText = tostring(highestCount)
+    if frame.count then
+      frame.count:SetText(countText)
+      frame.count:Show()
+    elseif frame.cooldownText then
+      frame.cooldownText:SetText(countText)
+      frame.cooldownText:Show()
+    end
+
+    cache.countText = countText
+    cache.countShown = true
+    frame._linkedBuffCountActive = true
+  elseif anyActive then
+    -- Buff active but no stack information; preserve previous count state.
+    frame._linkedBuffCountActive = false
+  else
+    frame._linkedBuffCountActive = false
+  end
+
+  if not anyActive then
+    frame._linkedBuffRestoreText = nil
+    frame._linkedBuffRestoreShown = nil
+  end
+
+  return anyActive, highestCount, list
+end
+
 function ClassHUD:RequestUpdate(kind)
   kind = kind or "any"
   if not self._pending then
