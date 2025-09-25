@@ -273,6 +273,16 @@ local function EnsurePlacementLists(addon, class, specID)
   }
 end
 
+local function EnsureUtilitySpellList(addon, class, specID)
+  addon.db.profile.layout = addon.db.profile.layout or {}
+  local layout = addon.db.profile.layout
+  layout.utility = layout.utility or {}
+  layout.utility.spells = layout.utility.spells or {}
+  layout.utility.spells[class] = layout.utility.spells[class] or {}
+  layout.utility.spells[class][specID] = layout.utility.spells[class][specID] or {}
+  return layout.utility.spells[class][specID]
+end
+
 local function EnsureTopBarFlags(addon, class, specID)
   addon.db.profile.layout = addon.db.profile.layout or {}
   local layout = addon.db.profile.layout
@@ -375,12 +385,54 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
   local args = group.args
   local spellKey = tostring(displayID)
   local placementMemory = state.spellPlacementMemory
-  local lastPlacement = placementMemory and placementMemory[spellKey]
 
   local function rebuild()
     if type(refreshFn) == "function" then
       refreshFn()
     end
+  end
+
+  local function GetMutableOrderList()
+    if placementKey == "UTILITY" then
+      local list = EnsureUtilitySpellList(addon, class, specID)
+      local normalized = tonumber(spellID) or spellID
+      local index
+      for i = 1, #list do
+        if (tonumber(list[i]) or list[i]) == normalized then
+          index = i
+          break
+        end
+      end
+      return list, index, "UTILITY"
+    end
+
+    local placement, index, lists = GetSpellPlacement(addon, class, specID, spellID)
+    if not placement or placement == "HIDDEN" then
+      return nil, nil, placement
+    end
+
+    local list = lists and lists[placement]
+    return list, index, placement
+  end
+
+  local function CanMove(delta)
+    local list, index = GetMutableOrderList()
+    if type(list) ~= "table" or not index then return false end
+    local target = index + delta
+    return target >= 1 and target <= #list
+  end
+
+  local function Move(delta)
+    local list, index = GetMutableOrderList()
+    if type(list) ~= "table" or not index then return end
+    local target = index + delta
+    if target < 1 or target > #list then return end
+
+    list[index], list[target] = list[target], list[index]
+
+    addon:BuildFramesForSpec()
+    rebuild()
+    NotifyOptionsChanged()
   end
 
   args.enabled = {
@@ -427,6 +479,37 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
       rebuild()
       NotifyOptionsChanged()
     end,
+  }
+
+  args.reorder = {
+    type = "group",
+    name = "",
+    order = 0.25,
+    inline = true,
+    args = {
+      up = {
+        type = "execute",
+        name = "↑",
+        width = "half",
+        disabled = function()
+          return not CanMove(-1)
+        end,
+        func = function()
+          Move(-1)
+        end,
+      },
+      down = {
+        type = "execute",
+        name = "↓",
+        width = "half",
+        disabled = function()
+          return not CanMove(1)
+        end,
+        func = function()
+          Move(1)
+        end,
+      },
+    },
   }
 
   args.placement = {
@@ -728,6 +811,24 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
   }
 
   return group
+end
+
+local function SortEntries(snapshot, category)
+  if not snapshot then return {} end
+  local list = {}
+  for spellID, entry in pairs(snapshot) do
+    local cat = entry.categories and entry.categories[category]
+    if cat then
+      table.insert(list, { spellID = spellID, entry = entry, order = (cat.order or math.huge) })
+    end
+  end
+  table.sort(list, function(a, b)
+    if a.order == b.order then
+      return (a.entry.name or "") < (b.entry.name or "")
+    end
+    return a.order < b.order
+  end)
+  return list
 end
 
 local function PopulatePlacementSpellGroups(addon, container, state, placementKey, refreshFn)
@@ -1176,24 +1277,6 @@ end
 
 local function NotifyOptionsChanged()
   if ACR then ACR:NotifyChange("ClassHUD") end
-end
-
-local function SortEntries(snapshot, category)
-  if not snapshot then return {} end
-  local list = {}
-  for spellID, entry in pairs(snapshot) do
-    local cat = entry.categories and entry.categories[category]
-    if cat then
-      table.insert(list, { spellID = spellID, entry = entry, order = (cat.order or math.huge) })
-    end
-  end
-  table.sort(list, function(a, b)
-    if a.order == b.order then
-      return (a.entry.name or "") < (b.entry.name or "")
-    end
-    return a.order < b.order
-  end)
-  return list
 end
 
 -- Bygger Top Bar Spells-editoren inline (uten å lage ny venstremeny-node)
