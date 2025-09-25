@@ -1018,9 +1018,10 @@ local function BuildSubGroups(group, tree, options, path, appName)
 			if not inline and not hidden then
 				local entry = new()
 				entry.value = k
-				entry.text = GetOptionsMemberValue("name", v, options, path, appName)
-				entry.icon = GetOptionsMemberValue("icon", v, options, path, appName)
-				entry.iconCoords = GetOptionsMemberValue("iconCoords", v, options, path, appName)
+                                entry.text = GetOptionsMemberValue("name", v, options, path, appName)
+                                entry.icon = GetOptionsMemberValue("icon", v, options, path, appName)
+                                entry.iconCoords = GetOptionsMemberValue("iconCoords", v, options, path, appName)
+                                entry.treeButtons = GetOptionsMemberValue("treeButtons", v, options, path, appName)
 				entry.disabled = CheckOptionDisabled(v, options, path, appName)
 				if not tree.children then tree.children = new() end
 				tinsert(tree.children,entry)
@@ -1053,9 +1054,10 @@ local function BuildGroups(group, options, path, appName, recurse)
 			if not inline and not hidden then
 				local entry = new()
 				entry.value = k
-				entry.text = GetOptionsMemberValue("name", v, options, path, appName)
-				entry.icon = GetOptionsMemberValue("icon", v, options, path, appName)
-				entry.iconCoords = GetOptionsMemberValue("iconCoords", v, options, path, appName)
+                                entry.text = GetOptionsMemberValue("name", v, options, path, appName)
+                                entry.icon = GetOptionsMemberValue("icon", v, options, path, appName)
+                                entry.iconCoords = GetOptionsMemberValue("iconCoords", v, options, path, appName)
+                                entry.treeButtons = GetOptionsMemberValue("treeButtons", v, options, path, appName)
 				entry.disabled = CheckOptionDisabled(v, options, path, appName)
 				tinsert(tree,entry)
 				if recurse and (v.childGroups or "tree") == "tree" then

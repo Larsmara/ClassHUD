@@ -570,14 +570,14 @@ local function CreateSpellFrame(spellID)
   frame.count = frame.overlay:CreateFontString(nil, "OVERLAY")
   frame.count:ClearAllPoints()
   frame.count:SetPoint("TOP", frame, "TOP", 0, -2)
-  local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.spellFontSize or 12)
+  local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.fontSize)
   frame.count:SetFont(fontPath, fontSize, "OUTLINE")
   frame.count:Hide()
 
   frame.cooldownText = frame.overlay:CreateFontString(nil, "OVERLAY")
   frame.cooldownText:ClearAllPoints()
   frame.cooldownText:SetPoint("BOTTOM", frame, "BOTTOM", 0, 2)
-  local cooldownFontPath, cooldownFontSize = ClassHUD:FetchFont(12)
+  local cooldownFontPath, cooldownFontSize = ClassHUD:FetchFont(ClassHUD.db.profile.fontSize)
   frame.cooldownText:SetFont(cooldownFontPath, cooldownFontSize, "OUTLINE")
   frame.cooldownText:SetJustifyH("CENTER")
   frame.cooldownText:SetJustifyV("MIDDLE")
@@ -686,7 +686,7 @@ local function CreateBuffFrame(buffID)
   f.overlay:SetAllPoints(true)
   f.overlay:SetFrameLevel(f.cooldown:GetFrameLevel() + 1)
 
-  local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.spellFontSize or 12)
+  local fontPath, fontSize = ClassHUD:FetchFont(ClassHUD.db.profile.fontSize)
 
   -- CHARGES / STACKS: øverst (samme som spells)
   f.count = f.overlay:CreateFontString(nil, "OVERLAY")
@@ -701,7 +701,7 @@ local function CreateBuffFrame(buffID)
   f.cooldownText = f.overlay:CreateFontString(nil, "OVERLAY")
   f.cooldownText:ClearAllPoints()
   f.cooldownText:SetPoint("BOTTOM", f, "BOTTOM", 0, 2)
-  local cooldownFontPath, cooldownFontSize = ClassHUD:FetchFont(12)
+  local cooldownFontPath, cooldownFontSize = ClassHUD:FetchFont(ClassHUD.db.profile.fontSize)
   f.cooldownText:SetFont(cooldownFontPath, cooldownFontSize, "OUTLINE")
   f.cooldownText:SetJustifyH("CENTER")
   f.cooldownText:SetJustifyV("MIDDLE")
@@ -1489,9 +1489,10 @@ local function UpdateSpellFrame(frame)
   end
   frame._auraUnitList = auraUnits
 
-  local linkedBuffIDs = ClassHUD:GetLinkedBuffIDsForSpell(sid, frame._linkedBuffIDs)
+  local linkedBuffIDs, linkedBuffMeta = ClassHUD:GetLinkedBuffIDsForSpell(sid, frame._linkedBuffIDs, frame._linkedBuffMeta)
   if frame then
     frame._linkedBuffIDs = linkedBuffIDs
+    frame._linkedBuffMeta = linkedBuffMeta
   end
 
   local watcherCandidates = auraCandidates
@@ -1581,6 +1582,7 @@ local function UpdateSpellFrame(frame)
     iconID = info and info.iconID
   end
   iconID = iconID or 134400
+  local baseIconID = iconID
   if cache.iconID ~= iconID then
     frame.icon:SetTexture(iconID)
     cache.iconID = iconID
@@ -2056,6 +2058,15 @@ local function UpdateSpellFrame(frame)
   end
 
   ClassHUD:EvaluateBuffLinks(frame, sid)
+
+  local overrideIconID = frame._linkedBuffSwapIconID
+  if overrideIconID and overrideIconID ~= cache.iconID then
+    frame.icon:SetTexture(overrideIconID)
+    cache.iconID = overrideIconID
+  elseif (not overrideIconID) and cache.iconID ~= baseIconID then
+    frame.icon:SetTexture(baseIconID)
+    cache.iconID = baseIconID
+  end
 end
 
 -- ==================================================
@@ -2497,15 +2508,15 @@ function ClassHUD:BuildFramesForSpec()
             if spellName and string.find(desc, spellName, 1, true) then
               self.trackedBuffToSpell[buffID] = spellID
 
-              local set = specLinks[buffID]
-              if set == nil or (type(set) == "table" and next(set) == nil) then
-                set = set or {}
-                specLinks[buffID] = set
-                set[spellID] = true
+              local linkEntry = specLinks[buffID]
+              if type(linkEntry) ~= "table" or not linkEntry.spells then
+                linkEntry = { spells = {}, perSpell = {} }
+                specLinks[buffID] = linkEntry
               end
-              break
+              linkEntry.spells[spellID] = true
+                break
+              end
             end
-          end
         end
       end
     end

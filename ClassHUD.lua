@@ -149,7 +149,7 @@ ClassHUD._auraFlushTimer = ClassHUD._auraFlushTimer or nil
 local BUFF_LINK_HELPFUL_UNITS = { "player", "pet" }
 local BUFF_LINK_HARMFUL_UNITS = { "target", "focus", "mouseover" }
 
----Normalizes a spec's buff link table so each buff maps to a set of spell IDs.
+---Normalizes a spec's buff link table so each buff maps to spell metadata.
 ---@param specLinks table|nil
 ---@return table|nil
 function ClassHUD:NormalizeBuffLinkTable(specLinks)
@@ -162,25 +162,64 @@ function ClassHUD:NormalizeBuffLinkTable(specLinks)
   for buffKey, value in pairs(specLinks) do
     local buffID = tonumber(buffKey) or buffKey
     if buffID then
-      local spellSet = normalized[buffID]
-      if not spellSet then
-        spellSet = {}
-        normalized[buffID] = spellSet
+      local entry = normalized[buffID]
+      if not entry then
+        entry = { spells = {}, perSpell = {} }
+        normalized[buffID] = entry
       end
 
+      local spells = entry.spells
+      local perSpell = entry.perSpell
+
       if type(value) == "table" then
-        for spellKey, enabled in pairs(value) do
-          if enabled then
+        local sourceSpells = value.spells
+        local sourcePerSpell = value.perSpell
+
+        if type(sourceSpells) == "table" then
+          for spellKey, enabled in pairs(sourceSpells) do
+            if enabled then
+              local spellID = tonumber(spellKey) or spellKey
+              if spellID then
+                spells[spellID] = true
+              end
+            end
+          end
+        end
+
+        if type(sourcePerSpell) == "table" then
+          for spellKey, config in pairs(sourcePerSpell) do
             local spellID = tonumber(spellKey) or spellKey
             if spellID then
-              spellSet[spellID] = true
+              local target = perSpell[spellID]
+              if type(config) == "table" then
+                target = target or {}
+                if type(config.order) == "number" then
+                  target.order = math.floor(config.order + 0.5)
+                end
+                if config.swapIcon ~= nil then
+                  target.swapIcon = config.swapIcon == true
+                end
+                perSpell[spellID] = target
+              elseif config == true then
+                target = target or {}
+                perSpell[spellID] = target
+              end
+            end
+          end
+        end
+
+        for spellKey, enabled in pairs(value) do
+          if spellKey ~= "spells" and spellKey ~= "perSpell" and enabled then
+            local spellID = tonumber(spellKey) or spellKey
+            if spellID then
+              spells[spellID] = true
             end
           end
         end
       else
         local spellID = tonumber(value) or value
         if spellID then
-          spellSet[spellID] = true
+          spells[spellID] = true
         end
       end
     end
@@ -188,9 +227,17 @@ function ClassHUD:NormalizeBuffLinkTable(specLinks)
 
   wipe(specLinks)
 
-  for buffID, spellSet in pairs(normalized) do
-    if next(spellSet) then
-      specLinks[buffID] = spellSet
+  for buffID, entry in pairs(normalized) do
+    local spells = entry.spells
+    if type(spells) == "table" then
+      for spellID in pairs(entry.perSpell) do
+        if not spells[spellID] then
+          entry.perSpell[spellID] = nil
+        end
+      end
+      if next(spells) then
+        specLinks[buffID] = entry
+      end
     end
   end
 
@@ -200,8 +247,9 @@ end
 ---Collects all buff spell IDs linked to the provided spell for the current spec.
 ---@param spellID number
 ---@param reuse table|nil Optional table to reuse for output
----@return table list
-function ClassHUD:GetLinkedBuffIDsForSpell(spellID, reuse)
+---@param reuseMeta table|nil Optional table to reuse for metadata output
+---@return table list, table meta
+function ClassHUD:GetLinkedBuffIDsForSpell(spellID, reuse, reuseMeta)
   local list = reuse
   if type(list) ~= "table" then
     list = {}
@@ -209,57 +257,106 @@ function ClassHUD:GetLinkedBuffIDsForSpell(spellID, reuse)
     wipe(list)
   end
 
+  local meta = reuseMeta
+  if type(meta) ~= "table" then
+    meta = { _ordered = {} }
+  else
+    for key in pairs(meta) do
+      if key ~= "_ordered" then
+        meta[key] = nil
+      end
+    end
+    if type(meta._ordered) == "table" then
+      wipe(meta._ordered)
+    else
+      meta._ordered = {}
+    end
+  end
+
   if not spellID then
-    return list
+    return list, meta
   end
 
   local db = self.db
   local profile = db and db.profile
   if not profile then
-    return list
+    return list, meta
   end
 
   local class, specID = self:GetPlayerClassSpec()
   if not class or not specID or specID == 0 then
-    return list
+    return list, meta
   end
 
   local tracking = profile.tracking
   local linkRoot = tracking and tracking.buffs and tracking.buffs.links
   local specLinks = linkRoot and linkRoot[class] and linkRoot[class][specID]
   if type(specLinks) ~= "table" then
-    return list
+    return list, meta
   end
 
   self:NormalizeBuffLinkTable(specLinks)
 
   local normalizedSpellID = tonumber(spellID) or spellID
   if not normalizedSpellID then
-    return list
+    return list, meta
   end
 
-  for buffKey, spellSet in pairs(specLinks) do
-    if type(spellSet) == "table" then
-      local hasLink = spellSet[normalizedSpellID]
-      if not hasLink then
-        local altKey = tostring(normalizedSpellID)
-        if spellSet[altKey] then
-          spellSet[normalizedSpellID] = true
-          spellSet[altKey] = nil
+  local ordered = meta._ordered
+
+  for buffID, entry in pairs(specLinks) do
+    if type(entry) == "table" then
+      local spells = entry.spells
+      if type(spells) == "table" then
+        local hasLink = spells[normalizedSpellID]
+        if not hasLink and spells[tostring(normalizedSpellID)] then
+          spells[normalizedSpellID] = true
+          spells[tostring(normalizedSpellID)] = nil
           hasLink = true
         end
-      end
 
-      if hasLink then
-        local buffID = tonumber(buffKey) or buffKey
-        if buffID then
-          list[#list + 1] = buffID
+        if hasLink then
+          local config = nil
+          if type(entry.perSpell) == "table" then
+            config = entry.perSpell[normalizedSpellID] or entry.perSpell[tostring(normalizedSpellID)]
+          end
+
+          local item = ordered[#ordered + 1]
+          if not item then
+            item = {}
+            ordered[#ordered + 1] = item
+          end
+
+          item.buffID = buffID
+          local orderValue = config and tonumber(config.order)
+          if orderValue then
+            orderValue = math.max(1, math.min(50, math.floor(orderValue + 0.5)))
+          else
+            orderValue = 0
+          end
+          item.order = orderValue
+          item.swapIcon = config and config.swapIcon == true
         end
       end
     end
   end
 
-  return list
+  table.sort(ordered, function(a, b)
+    if a.order ~= b.order then
+      return a.order < b.order
+    end
+    local aID = tonumber(a.buffID) or a.buffID
+    local bID = tonumber(b.buffID) or b.buffID
+    return aID < bID
+  end)
+
+  for index = 1, #ordered do
+    local item = ordered[index]
+    list[index] = item.buffID
+    meta[item.buffID] = item
+  end
+
+  return list, meta
 end
 
 local function RestoreBuffLinkCount(frame)
@@ -304,9 +401,11 @@ end
 ---@param spellID number
 ---@return boolean active, number|nil charges, table linkedBuffIDs
 function ClassHUD:EvaluateBuffLinks(frame, spellID)
-  local list = self:GetLinkedBuffIDsForSpell(spellID, frame and frame._linkedBuffIDs)
+  local list, meta = self:GetLinkedBuffIDsForSpell(spellID, frame and frame._linkedBuffIDs, frame and frame._linkedBuffMeta)
   if frame then
     frame._linkedBuffIDs = list
+    frame._linkedBuffMeta = meta
+    frame._linkedBuffSwapIconID = nil
   end
 
   local cache
@@ -334,6 +433,8 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
   local anyActive = false
   local highestCount = nil
 
+  local swapIconID = nil
+
   for i = 1, #list do
     local buffID = list[i]
     local isHarmful = false
@@ -355,6 +456,17 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
       if stackCount and stackCount > 0 then
         if not highestCount or stackCount > highestCount then
           highestCount = stackCount
+        end
+      end
+
+      if not swapIconID then
+        local info = meta and meta[buffID]
+        if info and info.swapIcon then
+          swapIconID = aura.icon
+          if not swapIconID and C_Spell and C_Spell.GetSpellInfo then
+            local spellInfo = C_Spell.GetSpellInfo(buffID)
+            swapIconID = spellInfo and spellInfo.iconID or swapIconID
+          end
         end
       end
     end
@@ -393,6 +505,10 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
   if not anyActive then
     frame._linkedBuffRestoreText = nil
     frame._linkedBuffRestoreShown = nil
+  end
+
+  if frame then
+    frame._linkedBuffSwapIconID = swapIconID
   end
 
   return anyActive, highestCount, list
@@ -957,8 +1073,7 @@ local defaults = {
       showGCD     = false,
       timerStyle  = "Blizzard",
     },
-    spellFontSize = 12,
-    buffFontSize  = 12,
+    fontSize      = 12,
     soundAlerts   = {
       enabled = false,
     },
@@ -977,6 +1092,251 @@ local function CopyTableRecursive(tbl)
     end
   end
   return copy
+end
+
+local SERIAL_PREFIX = "CHUD1"
+local TYPE_ORDER = {
+  boolean = 1,
+  number  = 2,
+  string  = 3,
+}
+
+local function SortKeys(tbl)
+  local keys = {}
+  for k in pairs(tbl) do
+    keys[#keys + 1] = k
+  end
+
+  table.sort(keys, function(a, b)
+    local ta, tb = type(a), type(b)
+    if ta == tb then
+      if ta == "number" or ta == "string" then
+        return a < b
+      end
+      if ta == "boolean" then
+        return (a and 1 or 0) < (b and 1 or 0)
+      end
+      return tostring(a) < tostring(b)
+    end
+
+    local wa = TYPE_ORDER[ta] or 10
+    local wb = TYPE_ORDER[tb] or 10
+    if wa ~= wb then
+      return wa < wb
+    end
+    return tostring(ta) < tostring(tb)
+  end)
+
+  return keys
+end
+
+local function EscapeString(value)
+  value = tostring(value or "")
+  value = value:gsub("~", "~~")
+  value = value:gsub("%^", "~^")
+  return value
+end
+
+local function SerializeValue(value, buffer, visited)
+  local t = type(value)
+
+  if t == "table" then
+    if visited[value] then
+      error("Cannot serialize profile table with recursive references", 0)
+    end
+    visited[value] = true
+    buffer[#buffer + 1] = "^T"
+    local keys = SortKeys(value)
+    for _, key in ipairs(keys) do
+      SerializeValue(key, buffer, visited)
+      SerializeValue(value[key], buffer, visited)
+    end
+    buffer[#buffer + 1] = "^t"
+    visited[value] = nil
+  elseif t == "string" then
+    buffer[#buffer + 1] = "^S"
+    buffer[#buffer + 1] = EscapeString(value)
+    buffer[#buffer + 1] = "^s"
+  elseif t == "number" then
+    buffer[#buffer + 1] = "^N"
+    buffer[#buffer + 1] = string.format("%.17g", value)
+    buffer[#buffer + 1] = "^n"
+  elseif t == "boolean" then
+    buffer[#buffer + 1] = value and "^B" or "^b"
+  elseif t == "nil" then
+    buffer[#buffer + 1] = "^Z"
+  else
+    error("Unsupported value type in profile: " .. t, 0)
+  end
+end
+
+local function DeserializeValue(data, index)
+  if index > #data then
+    return nil, index, "Unexpected end of data"
+  end
+
+  if data:sub(index, index) ~= "^" then
+    return nil, index, "Invalid control sequence"
+  end
+
+  local code = data:sub(index + 1, index + 1)
+  index = index + 2
+
+  if code == "T" then
+    local tbl = {}
+    while index <= #data do
+      if data:sub(index, index) == "^" and data:sub(index + 1, index + 1) == "t" then
+        index = index + 2
+        break
+      end
+
+      local key, err
+      key, index, err = DeserializeValue(data, index)
+      if err then
+        return nil, index, err
+      end
+
+      local value
+      value, index, err = DeserializeValue(data, index)
+      if err then
+        return nil, index, err
+      end
+
+      tbl[key] = value
+    end
+    return tbl, index
+  elseif code == "S" then
+    local buffer = {}
+    while true do
+      if index > #data then
+        return nil, index, "Unterminated string value"
+      end
+      local ch = data:sub(index, index)
+      if ch == "~" then
+        local nextChar = data:sub(index + 1, index + 1)
+        if nextChar == "" then
+          return nil, index, "Bad escape sequence"
+        end
+        buffer[#buffer + 1] = nextChar
+        index = index + 2
+      elseif ch == "^" and data:sub(index + 1, index + 1) == "s" then
+        index = index + 2
+        break
+      else
+        buffer[#buffer + 1] = ch
+        index = index + 1
+      end
+    end
+    return table.concat(buffer), index
+  elseif code == "N" then
+    local endPos = data:find("%^n", index, true)
+    if not endPos then
+      return nil, index, "Unterminated number value"
+    end
+    local numStr = data:sub(index, endPos - 1)
+    local value = tonumber(numStr)
+    if not value then
+      return nil, endPos + 2, "Invalid number value"
+    end
+    index = endPos + 2
+    return value, index
+  elseif code == "B" then
+    return true, index
+  elseif code == "b" then
+    return false, index
+  elseif code == "Z" then
+    return nil, index
+  elseif code == "t" then
+    return nil, index, "Unexpected table terminator"
+  else
+    return nil, index, "Unknown control code '" .. tostring(code) .. "'"
+  end
+end
+
+local function OverwriteTable(target, source)
+  for k in pairs(target) do
+    target[k] = nil
+  end
+  for k, v in pairs(source) do
+    if type(v) == "table" then
+      target[k] = CopyTableRecursive(v)
+    else
+      target[k] = v
+    end
+  end
+end
+
+function ClassHUD:SerializeCurrentProfile()
+  if not (self.db and self.db.profile) then
+    return nil, "No active profile"
+  end
+
+  local buffer = { SERIAL_PREFIX }
+  local visited = {}
+  local ok, err = pcall(SerializeValue, self.db.profile, buffer, visited)
+  if not ok then
+    return nil, err or "Failed to serialize profile"
+  end
+
+  return table.concat(buffer)
+end
+
+function ClassHUD:DeserializeProfileString(serialized)
+  if type(serialized) ~= "string" or serialized == "" then
+    return false, "Invalid profile string"
+  end
+
+  if serialized:sub(1, #SERIAL_PREFIX) ~= SERIAL_PREFIX then
+    return false, "Unrecognized profile format"
+  end
+
+  local payload = serialized:sub(#SERIAL_PREFIX + 1)
+  local profileTable, index, err = DeserializeValue(payload, 1)
+  if err then
+    return false, err
+  end
+
+  if index <= #payload then
+    local remainder = payload:sub(index)
+    if remainder:match("%S") then
+      return false, "Extra data at end of profile string"
+    end
+  end
+
+  if type(profileTable) ~= "table" then
+    return false, "Profile payload is not a table"
+  end
+
+  if not (self.db and self.db.GetCurrentProfile) then
+    return false, "Database not initialized"
+  end
+
+  local currentProfile = self.db:GetCurrentProfile()
+  if not currentProfile or currentProfile == "" then
+    return false, "No active profile"
+  end
+
+  self.db.profiles = self.db.profiles or {}
+  local storage = self.db.profiles[currentProfile]
+  if type(storage) ~= "table" then
+    storage = {}
+    self.db.profiles[currentProfile] = storage
+  end
+
+  OverwriteTable(storage, profileTable)
+  self.db.profile = storage
+
+  if self.ApplyAnchorPosition then self:ApplyAnchorPosition() end
+  if self.FullUpdate then self:FullUpdate() end
+  if self.BuildFramesForSpec then self:BuildFramesForSpec() end
+  if self.EvaluateClassBarVisibility then self:EvaluateClassBarVisibility() end
+
+  local registry = LibStub("AceConfigRegistry-3.0", true)
+  if registry then
+    registry:NotifyChange("ClassHUD")
+  end
+
+  return true
 end
 
 
@@ -1344,7 +1704,8 @@ end
 
 function ClassHUD:FetchFont(size, flags)
   local path = self.LSM:Fetch("font", self.db.profile.textures.font) or STANDARD_TEXT_FONT
-  return path, size, flags or "OUTLINE"
+  local resolvedSize = size or (self.db and self.db.profile and self.db.profile.fontSize) or 12
+  return path, resolvedSize, flags or "OUTLINE"
 end
 
 function ClassHUD:GetActiveSpecProfileName()
@@ -1435,7 +1796,7 @@ function ClassHUD:CreateStatusBar(parent, height, withBorder)
 
   bar.text = bar:CreateFontString(nil, "OVERLAY")
   bar.text:SetPoint("CENTER")
-  bar.text:SetFont(self:FetchFont(12))
+  bar.text:SetFont(self:FetchFont())
 
   bar._holder = holder
   bar._edge   = edge
