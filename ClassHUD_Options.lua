@@ -867,8 +867,41 @@ local function PopulatePlacementSpellGroups(addon, container, state, placementKe
 
   if placementKey == "TOP" and snapshot then
     local sorted = SortEntries(snapshot, "essential")
+    local utilityList = EnsureUtilitySpellList(addon, class, specID)
+
+    local function isInList(list, target)
+      if type(list) ~= "table" then return false end
+      for i = 1, #list do
+        if (tonumber(list[i]) or list[i]) == target then
+          return true
+        end
+      end
+      return false
+    end
+
+    local function isAssignedElsewhere(spellID)
+      local normalized = tonumber(spellID) or spellID
+      if not normalized then return true end
+
+      for placement, list in pairs(lists) do
+        if placement ~= "TOP" and placement ~= "HIDDEN" then
+          if isInList(list, normalized) then
+            return true
+          end
+        end
+      end
+
+      if isInList(utilityList, normalized) then
+        return true
+      end
+
+      return isInList(lists.HIDDEN, normalized)
+    end
+
     for _, info in ipairs(sorted) do
-      addSpell(info.spellID)
+      if not isAssignedElsewhere(info.spellID) then
+        addSpell(info.spellID)
+      end
     end
   end
 end
