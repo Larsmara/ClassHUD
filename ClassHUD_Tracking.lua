@@ -1043,7 +1043,7 @@ function ClassHUD:MarkTotemFrameForUpdate(frame)
   if not frame then return end
 
   local state = frame._activeTotemState
-  if not self:IsTotemDurationTextEnabled() or not HasTotemDuration(state) then
+  if not self:IsTotemDurationTextEnabled() or not self:HasTotemDuration(state) then
     self:UnmarkTotemFrame(frame)
     return
   end
@@ -1105,7 +1105,7 @@ function ClassHUD:FlushTotemChanges()
   local keepTicker = false
   for frame in pairs(bucket) do
     local state = frame and frame._activeTotemState
-    if frame and HasTotemDuration(state) then
+    if frame and self:HasTotemDuration(state) then
       local remaining = state.expiration - now
       if remaining and remaining > 0 then
         keepTicker = true
@@ -1193,7 +1193,7 @@ function ClassHUD:ApplyTotemOverlay(state)
   frame._totemSlot = state.slot
   frame._activeTotemState = state
 
-  if self:IsTotemDurationTextEnabled() and HasTotemDuration(state) then
+  if self:IsTotemDurationTextEnabled() and self:HasTotemDuration(state) then
     local now = GetTime()
     local remaining = state.expiration - now
     if remaining and remaining > 0 then
