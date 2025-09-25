@@ -272,10 +272,12 @@ local CATEGORY_PRIORITY = { "bar", "buff", "essential", "utility" }
 function ClassHUD:GetAuraForSpell(spellID, units)
   if not C_UnitAuras then return nil end
 
+  local normalizedSpellID = self:GetActiveSpellID(spellID) or spellID
+
   units = units or DEFAULT_AURA_UNITS
 
   if C_UnitAuras.GetPlayerAuraBySpellID then
-    local aura = C_UnitAuras.GetPlayerAuraBySpellID(spellID)
+    local aura = C_UnitAuras.GetPlayerAuraBySpellID(normalizedSpellID)
     if aura then return aura, "player" end
   end
 
@@ -283,7 +285,7 @@ function ClassHUD:GetAuraForSpell(spellID, units)
     for i = 1, #units do
       local unit = units[i]
       if unit ~= "player" and UnitExists(unit) then
-        local aura = C_UnitAuras.GetAuraDataBySpellID(unit, spellID)
+        local aura = C_UnitAuras.GetAuraDataBySpellID(unit, normalizedSpellID)
         if aura and (aura.isFromPlayer or aura.sourceUnit == "player" or aura.sourceUnit == "pet") then
           return aura, unit
         end
@@ -427,11 +429,12 @@ end
 ---@return boolean tracksAura, boolean auraActive
 function ClassHUD:IsHarmfulAuraSpell(spellID, entry)
   if not (C_Spell and C_Spell.IsSpellHarmful) then return false, false end
-  if not C_Spell.IsSpellHarmful(spellID) then return false, false end
+  local normalizedSpellID = self:GetActiveSpellID(spellID) or spellID
+  if not C_Spell.IsSpellHarmful(normalizedSpellID) then return false, false end
 
   -- Case 1: snapshot sier dette er en buff/debuff (klassisk DoT)
   if entry and entry.categories and entry.categories.buff then
-    local candidates = self:GetAuraCandidatesForEntry(entry, spellID)
+    local candidates = self:GetAuraCandidatesForEntry(entry, normalizedSpellID)
     local aura = self:FindAuraFromCandidates(candidates, { "target", "focus" })
     if aura and aura.expirationTime and aura.expirationTime > 0 then
       return true, true
@@ -443,7 +446,7 @@ function ClassHUD:IsHarmfulAuraSpell(spellID, entry)
   -- Case 2: spell er lagt inn manuelt (ingen snapshot-entry)
   -- Her antar vi at brukeren vil tracke det som en aura på target
   if not entry then
-    local info = C_Spell.GetSpellInfo(spellID)
+    local info = C_Spell.GetSpellInfo(normalizedSpellID)
     if info then
       local aura = C_UnitAuras.GetAuraDataBySpellName("target", info.name, "HARMFUL")
           or C_UnitAuras.GetAuraDataBySpellName("focus", info.name, "HARMFUL")
@@ -459,7 +462,8 @@ function ClassHUD:IsHarmfulAuraSpell(spellID, entry)
 end
 
 function ClassHUD:FindAuraByName(castSpellID, units)
-  local info = C_Spell.GetSpellInfo(castSpellID)
+  local normalizedSpellID = self:GetActiveSpellID(castSpellID) or castSpellID
+  local info = C_Spell.GetSpellInfo(normalizedSpellID)
   if not info or not info.name then return nil end
   local spellName = info.name
 
@@ -481,8 +485,9 @@ end
 
 function ClassHUD:LacksResources(spellID)
   -- Både gamle og nye API-navn støttes
-  local costs = (C_Spell and C_Spell.GetSpellPowerCost and C_Spell.GetSpellPowerCost(spellID))
-      or (GetSpellPowerCost and GetSpellPowerCost(spellID))
+  local normalizedSpellID = self:GetActiveSpellID(spellID) or spellID
+  local costs = (C_Spell and C_Spell.GetSpellPowerCost and C_Spell.GetSpellPowerCost(normalizedSpellID))
+      or (GetSpellPowerCost and GetSpellPowerCost(normalizedSpellID))
 
   if type(costs) ~= "table" then return false end
 

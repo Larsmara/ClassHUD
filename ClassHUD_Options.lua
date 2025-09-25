@@ -8,15 +8,16 @@ local ACR = LibStub("AceConfigRegistry-3.0", true)
 local LSM = LibStub("LibSharedMedia-3.0", true)
 
 local function GetSpellInfoSafe(spellID)
+  local normalizedSpellID = (ClassHUD and ClassHUD.GetActiveSpellID and ClassHUD:GetActiveSpellID(spellID)) or spellID
   if C_Spell and C_Spell.GetSpellInfo then
-    local info = C_Spell.GetSpellInfo(spellID)
+    local info = C_Spell.GetSpellInfo(normalizedSpellID)
     if info then
       return info
     end
   end
 
   if type(GetSpellInfo) == "function" then
-    local name, _, icon = GetSpellInfo(spellID)
+    local name, _, icon = GetSpellInfo(normalizedSpellID)
     if name or icon then
       return { name = name, iconID = icon }
     end

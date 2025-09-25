@@ -45,6 +45,36 @@ function ClassHUD:GetNpcIDFromGUID(guid)
   return GetNpcIDFromGUID(guid)
 end
 
+---Resolves the active spellID for the provided spell by checking base and override mappings.
+---@param spellID number|string|nil
+---@return number|nil
+function ClassHUD:GetActiveSpellID(spellID)
+  if spellID == nil then
+    return nil
+  end
+
+  local numericID = tonumber(spellID) or spellID
+  if not numericID then
+    return nil
+  end
+
+  if FindBaseSpellByID then
+    local ok, baseID = pcall(FindBaseSpellByID, numericID)
+    if ok and baseID and baseID > 0 then
+      numericID = baseID
+    end
+  end
+
+  if FindSpellOverrideByID then
+    local ok, overrideID = pcall(FindSpellOverrideByID, numericID)
+    if ok and overrideID and overrideID > 0 then
+      numericID = overrideID
+    end
+  end
+
+  return numericID
+end
+
 local function FormatLogValue(value)
   if value == nil or value == "" then
     return "-"
@@ -437,9 +467,10 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
 
   for i = 1, #list do
     local buffID = list[i]
+    local normalizedBuffID = self:GetActiveSpellID(buffID) or buffID
     local isHarmful = false
     if C_Spell and C_Spell.IsSpellHarmful then
-      local ok, harmfulFlag = pcall(C_Spell.IsSpellHarmful, buffID)
+      local ok, harmfulFlag = pcall(C_Spell.IsSpellHarmful, normalizedBuffID)
       if ok and harmfulFlag then
         isHarmful = true
       end
@@ -464,7 +495,7 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
         if info and info.swapIcon then
           swapIconID = aura.icon
           if not swapIconID and C_Spell and C_Spell.GetSpellInfo then
-            local spellInfo = C_Spell.GetSpellInfo(buffID)
+            local spellInfo = C_Spell.GetSpellInfo(normalizedBuffID)
             swapIconID = spellInfo and spellInfo.iconID or swapIconID
           end
         end
@@ -1854,8 +1885,9 @@ function ClassHUD:UpdateCDMSnapshot()
         local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
         local sid = raw and (raw.spellID or raw.overrideSpellID or (raw.linkedSpellIDs and raw.linkedSpellIDs[1]))
         if sid then
-          local info = C_Spell.GetSpellInfo(sid)
-          local desc = C_Spell.GetSpellDescription(sid)
+          local normalizedSid = self:GetActiveSpellID(sid) or sid
+          local info = C_Spell.GetSpellInfo(normalizedSid)
+          local desc = C_Spell.GetSpellDescription(normalizedSid)
 
           local entry = snapshot[sid]
           if not entry then
@@ -2041,6 +2073,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     ClassHUD:ApplyAnchorPosition()
     local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    if ClassHUD.RefreshActiveSpellMap then ClassHUD:RefreshActiveSpellMap() end
     if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
@@ -2063,12 +2096,16 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     end
     if ClassHUD.UpdateAllFrames then ClassHUD:UpdateAllFrames() end
     if ClassHUD.RefreshSpellFrameVisibility then ClassHUD:RefreshSpellFrameVisibility() end
+    if ClassHUD.RefreshActiveSpellMap then ClassHUD:RefreshActiveSpellMap() end
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
   end
 
   if (event == "PLAYER_TALENT_UPDATE" and (unit == nil or unit == "player"))
       or event == "TRAIT_CONFIG_UPDATED" then
+    if ClassHUD.RefreshActiveSpellMap then
+      ClassHUD:RefreshActiveSpellMap()
+    end
     if ClassHUD.UpdateAllFrames then
       ClassHUD:UpdateAllFrames()
     end

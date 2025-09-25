@@ -64,8 +64,11 @@ local function UpdateWildImpIndicator(self, count)
     end
   end
 
-  if self.UpdateCooldown and self.spellFrames and self.spellFrames[IMPLOSION_SPELL_ID] then
-    self:UpdateCooldown(IMPLOSION_SPELL_ID)
+  if self.UpdateCooldown and self.GetSpellFrameForSpellID then
+    local frame = select(1, self:GetSpellFrameForSpellID(IMPLOSION_SPELL_ID))
+    if frame then
+      self:UpdateCooldown(frame.spellID)
+    end
   end
 end
 
@@ -329,7 +332,8 @@ end
 
 local function DetermineSpellDuration(spellID, fallback)
   if C_Spell and C_Spell.GetSpellInfo then
-    local info = C_Spell.GetSpellInfo(spellID)
+    local normalizedSpellID = ClassHUD:GetActiveSpellID(spellID) or spellID
+    local info = C_Spell.GetSpellInfo(normalizedSpellID)
     if info then
       if info.duration and info.duration > 0 then
         return info.duration
@@ -1013,8 +1017,11 @@ local function FindSpellFrameByName(self, name)
 
   local cache = self._spellNameToID
   local cachedID = cache and cache[name]
-  if cachedID and self.spellFrames[cachedID] then
-    return self.spellFrames[cachedID], cachedID
+  if cachedID and self.GetSpellFrameForSpellID then
+    local frame, baseID = self:GetSpellFrameForSpellID(cachedID)
+    if frame then
+      return frame, baseID or frame.spellID
+    end
   end
 
   if not cache then
@@ -1023,7 +1030,8 @@ local function FindSpellFrameByName(self, name)
   end
 
   for spellID, frame in pairs(self.spellFrames) do
-    local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(spellID)
+    local activeSpellID = self.GetActiveSpellID and self:GetActiveSpellID(spellID) or spellID
+    local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(activeSpellID)
     local spellName = info and info.name
     if spellName == name then
       cache[name] = spellID
