@@ -1653,7 +1653,7 @@ function ClassHUD_BuildOptions(addon)
     if not state or not state.hasSpells then
       return false
     end
-    return state.hasSpells.TOP or state.hasSpells.BOTTOM or state.hasSpells.LEFT or state.hasSpells.RIGHT
+    return not not state.hasSpells.TOP
   end
 
   local RefreshSpellEditors
@@ -1819,9 +1819,6 @@ function ClassHUD_BuildOptions(addon)
     end
 
     AppendPlacement(placementContainers.TOP)
-    AppendPlacement(placementContainers.BOTTOM)
-    AppendPlacement(placementContainers.LEFT)
-    AppendPlacement(placementContainers.RIGHT)
 
     MergeArgs(placementGroupArgs.TOP, placementStaticArgs.TOP, combinedPrimary)
     MergeArgs(utilityGroupArgs, utilityStaticArgs, utilityContainer)
