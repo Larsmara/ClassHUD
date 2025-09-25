@@ -7,6 +7,33 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local ACR = LibStub("AceConfigRegistry-3.0", true)
 local LSM = LibStub("LibSharedMedia-3.0", true)
 
+local function GetSpellInfoSafe(spellID)
+  if C_Spell and C_Spell.GetSpellInfo then
+    local info = C_Spell.GetSpellInfo(spellID)
+    if info then
+      return info
+    end
+  end
+
+  if type(GetSpellInfo) == "function" then
+    local name, _, icon = GetSpellInfo(spellID)
+    if name or icon then
+      return { name = name, iconID = icon }
+    end
+  end
+
+  return nil
+end
+
+local function GetSpellDisplayName(spellID)
+  local info = GetSpellInfoSafe(spellID)
+  if info and info.name and info.name ~= "" then
+    return info.name
+  end
+  local idText = spellID ~= nil and tostring(spellID) or "?"
+  return "Spell " .. idText
+end
+
 local TrimString do
   if type(strtrim) == "function" then
     TrimString = function(value)
@@ -333,9 +360,9 @@ end
 local function CreateSpellOptionGroup(addon, state, class, specID, spellID, placementKey, snapshot, lists, linkTable,
   soundValues, refreshFn)
   local entry = snapshot and snapshot[spellID]
-  local info = C_Spell.GetSpellInfo(spellID)
+  local info = GetSpellInfoSafe(spellID)
   local icon = (entry and entry.iconID) or (info and info.iconID)
-  local name = (entry and entry.name) or (info and info.name) or ("Spell " .. tostring(spellID))
+  local name = (entry and entry.name) or (info and info.name) or GetSpellDisplayName(spellID)
   local displayID = type(spellID) == "number" and spellID or tostring(spellID)
   local iconPrefix = icon and ("|T" .. icon .. ":16|t ") or ""
 
@@ -518,9 +545,9 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
     end)
 
     for _, buffID in ipairs(buffIDs) do
-      local buffInfo = C_Spell.GetSpellInfo(buffID)
+      local buffInfo = GetSpellInfoSafe(buffID)
       local buffIcon = buffInfo and buffInfo.iconID and ("|T" .. buffInfo.iconID .. ":16|t ") or ""
-      local buffName = (buffInfo and buffInfo.name) or ("Buff " .. tostring(buffID))
+      local buffName = (buffInfo and buffInfo.name) or GetSpellDisplayName(buffID)
       linkedArgs["buff" .. buffID] = {
         type = "execute",
         name = string.format("%s%s (%s)", buffIcon, buffName, tostring(buffID)),
@@ -837,11 +864,11 @@ local function PopulateTrackedBuffGroups(addon, container, state, refreshFn)
         if hasBuff and hasBuff.order then sortOrder = math.min(sortOrder, hasBuff.order) end
         if hasBar and hasBar.order then sortOrder = math.min(sortOrder, hasBar.order) end
 
-        local info = C_Spell.GetSpellInfo(spellID)
+        local info = GetSpellInfoSafe(spellID)
         entries[spellID] = {
           buffID = spellID,
           icon = entry.iconID or (info and info.iconID),
-          name = entry.name or (info and info.name) or ("Spell " .. tostring(spellID)),
+          name = entry.name or (info and info.name) or GetSpellDisplayName(spellID),
           order = sortOrder,
         }
       end
@@ -850,11 +877,11 @@ local function PopulateTrackedBuffGroups(addon, container, state, refreshFn)
 
   for buffID in pairs(tracked) do
     if not entries[buffID] then
-      local info = C_Spell.GetSpellInfo(buffID)
+      local info = GetSpellInfoSafe(buffID)
       entries[buffID] = {
         buffID = buffID,
         icon = info and info.iconID,
-        name = info and info.name or ("Spell " .. tostring(buffID)),
+        name = info and info.name or GetSpellDisplayName(buffID),
         order = math.huge,
       }
     end
@@ -862,11 +889,11 @@ local function PopulateTrackedBuffGroups(addon, container, state, refreshFn)
 
   for _, buffID in ipairs(orderList) do
     if not entries[buffID] then
-      local info = C_Spell.GetSpellInfo(buffID)
+      local info = GetSpellInfoSafe(buffID)
       entries[buffID] = {
         buffID = buffID,
         icon = info and info.iconID,
-        name = info and info.name or ("Spell " .. tostring(buffID)),
+        name = info and info.name or GetSpellDisplayName(buffID),
         order = math.huge,
       }
     end
@@ -959,8 +986,8 @@ end
 local function BuildSummonSpellArgs(addon, classConfig)
   local args = {}
   for index, spellID in ipairs(classConfig.spells) do
-    local info = C_Spell.GetSpellInfo(spellID)
-    local name = (info and info.name) or ("Spell " .. spellID)
+    local info = GetSpellInfoSafe(spellID)
+    local name = (info and info.name) or GetSpellDisplayName(spellID)
     local icon = info and info.iconID and ("|T" .. info.iconID .. ":16|t ") or ""
     args["spell" .. spellID] = {
       type = "toggle",
@@ -1226,8 +1253,8 @@ local function BuildBuffLinkArgs(addon, container)
 
   for _, map in ipairs(sorted) do
     local buffID = map.buffID
-    local buffInfo = C_Spell.GetSpellInfo(buffID)
-    local buffName = buffInfo and buffInfo.name or "Buff"
+    local buffInfo = GetSpellInfoSafe(buffID)
+    local buffName = (buffInfo and buffInfo.name) or GetSpellDisplayName(buffID)
     local buffIcon = buffInfo and buffInfo.iconID or 134400
 
     local name = string.format("|T%d:16|t %s (%s)", buffIcon, buffName, tostring(buffID))
@@ -1304,9 +1331,9 @@ local function BuildBuffLinkArgs(addon, container)
 
     local spellOrder = 10
     for _, spellID in ipairs(map.spells) do
-      local info = C_Spell.GetSpellInfo(spellID)
+      local info = GetSpellInfoSafe(spellID)
       local icon = info and info.iconID or 134400
-      local spellName = info and info.name or "Spell"
+      local spellName = info and info.name or GetSpellDisplayName(spellID)
       local displayID = tostring(spellID)
 
       args["spell" .. displayID] = {
