@@ -501,7 +501,8 @@ local function BuildTopBarSpellsEditor(addon, container)
         trackOnTarget = {
           type  = "toggle",
           name  = "Track on Target",
-          desc  = "When enabled, this spell will track its DoT/debuff on your current target. Uses the debuff state machine (cooldown, active, pandemic). If no target or the debuff is missing, the icon is shown greyed out.",
+          desc  =
+          "When enabled, this spell will track its DoT/debuff on your current target. Uses the debuff state machine (cooldown, active, pandemic). If no target or the debuff is missing, the icon is shown greyed out.",
           order = 1.5,
           width = "full",
           get   = function()
@@ -682,7 +683,6 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
   local _, linkTable = EnsureBuffTracking(addon, class, specID)
 
   local snapshot = addon:GetSnapshotForSpec(class, specID, false)
-  local entries = SortEntries(snapshot, category)
   local order = 1
   local added = {}
 
@@ -696,23 +696,21 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
 
     local iconID = entry and entry.iconID
     local name = entry and entry.name
-
     if not name then
       local info = C_Spell.GetSpellInfo(id)
       iconID = iconID or (info and info.iconID)
       name = info and info.name or ("Spell " .. key)
     end
-
     local icon = iconID and ("|T" .. iconID .. ":16|t ") or ""
 
     local linkedBuffs = {}
-    for buffID, spellSet in pairs(linkTable) do
-      if type(spellSet) == "table" and spellSet[id] then
+    for buffID, linkedSpellID in pairs(linkTable) do
+      local resolved = tonumber(linkedSpellID) or linkedSpellID
+      if resolved == id then
         local buffInfo = C_Spell.GetSpellInfo(buffID)
         linkedBuffs[#linkedBuffs + 1] = (buffInfo and buffInfo.name) or ("Buff " .. buffID)
       end
     end
-
     local linkNote
     if #linkedBuffs > 0 then
       table.sort(linkedBuffs)
@@ -747,46 +745,74 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
     order = order + 1
   end
 
+  -- ---------- SOURCE ENTRIES ----------
+  local entries = {}
+
+  if category == "utility" then
+    -- DB-driven: show ONLY what lives in layout.utility.spells for this class/spec
+    local util = addon.db.profile
+        and addon.db.profile.layout
+        and addon.db.profile.layout.utility
+        and addon.db.profile.layout.utility.spells
+        and addon.db.profile.layout.utility.spells[class]
+        and addon.db.profile.layout.utility.spells[class][specID]
+
+    if type(util) == "table" then
+      for _, spellID in ipairs(util) do
+        local resolved = tonumber(spellID) or spellID
+        entries[#entries + 1] = { spellID = resolved, entry = snapshot and snapshot[resolved] }
+      end
+    end
+  else
+    -- Keep existing behavior for non-utility categories
+    local sorted = SortEntries(snapshot, category)
+    for _, item in ipairs(sorted) do
+      entries[#entries + 1] = item
+    end
+  end
+
   for _, item in ipairs(entries) do
     addOption(item.spellID, item.entry)
   end
 
-  local placementOrder = { "TOP", "BOTTOM", "LEFT", "RIGHT", "HIDDEN" }
-  for _, placementName in ipairs(placementOrder) do
-    local list = lists[placementName]
-    if type(list) == "table" then
-      for _, spellID in ipairs(list) do
-        local resolved = tonumber(spellID) or spellID
-        local entry = snapshot and snapshot[resolved]
-        addOption(resolved, entry)
-      end
-    end
-  end
-
-  local function addLooseEntries(list)
-    if type(list) ~= "table" then return end
-    for key, value in pairs(list) do
-      local candidate
-      if type(value) == "number" or type(value) == "string" then
-        candidate = value
-      elseif type(key) == "number" or type(key) == "string" then
-        if type(value) ~= "number" and type(value) ~= "string" then
-          candidate = key
-        end
-      end
-
-      if candidate then
-        local resolved = tonumber(candidate) or candidate
-        local keyStr = tostring(resolved)
-        if not added[keyStr] then
-          addOption(resolved, snapshot and snapshot[resolved])
+  -- For the Utility tab: don't pull in spells from other placements.
+  if category ~= "utility" then
+    local placementOrder = { "TOP", "BOTTOM", "LEFT", "RIGHT", "HIDDEN" }
+    for _, placementName in ipairs(placementOrder) do
+      local list = lists[placementName]
+      if type(list) == "table" then
+        for _, spellID in ipairs(list) do
+          local resolved = tonumber(spellID) or spellID
+          local entry = snapshot and snapshot[resolved]
+          addOption(resolved, entry)
         end
       end
     end
-  end
 
-  for _, placementName in ipairs(placementOrder) do
-    addLooseEntries(lists[placementName])
+    local function addLooseEntries(list)
+      if type(list) ~= "table" then return end
+      for key, value in pairs(list) do
+        local candidate
+        if type(value) == "number" or type(value) == "string" then
+          candidate = value
+        elseif type(key) == "number" or type(key) == "string" then
+          if type(value) ~= "number" and type(value) ~= "string" then
+            candidate = key
+          end
+        end
+        if candidate then
+          local resolved = tonumber(candidate) or candidate
+          local keyStr = tostring(resolved)
+          if not added[keyStr] then
+            addOption(resolved, snapshot and snapshot[resolved])
+          end
+        end
+      end
+    end
+
+    for _, placementName in ipairs(placementOrder) do
+      addLooseEntries(lists[placementName])
+    end
   end
 
   if order == 1 then
@@ -797,7 +823,6 @@ local function BuildPlacementArgs(addon, container, category, defaultPlacement, 
     }
   end
 end
-
 local function BuildTrackedBuffArgs(addon, container)
   for k in pairs(container) do container[k] = nil end
 

@@ -189,7 +189,9 @@ local function SegmentColor(i, max, ptype, class, specID, chargedPoints)
   if ptype == Enum.PowerType.ComboPoints or ptype == Enum.PowerType.Chi or ptype == Enum.PowerType.ArcaneCharges then
     if ptype == Enum.PowerType.ComboPoints and chargedPoints then
       for _, idx in ipairs(chargedPoints) do
-        if idx == i then return unpack(CHARGED_CP_COLOR) end
+        if idx == i then
+          return unpack(CHARGED_CP_COLOR)
+        end
       end
     end
     return IndexedColor(i, max)
@@ -225,7 +227,9 @@ function ClassHUD:UpdateSegmentsAdvanced(ptype, max, partial)
   local _, class = UnitClass("player")
   local spec = GetSpecialization()
   local specID = spec and GetSpecializationInfo(spec) or 0
-  local charged = (ptype == Enum.PowerType.ComboPoints and class == "ROGUE") and GetChargedPoints() or nil
+  local charged = (ptype == Enum.PowerType.ComboPoints and (class == "ROGUE" or class == "DRUID"))
+      and GetChargedPoints()
+      or nil
   local cur = UnitPower("player", ptype, partial and true or false)
 
   local whole, frac = 0, 0
