@@ -312,6 +312,650 @@ local function SetSpellOrder(addon, class, specID, spellID, order)
   table.insert(target, index, spellID)
 end
 
+local function MergeArgs(target, staticArgs, dynamicArgs)
+  for k in pairs(target) do
+    target[k] = nil
+  end
+
+  if staticArgs then
+    for key, value in pairs(staticArgs) do
+      target[key] = value
+    end
+  end
+
+  if dynamicArgs then
+    for key, value in pairs(dynamicArgs) do
+      target[key] = value
+    end
+  end
+end
+
+local function CreateSpellOptionGroup(addon, state, class, specID, spellID, placementKey, snapshot, lists, linkTable,
+  soundValues, refreshFn)
+  local entry = snapshot and snapshot[spellID]
+  local info = C_Spell.GetSpellInfo(spellID)
+  local icon = (entry and entry.iconID) or (info and info.iconID)
+  local name = (entry and entry.name) or (info and info.name) or ("Spell " .. tostring(spellID))
+  local displayID = type(spellID) == "number" and spellID or tostring(spellID)
+  local iconPrefix = icon and ("|T" .. icon .. ":16|t ") or ""
+
+  local group = {
+    type = "group",
+    name = string.format("%s%s (%s)", iconPrefix, name, tostring(displayID)),
+    args = {},
+  }
+
+  local args = group.args
+  local spellKey = tostring(displayID)
+  local placementMemory = state.spellPlacementMemory
+  local lastPlacement = placementMemory and placementMemory[spellKey]
+
+  local function rebuild()
+    if type(refreshFn) == "function" then
+      refreshFn()
+    end
+  end
+
+  args.enabled = {
+    type = "toggle",
+    name = "Enabled",
+    order = 1,
+    width = "half",
+    get = function()
+      local placement = GetSpellPlacement(addon, class, specID, spellID)
+      return placement ~= "HIDDEN"
+    end,
+    set = function(_, value)
+      local placement, _, placementLists = GetSpellPlacement(addon, class, specID, spellID)
+      placementLists = placementLists or EnsurePlacementLists(addon, class, specID)
+      state.spellPlacementMemory = state.spellPlacementMemory or {}
+      placementMemory = state.spellPlacementMemory
+
+      if not value then
+        if placement and placement ~= "HIDDEN" then
+          placementMemory[spellKey] = placement
+        elseif not placementMemory[spellKey] then
+          placementMemory[spellKey] = placementKey
+        end
+        SetSpellPlacement(addon, class, specID, spellID, "HIDDEN")
+      else
+        local restore = placementMemory[spellKey]
+        if restore == nil or restore == "" or restore == "HIDDEN" then
+          if placementKey and placementLists[placementKey] then
+            restore = placementKey
+          elseif placementLists.TOP then
+            restore = "TOP"
+          else
+            restore = nil
+          end
+        end
+
+        RemoveSpellFromLists(placementLists, spellID)
+        if restore and restore ~= "UTILITY" and placementLists[restore] then
+          table.insert(placementLists[restore], spellID)
+        end
+      end
+
+      addon:BuildFramesForSpec()
+      rebuild()
+      NotifyOptionsChanged()
+    end,
+  }
+
+  args.placement = {
+    type = "select",
+    name = "Placement",
+    order = 1.5,
+    width = "half",
+    values = PLACEMENTS,
+    get = function()
+      local placement = GetSpellPlacement(addon, class, specID, spellID)
+      return placement or "HIDDEN"
+    end,
+    set = function(_, value)
+      if value == "HIDDEN" then
+        SetSpellPlacement(addon, class, specID, spellID, "HIDDEN")
+      else
+        SetSpellPlacement(addon, class, specID, spellID, value)
+      end
+      state.spellPlacementMemory = state.spellPlacementMemory or {}
+      state.spellPlacementMemory[spellKey] = value
+      addon:BuildFramesForSpec()
+      rebuild()
+      NotifyOptionsChanged()
+    end,
+  }
+
+  args.order = {
+    type = "range",
+    name = "Order",
+    order = 2,
+    min = 1,
+    max = 50,
+    step = 1,
+    get = function()
+      local placement, index = GetSpellPlacement(addon, class, specID, spellID)
+      return index or 1
+    end,
+    set = function(_, value)
+      SetSpellOrder(addon, class, specID, spellID, value)
+      addon:BuildFramesForSpec()
+      rebuild()
+      NotifyOptionsChanged()
+    end,
+    disabled = function()
+      local placement = GetSpellPlacement(addon, class, specID, spellID)
+      return placement == nil or placement == "HIDDEN"
+    end,
+  }
+
+  if placementKey == "TOP" then
+    args.trackOnTarget = {
+      type = "toggle",
+      name = "Track on Target",
+      order = 2.2,
+      width = "full",
+      desc =
+        "When enabled, this spell will track its DoT/debuff on your current target. Uses the debuff state machine (cooldown, active, pandemic). If no target or the debuff is missing, the icon is shown greyed out.",
+      get = function()
+        local numericID = tonumber(spellID) or spellID
+        local flagsRoot = addon:GetProfileTable(false, "layout", "topBar", "flags", class, specID)
+        local perSpell = flagsRoot and numericID and flagsRoot[numericID]
+        return perSpell and perSpell.trackOnTarget == true
+      end,
+      set = function(_, value)
+        local numericID = tonumber(spellID) or spellID
+        local flagsRoot = EnsureTopBarFlags(addon, class, specID)
+        if value then
+          flagsRoot[numericID] = flagsRoot[numericID] or {}
+          flagsRoot[numericID].trackOnTarget = true
+        else
+          local perSpell = flagsRoot[numericID]
+          if perSpell then
+            perSpell.trackOnTarget = nil
+            if next(perSpell) == nil then
+              flagsRoot[numericID] = nil
+            end
+          end
+          if next(flagsRoot) == nil then
+            local topFlags = addon.db.profile.layout.topBar.flags
+            local classFlags = topFlags and topFlags[class]
+            if classFlags then
+              classFlags[specID] = nil
+              if next(classFlags) == nil then
+                topFlags[class] = nil
+              end
+            end
+          end
+        end
+        addon:BuildFramesForSpec()
+        NotifyOptionsChanged()
+      end,
+    }
+  end
+
+  local linkedArgs = {}
+  local linkedOrder = 1
+  if linkTable and spellID then
+    local normalizedSpellID = tonumber(spellID) or spellID
+    local buffIDs = {}
+    for buffID, spellSet in pairs(linkTable) do
+      if normalizedSpellID then
+        if type(spellSet) == "table" then
+          if spellSet[normalizedSpellID] then
+            buffIDs[#buffIDs + 1] = buffID
+          end
+        else
+          local resolved = tonumber(spellSet) or spellSet
+          if resolved == normalizedSpellID then
+            buffIDs[#buffIDs + 1] = buffID
+          end
+        end
+      end
+    end
+    table.sort(buffIDs, function(a, b)
+      return (tonumber(a) or a) < (tonumber(b) or b)
+    end)
+
+    for _, buffID in ipairs(buffIDs) do
+      local buffInfo = C_Spell.GetSpellInfo(buffID)
+      local buffIcon = buffInfo and buffInfo.iconID and ("|T" .. buffInfo.iconID .. ":16|t ") or ""
+      local buffName = (buffInfo and buffInfo.name) or ("Buff " .. tostring(buffID))
+      linkedArgs["buff" .. buffID] = {
+        type = "execute",
+        name = string.format("%s%s (%s)", buffIcon, buffName, tostring(buffID)),
+        desc = "Click to remove this link",
+        order = linkedOrder,
+        func = function()
+          local set = linkTable[buffID]
+          if type(set) == "table" then
+            set[normalizedSpellID] = nil
+            if not next(set) then
+              linkTable[buffID] = nil
+            end
+          end
+          addon:BuildFramesForSpec()
+          rebuild()
+          NotifyOptionsChanged()
+        end,
+      }
+      linkedOrder = linkedOrder + 1
+    end
+  end
+
+  if linkedOrder == 1 then
+    linkedArgs.none = {
+      type = "description",
+      name = "No linked buffs yet.",
+      order = linkedOrder,
+    }
+  end
+
+  args.addBuff = {
+    type = "input",
+    name = "Add Buff ID",
+    order = 2.4,
+    width = "half",
+    get = function()
+      return ""
+    end,
+    set = function(_, value)
+      local buffID = tonumber(value)
+      if not buffID then return end
+      local normalized = tonumber(spellID) or spellID
+      if not normalized then return end
+      local set = linkTable[buffID]
+      if type(set) ~= "table" then
+        local previous = tonumber(set) or set
+        set = {}
+        if previous then
+          set[previous] = true
+        end
+        linkTable[buffID] = set
+      end
+      set[normalized] = true
+      addon:BuildFramesForSpec()
+      rebuild()
+      NotifyOptionsChanged()
+    end,
+  }
+
+  args.linked = {
+    type = "group",
+    name = "Linked Buffs",
+    order = 2.6,
+    inline = true,
+    args = linkedArgs,
+  }
+
+  args.sounds = {
+    type = "group",
+    name = "Sound Alerts",
+    order = 3,
+    inline = true,
+    args = {
+      ready = {
+        type = "select",
+        name = "Ready",
+        order = 1,
+        width = "full",
+        dialogControl = "LSM30_Sound",
+        values = soundValues,
+        get = function()
+          local conf = EnsureSoundConfig(addon, class, specID)
+          local per = conf[spellID]
+          return (per and per.onReady) or SOUND_NONE
+        end,
+        set = function(_, value)
+          local conf = EnsureSoundConfig(addon, class, specID)
+          conf[spellID] = conf[spellID] or {}
+          if value == SOUND_NONE then
+            conf[spellID].onReady = nil
+          else
+            conf[spellID].onReady = value
+          end
+          addon:UpdateAllSpellFrames()
+          NotifyOptionsChanged()
+        end,
+      },
+      applied = {
+        type = "select",
+        name = "Applied",
+        order = 2,
+        width = "full",
+        dialogControl = "LSM30_Sound",
+        values = soundValues,
+        get = function()
+          local conf = EnsureSoundConfig(addon, class, specID)
+          local per = conf[spellID]
+          return (per and per.onApplied) or SOUND_NONE
+        end,
+        set = function(_, value)
+          local conf = EnsureSoundConfig(addon, class, specID)
+          conf[spellID] = conf[spellID] or {}
+          if value == SOUND_NONE then
+            conf[spellID].onApplied = nil
+          else
+            conf[spellID].onApplied = value
+          end
+          addon:UpdateAllSpellFrames()
+          NotifyOptionsChanged()
+        end,
+      },
+      removed = {
+        type = "select",
+        name = "Removed",
+        order = 3,
+        width = "full",
+        dialogControl = "LSM30_Sound",
+        values = soundValues,
+        get = function()
+          local conf = EnsureSoundConfig(addon, class, specID)
+          local per = conf[spellID]
+          return (per and per.onRemoved) or SOUND_NONE
+        end,
+        set = function(_, value)
+          local conf = EnsureSoundConfig(addon, class, specID)
+          conf[spellID] = conf[spellID] or {}
+          if value == SOUND_NONE then
+            conf[spellID].onRemoved = nil
+          else
+            conf[spellID].onRemoved = value
+          end
+          addon:UpdateAllSpellFrames()
+          NotifyOptionsChanged()
+        end,
+      },
+    },
+  }
+
+  args.removeSpell = {
+    type = "execute",
+    name = "Remove Spell",
+    confirm = true,
+    order = 99,
+    func = function()
+      local placementLists = EnsurePlacementLists(addon, class, specID)
+      RemoveSpellFromLists(placementLists, spellID)
+      local hidden = placementLists.HIDDEN
+      if type(hidden) == "table" then
+        hidden[#hidden + 1] = spellID
+      end
+      for buffID, linkedSpellID in pairs(linkTable) do
+        if type(linkedSpellID) == "table" then
+          linkedSpellID[spellID] = nil
+          if not next(linkedSpellID) then
+            linkTable[buffID] = nil
+          end
+        else
+          local resolved = tonumber(linkedSpellID) or linkedSpellID
+          if resolved == spellID then
+            linkTable[buffID] = nil
+          end
+        end
+      end
+      addon:BuildFramesForSpec()
+      rebuild()
+      NotifyOptionsChanged()
+    end,
+  }
+
+  return group
+end
+
+local function PopulatePlacementSpellGroups(addon, container, state, placementKey, refreshFn)
+  for key in pairs(container) do
+    container[key] = nil
+  end
+
+  state.hasSpells = state.hasSpells or {}
+  state.hasSpells[placementKey] = false
+
+  local class, specID = addon:GetPlayerClassSpec()
+  local snapshot = addon:GetSnapshotForSpec(class, specID, false)
+  local lists = EnsurePlacementLists(addon, class, specID)
+  local _, linkTable = EnsureBuffTracking(addon, class, specID)
+  local soundValues = BuildSoundDropdownValues()
+
+  local added = {}
+  local order = 1
+
+  local function addSpell(spellID)
+    local normalized = tonumber(spellID) or spellID
+    if not normalized then return end
+    local key = tostring(normalized)
+    if added[key] then return end
+
+    local group = CreateSpellOptionGroup(addon, state, class, specID, normalized, placementKey, snapshot, lists,
+      linkTable, soundValues, refreshFn)
+    group.order = order
+    container["spell" .. key] = group
+    added[key] = true
+    order = order + 1
+    state.hasSpells[placementKey] = true
+  end
+
+  local placementList = lists[placementKey]
+  if type(placementList) == "table" then
+    for _, spellID in ipairs(placementList) do
+      addSpell(spellID)
+    end
+  end
+
+  if placementKey == "TOP" and snapshot then
+    local sorted = SortEntries(snapshot, "essential")
+    for _, info in ipairs(sorted) do
+      addSpell(info.spellID)
+    end
+  end
+end
+
+local function PopulateUtilitySpellGroups(addon, container, state, refreshFn)
+  for key in pairs(container) do
+    container[key] = nil
+  end
+
+  state.hasSpells = state.hasSpells or {}
+  state.hasSpells.UTILITY = false
+
+  local class, specID = addon:GetPlayerClassSpec()
+  local snapshot = addon:GetSnapshotForSpec(class, specID, false)
+  local lists = EnsurePlacementLists(addon, class, specID)
+  local _, linkTable = EnsureBuffTracking(addon, class, specID)
+  local soundValues = BuildSoundDropdownValues()
+
+  local added = {}
+  local order = 1
+
+  local function addSpell(spellID)
+    local normalized = tonumber(spellID) or spellID
+    if not normalized then return end
+    local key = tostring(normalized)
+    if added[key] then return end
+
+    local group = CreateSpellOptionGroup(addon, state, class, specID, normalized, "UTILITY", snapshot, lists, linkTable,
+      soundValues, refreshFn)
+    group.order = order
+    container["spell" .. key] = group
+    added[key] = true
+    order = order + 1
+    state.hasSpells.UTILITY = true
+  end
+
+  local utilityRoot = addon.db.profile.layout and addon.db.profile.layout.utility
+  local utilityList = utilityRoot and utilityRoot.spells and utilityRoot.spells[class] and utilityRoot.spells[class][specID]
+
+  if type(utilityList) == "table" then
+    for _, spellID in ipairs(utilityList) do
+      addSpell(spellID)
+    end
+  end
+
+  local hiddenList = lists.HIDDEN
+  if type(hiddenList) == "table" then
+    for _, spellID in ipairs(hiddenList) do
+      addSpell(spellID)
+    end
+  end
+
+  if snapshot then
+    local sorted = SortEntries(snapshot, "utility")
+    for _, info in ipairs(sorted) do
+      addSpell(info.spellID)
+    end
+  end
+end
+
+local function PopulateTrackedBuffGroups(addon, container, state, refreshFn)
+  for key in pairs(container) do
+    container[key] = nil
+  end
+
+  state.hasSpells = state.hasSpells or {}
+  state.hasSpells.TRACKED = false
+
+  local class, specID = addon:GetPlayerClassSpec()
+  local snapshot = addon:GetSnapshotForSpec(class, specID, false)
+  local tracked = EnsureBuffTracking(addon, class, specID)
+  local orderList = EnsureTrackedBuffOrder(addon, class, specID)
+
+  local manualIndex = {}
+  for index = 1, #orderList do
+    local buffID = orderList[index]
+    manualIndex[buffID] = index
+  end
+
+  local entries = {}
+
+  if snapshot then
+    for spellID, entry in pairs(snapshot) do
+      local categories = entry.categories
+      local hasBuff = categories and categories.buff
+      local hasBar = categories and categories.bar
+      if hasBuff or hasBar then
+        local sortOrder = math.huge
+        if hasBuff and hasBuff.order then sortOrder = math.min(sortOrder, hasBuff.order) end
+        if hasBar and hasBar.order then sortOrder = math.min(sortOrder, hasBar.order) end
+
+        local info = C_Spell.GetSpellInfo(spellID)
+        entries[spellID] = {
+          buffID = spellID,
+          icon = entry.iconID or (info and info.iconID),
+          name = entry.name or (info and info.name) or ("Spell " .. tostring(spellID)),
+          order = sortOrder,
+        }
+      end
+    end
+  end
+
+  for buffID in pairs(tracked) do
+    if not entries[buffID] then
+      local info = C_Spell.GetSpellInfo(buffID)
+      entries[buffID] = {
+        buffID = buffID,
+        icon = info and info.iconID,
+        name = info and info.name or ("Spell " .. tostring(buffID)),
+        order = math.huge,
+      }
+    end
+  end
+
+  for _, buffID in ipairs(orderList) do
+    if not entries[buffID] then
+      local info = C_Spell.GetSpellInfo(buffID)
+      entries[buffID] = {
+        buffID = buffID,
+        icon = info and info.iconID,
+        name = info and info.name or ("Spell " .. tostring(buffID)),
+        order = math.huge,
+      }
+    end
+  end
+
+  local list = {}
+  for _, data in pairs(entries) do
+    data.manualOrder = manualIndex[data.buffID]
+    table.insert(list, data)
+  end
+
+  table.sort(list, function(a, b)
+    local ao = a.manualOrder or math.huge
+    local bo = b.manualOrder or math.huge
+    if ao == bo then
+      if a.order == b.order then
+        return (a.name or "") < (b.name or "")
+      end
+      return a.order < b.order
+    end
+    return ao < bo
+  end)
+
+  local order = 1
+  for _, data in ipairs(list) do
+    local buffID = data.buffID
+    local icon = data.icon and ("|T" .. data.icon .. ":16|t ") or ""
+    local header = string.format("%s%s (%s)", icon, data.name or ("Spell " .. tostring(buffID)), tostring(buffID))
+
+    container["buff" .. buffID] = {
+      type = "group",
+      name = header,
+      order = order,
+      args = {
+        track = {
+          type = "toggle",
+          name = "Track Buff",
+          order = 1,
+          get = function()
+            local cfg = addon:GetTrackedEntryConfig(class, specID, buffID, false)
+            return cfg and cfg.showIcon or false
+          end,
+          set = function(_, value)
+            local cfg = addon:GetTrackedEntryConfig(class, specID, buffID, true)
+            cfg.showIcon = not not value
+            addon:BuildTrackedBuffFrames()
+            if type(refreshFn) == "function" then refreshFn() end
+            NotifyOptionsChanged()
+          end,
+        },
+        orderControl = {
+          type = "range",
+          name = "Order",
+          order = 2,
+          min = 1,
+          max = 50,
+          step = 1,
+          get = function()
+            local index = GetTrackedBuffOrder(addon, class, specID, buffID)
+            return index or 1
+          end,
+          set = function(_, value)
+            local index = math.floor((tonumber(value) or 1) + 0.5)
+            SetTrackedBuffOrder(addon, class, specID, buffID, index)
+            addon:BuildTrackedBuffFrames()
+            if type(refreshFn) == "function" then refreshFn() end
+            NotifyOptionsChanged()
+          end,
+        },
+        remove = {
+          type = "execute",
+          name = "Remove",
+          confirm = true,
+          order = 99,
+          func = function()
+            RemoveTrackedBuff(addon, class, specID, buffID)
+            addon:BuildTrackedBuffFrames()
+            if type(refreshFn) == "function" then refreshFn() end
+            NotifyOptionsChanged()
+          end,
+        },
+      },
+    }
+
+    order = order + 1
+    state.hasSpells.TRACKED = true
+  end
+end
+
 local function BuildSummonSpellArgs(addon, classConfig)
   local args = {}
   for index, spellID in ipairs(classConfig.spells) do
@@ -526,634 +1170,6 @@ local function SortEntries(snapshot, category)
 end
 
 -- Bygger Top Bar Spells-editoren inline (uten å lage ny venstremeny-node)
-local function BuildTopBarSpellsEditor(addon, container)
-  for k in pairs(container) do container[k] = nil end
-
-  local class, specID = addon:GetPlayerClassSpec()
-  local snapshot = addon:GetSnapshotForSpec(class, specID, false)
-
-  local lists = EnsurePlacementLists(addon, class, specID)
-  local topList = lists.TOP
-  local manualIndex = {}
-  local ordered = {}
-
-  for idx = #topList, 1, -1 do
-    local spellID = tonumber(topList[idx]) or topList[idx]
-    if spellID then
-      topList[idx] = spellID
-      manualIndex[spellID] = idx
-      ordered[#ordered + 1] = spellID
-    else
-      table.remove(topList, idx)
-    end
-  end
-
-  if snapshot then
-    for spellID, entry in pairs(snapshot) do
-      if entry.categories and entry.categories.essential then
-        if manualIndex[spellID] == nil then
-          ordered[#ordered + 1] = spellID
-          manualIndex[spellID] = false
-        end
-      end
-    end
-  end
-
-  table.sort(ordered, function(a, b)
-    local ia = manualIndex[a] or math.huge
-    local ib = manualIndex[b] or math.huge
-    if ia == ib then
-      local sa = snapshot and snapshot[a]
-      local sb = snapshot and snapshot[b]
-      local oa = sa and sa.categories and sa.categories.essential and sa.categories.essential.order or math.huge
-      local ob = sb and sb.categories and sb.categories.essential and sb.categories.essential.order or math.huge
-      if oa == ob then
-        local na = (sa and sa.name) or (C_Spell.GetSpellInfo(a) and C_Spell.GetSpellInfo(a).name) or tostring(a)
-        local nb = (sb and sb.name) or (C_Spell.GetSpellInfo(b) and C_Spell.GetSpellInfo(b).name) or tostring(b)
-        return na < nb
-      end
-      return oa < ob
-    end
-    return ia < ib
-  end)
-
-  local order = 1
-  if #ordered == 0 then
-    container.empty = {
-      type = "description",
-      name = "No spells on the Top Bar yet. Use 'Add Spell ID' to add one.",
-      order = order,
-    }
-    return
-  end
-
-  -- Bygg options-grupper
-  for _, spellID in ipairs(ordered) do
-    local s = C_Spell.GetSpellInfo(spellID)
-    local icon = s and s.iconID and ("|T" .. s.iconID .. ":16|t ") or ""
-    local name = (s and s.name) or ("Spell " .. spellID)
-    local entry = snapshot and snapshot[spellID]
-
-    -- Linked buffs
-    local _, linkTable = EnsureBuffTracking(addon, class, specID)
-
-    local linkedArgs, idx = {}, 1
-    local buffIDs = {}
-    local normalizedSpellID = tonumber(spellID) or spellID
-    for buffID, spellSet in pairs(linkTable) do
-      if type(spellSet) == "table" and normalizedSpellID and spellSet[normalizedSpellID] then
-        table.insert(buffIDs, buffID)
-      end
-    end
-    table.sort(buffIDs, function(a, b)
-      return (tonumber(a) or a) < (tonumber(b) or b)
-    end)
-    for _, buffID in ipairs(buffIDs) do
-      local b = C_Spell.GetSpellInfo(buffID)
-      local bi = b and b.iconID and ("|T" .. b.iconID .. ":16|t ") or ""
-      local bn = (b and b.name) or ("Buff " .. buffID)
-      linkedArgs["b" .. buffID] = {
-        type  = "execute",
-        name  = bi .. bn .. " (" .. buffID .. ")",
-        desc  = "Click to remove this link",
-        order = idx,
-        func  = function()
-          local set = linkTable[buffID]
-          if type(set) == "table" then
-            set[normalizedSpellID] = nil
-            if not next(set) then
-              linkTable[buffID] = nil
-            end
-          end
-          BuildTopBarSpellsEditor(addon, container)
-          addon:BuildFramesForSpec()
-          local ACR = LibStub("AceConfigRegistry-3.0", true)
-          if ACR then ACR:NotifyChange("ClassHUD") end
-        end,
-      }
-      idx = idx + 1
-    end
-    if idx == 1 then
-      linkedArgs.none = { type = "description", name = "No linked buffs yet.", order = 1 }
-    end
-
-    local soundValues = BuildSoundDropdownValues()
-
-    container["spell" .. spellID] = {
-      type   = "group",
-      name   = icon .. name .. " (" .. spellID .. ")",
-      inline = true,
-      order  = order,
-      args   = {
-        addBuff = {
-          type  = "input",
-          name  = "Add Buff ID",
-          order = 1,
-          width = "half",
-          get   = function() return "" end,
-          set   = function(_, val)
-            local buffID = tonumber(val); if not buffID then return end
-            local normalized = tonumber(spellID) or spellID
-            if not normalized then return end
-            local set = linkTable[buffID]
-            if type(set) ~= "table" then
-              set = {}
-              linkTable[buffID] = set
-            end
-            set[normalized] = true
-            BuildTopBarSpellsEditor(addon, container)
-            addon:BuildFramesForSpec()
-            local ACR = LibStub("AceConfigRegistry-3.0", true)
-            if ACR then ACR:NotifyChange("ClassHUD") end
-          end,
-        },
-        trackOnTarget = {
-          type  = "toggle",
-          name  = "Track on Target",
-          desc  =
-          "When enabled, this spell will track its DoT/debuff on your current target. Uses the debuff state machine (cooldown, active, pandemic). If no target or the debuff is missing, the icon is shown greyed out.",
-          order = 1.5,
-          width = "full",
-          get   = function()
-            local numericID = tonumber(spellID) or spellID
-            local flagsRoot = addon:GetProfileTable(false, "layout", "topBar", "flags", class, specID)
-            local perSpell = flagsRoot and flagsRoot[numericID]
-            return perSpell and perSpell.trackOnTarget == true
-          end,
-          set   = function(_, val)
-            local numericID = tonumber(spellID) or spellID
-            local flagsRoot = EnsureTopBarFlags(addon, class, specID)
-            if val then
-              flagsRoot[numericID] = flagsRoot[numericID] or {}
-              flagsRoot[numericID].trackOnTarget = true
-            else
-              local perSpell = flagsRoot[numericID]
-              if perSpell then
-                perSpell.trackOnTarget = nil
-                if next(perSpell) == nil then
-                  flagsRoot[numericID] = nil
-                end
-              end
-              if next(flagsRoot) == nil then
-                local topFlags = addon.db.profile.layout.topBar.flags
-                local classFlags = topFlags and topFlags[class]
-                if classFlags then
-                  classFlags[specID] = nil
-                  if next(classFlags) == nil then
-                    topFlags[class] = nil
-                  end
-                end
-              end
-            end
-            addon:BuildFramesForSpec()
-            NotifyOptionsChanged()
-          end,
-        },
-        order = {
-          type  = "range",
-          name  = "Order",
-          min   = 1,
-          max   = 50,
-          step  = 1,
-          order = 3,
-          get   = function()
-            local placement, index = GetSpellPlacement(addon, class, specID, spellID)
-            if placement == "TOP" then
-              return index or 1
-            end
-            return (entry and entry.categories and entry.categories.essential and entry.categories.essential.order) or 1
-          end,
-          set   = function(_, val)
-            SetSpellOrder(addon, class, specID, spellID, val)
-            addon:BuildFramesForSpec()
-            NotifyOptionsChanged()
-          end,
-        },
-        linked = {
-          type   = "group",
-          name   = "Linked Buffs",
-          order  = 2,
-          inline = true,
-          args   = linkedArgs,
-        },
-        sounds = {
-          type   = "group",
-          name   = "Sound Alerts",
-          order  = 4,
-          inline = true,
-          args   = {
-            ready = {
-              type          = "select",
-              name          = "Ready",
-              order         = 1,
-              width         = "full",
-              dialogControl = "LSM30_Sound",
-              values        = soundValues,
-              get           = function()
-                local conf = EnsureSoundConfig(addon, class, specID)
-                local per  = conf[spellID]
-                return (per and per.onReady) or SOUND_NONE
-              end,
-              set           = function(_, value)
-                local conf = EnsureSoundConfig(addon, class, specID)
-                conf[spellID] = conf[spellID] or {}
-                if value == SOUND_NONE then
-                  conf[spellID].onReady = nil
-                else
-                  conf[spellID].onReady = value
-                end
-                addon:UpdateAllSpellFrames()
-                NotifyOptionsChanged()
-              end,
-            },
-            applied = {
-              type          = "select",
-              name          = "Applied",
-              order         = 2,
-              width         = "full",
-              dialogControl = "LSM30_Sound",
-              values        = soundValues,
-              get           = function()
-                local conf = EnsureSoundConfig(addon, class, specID)
-                local per  = conf[spellID]
-                return (per and per.onApplied) or SOUND_NONE
-              end,
-              set           = function(_, value)
-                local conf = EnsureSoundConfig(addon, class, specID)
-                conf[spellID] = conf[spellID] or {}
-                if value == SOUND_NONE then
-                  conf[spellID].onApplied = nil
-                else
-                  conf[spellID].onApplied = value
-                end
-                addon:UpdateAllSpellFrames()
-                NotifyOptionsChanged()
-              end,
-            },
-            removed = {
-              type          = "select",
-              name          = "Removed",
-              order         = 3,
-              width         = "full",
-              dialogControl = "LSM30_Sound",
-              values        = soundValues,
-              get           = function()
-                local conf = EnsureSoundConfig(addon, class, specID)
-                local per  = conf[spellID]
-                return (per and per.onRemoved) or SOUND_NONE
-              end,
-              set           = function(_, value)
-                local conf = EnsureSoundConfig(addon, class, specID)
-                conf[spellID] = conf[spellID] or {}
-                if value == SOUND_NONE then
-                  conf[spellID].onRemoved = nil
-                else
-                  conf[spellID].onRemoved = value
-                end
-                addon:UpdateAllSpellFrames()
-                NotifyOptionsChanged()
-              end,
-            },
-          },
-        },
-        removeSpell = {
-          type    = "execute",
-          name    = "Remove Spell",
-          confirm = true,
-          order   = 99,
-          func    = function()
-            local lists = EnsurePlacementLists(addon, class, specID)
-            RemoveSpellFromLists(lists, spellID)
-            local hidden = lists.HIDDEN
-            if type(hidden) == "table" then
-              hidden[#hidden + 1] = spellID
-            end
-            for bid, sid in pairs(linkTable) do
-              if sid == spellID then linkTable[bid] = nil end
-            end
-            BuildTopBarSpellsEditor(addon, container)
-            addon:BuildFramesForSpec()
-            local ACR = LibStub("AceConfigRegistry-3.0", true)
-            if ACR then ACR:NotifyChange("ClassHUD") end
-          end,
-        },
-      },
-    }
-    order = order + 1
-  end
-end
-
-
-local function BuildPlacementArgs(addon, container, category, defaultPlacement, emptyText)
-  for k in pairs(container) do container[k] = nil end
-
-  local class, specID = addon:GetPlayerClassSpec()
-  local lists = EnsurePlacementLists(addon, class, specID)
-  local _, linkTable = EnsureBuffTracking(addon, class, specID)
-
-  local snapshot = addon:GetSnapshotForSpec(class, specID, false)
-  local order = 1
-  local added = {}
-
-  local function addOption(spellID, entry)
-    local id = tonumber(spellID) or spellID
-    if not id then return end
-
-    local key = tostring(id)
-    if added[key] then return end
-    added[key] = true
-
-    local iconID = entry and entry.iconID
-    local name = entry and entry.name
-    if not name then
-      local info = C_Spell.GetSpellInfo(id)
-      iconID = iconID or (info and info.iconID)
-      name = info and info.name or ("Spell " .. key)
-    end
-    local icon = iconID and ("|T" .. iconID .. ":16|t ") or ""
-
-    local linkedBuffs = {}
-    for buffID, linkedSpellID in pairs(linkTable) do
-      local resolved = tonumber(linkedSpellID) or linkedSpellID
-      if resolved == id then
-        local buffInfo = C_Spell.GetSpellInfo(buffID)
-        linkedBuffs[#linkedBuffs + 1] = (buffInfo and buffInfo.name) or ("Buff " .. buffID)
-      end
-    end
-    local linkNote
-    if #linkedBuffs > 0 then
-      table.sort(linkedBuffs)
-      linkNote = "|cff00ff00Linked Buffs:|r " .. table.concat(linkedBuffs, ", ")
-    end
-
-    local displayID = (type(id) == "number") and id or key
-
-    container["spell" .. key] = {
-      type = "select",
-      name = icon .. name .. " (" .. displayID .. ")",
-      desc = linkNote,
-      order = order,
-      values = PLACEMENTS,
-      get = function()
-        local placement = GetSpellPlacement(addon, class, specID, id)
-        return placement or defaultPlacement
-      end,
-      set = function(_, value)
-        local placementLists = EnsurePlacementLists(addon, class, specID)
-        if value == defaultPlacement then
-          RemoveSpellFromLists(placementLists, id)
-        else
-          SetSpellPlacement(addon, class, specID, id, value)
-        end
-        addon:BuildFramesForSpec()
-        BuildPlacementArgs(addon, container, category, defaultPlacement, emptyText)
-        NotifyOptionsChanged()
-      end,
-    }
-
-    order = order + 1
-  end
-
-  -- ---------- SOURCE ENTRIES ----------
-  local entries = {}
-
-  if category == "utility" then
-    -- DB-driven: show ONLY what lives in layout.utility.spells for this class/spec
-    local util = addon.db.profile
-        and addon.db.profile.layout
-        and addon.db.profile.layout.utility
-        and addon.db.profile.layout.utility.spells
-        and addon.db.profile.layout.utility.spells[class]
-        and addon.db.profile.layout.utility.spells[class][specID]
-
-    if type(util) == "table" then
-      for _, spellID in ipairs(util) do
-        local resolved = tonumber(spellID) or spellID
-        entries[#entries + 1] = { spellID = resolved, entry = snapshot and snapshot[resolved] }
-      end
-    end
-  else
-    -- Keep existing behavior for non-utility categories
-    local sorted = SortEntries(snapshot, category)
-    for _, item in ipairs(sorted) do
-      entries[#entries + 1] = item
-    end
-  end
-
-  for _, item in ipairs(entries) do
-    addOption(item.spellID, item.entry)
-  end
-
-  -- For the Utility tab: don't pull in spells from other placements.
-  if category ~= "utility" then
-    local placementOrder = { "TOP", "BOTTOM", "LEFT", "RIGHT", "HIDDEN" }
-    for _, placementName in ipairs(placementOrder) do
-      local list = lists[placementName]
-      if type(list) == "table" then
-        for _, spellID in ipairs(list) do
-          local resolved = tonumber(spellID) or spellID
-          local entry = snapshot and snapshot[resolved]
-          addOption(resolved, entry)
-        end
-      end
-    end
-
-    local function addLooseEntries(list)
-      if type(list) ~= "table" then return end
-      for key, value in pairs(list) do
-        local candidate
-        if type(value) == "number" or type(value) == "string" then
-          candidate = value
-        elseif type(key) == "number" or type(key) == "string" then
-          if type(value) ~= "number" and type(value) ~= "string" then
-            candidate = key
-          end
-        end
-        if candidate then
-          local resolved = tonumber(candidate) or candidate
-          local keyStr = tostring(resolved)
-          if not added[keyStr] then
-            addOption(resolved, snapshot and snapshot[resolved])
-          end
-        end
-      end
-    end
-
-    for _, placementName in ipairs(placementOrder) do
-      addLooseEntries(lists[placementName])
-    end
-  end
-
-  if order == 1 then
-    container.empty = {
-      type = "description",
-      name = emptyText or "No entries available for this category.",
-      order = order,
-    }
-  end
-end
-local function BuildTrackedBuffArgs(addon, container)
-  for k in pairs(container) do container[k] = nil end
-
-  local class, specID = addon:GetPlayerClassSpec()
-  local snapshot = addon:GetSnapshotForSpec(class, specID, false)
-
-  local tracked = EnsureBuffTracking(addon, class, specID)
-  local orderList = EnsureTrackedBuffOrder(addon, class, specID)
-  local manualIndex = {}
-  for index = 1, #orderList do
-    local buffID = orderList[index]
-    manualIndex[buffID] = index
-  end
-
-  local entries = {}
-
-  if snapshot then
-    for spellID, entry in pairs(snapshot) do
-      local categories = entry.categories
-      local hasBuff = categories and categories.buff
-      local hasBar = categories and categories.bar
-      if hasBuff or hasBar then
-        local order = math.huge
-        if hasBuff and hasBuff.order then order = math.min(order, hasBuff.order) end
-        if hasBar and hasBar.order then order = math.min(order, hasBar.order) end
-
-        local icon = entry.iconID and ("|T" .. entry.iconID .. ":16|t ") or ""
-        local name = entry.name or C_Spell.GetSpellName(spellID) or ("Spell " .. spellID)
-
-        entries[spellID] = {
-          buffID = spellID,
-          entry = entry,
-          icon = icon,
-          name = name,
-          order = order,
-        }
-      end
-    end
-  end
-
-  for buffID in pairs(tracked) do
-    if not entries[buffID] then
-      local info = C_Spell.GetSpellInfo(buffID)
-      entries[buffID] = {
-        buffID = buffID,
-        entry = nil,
-        icon = info and info.iconID and ("|T" .. info.iconID .. ":16|t ") or "",
-        name = info and info.name or ("Spell " .. buffID),
-        order = math.huge,
-      }
-    end
-  end
-
-  for _, buffID in ipairs(orderList) do
-    if not entries[buffID] then
-      local info = C_Spell.GetSpellInfo(buffID)
-      entries[buffID] = {
-        buffID = buffID,
-        entry = nil,
-        icon = info and info.iconID and ("|T" .. info.iconID .. ":16|t ") or "",
-        name = info and info.name or ("Spell " .. buffID),
-        order = math.huge,
-      }
-    end
-  end
-
-  local list = {}
-  for _, data in pairs(entries) do
-    data.manualOrder = manualIndex[data.buffID]
-    table.insert(list, data)
-  end
-
-  table.sort(list, function(a, b)
-    local ao = a.manualOrder or math.huge
-    local bo = b.manualOrder or math.huge
-    if ao == bo then
-      if a.order == b.order then
-        return a.name < b.name
-      end
-      return a.order < b.order
-    end
-    return ao < bo
-  end)
-
-  if #list == 0 then
-    container.empty = {
-      type = "description",
-      name = "No tracked buffs available for this specialization.",
-      order = 1,
-    }
-    return
-  end
-
-  local order = 1
-  for _, data in ipairs(list) do
-    local buffID = data.buffID
-    local header = string.format("%s%s (%d)", data.icon or "", data.name or ("Spell " .. buffID), buffID)
-
-    local function getConfig(create)
-      return addon:GetTrackedEntryConfig(class, specID, buffID, create)
-    end
-
-    container["buff" .. buffID] = {
-      type = "group",
-      name = header,
-      inline = true,
-      order = order,
-      args = {
-        track = {
-          type = "toggle",
-          name = "Track Buff",
-          order = 1,
-          get = function()
-            local cfg = getConfig(false)
-            return cfg and cfg.showIcon or false
-          end,
-          set = function(_, value)
-            local cfg = getConfig(true)
-            cfg.showIcon = not not value
-            addon:BuildTrackedBuffFrames()
-            BuildTrackedBuffArgs(addon, container)
-            NotifyOptionsChanged()
-          end,
-        },
-        orderControl = {
-          type = "range",
-          name = "Order",
-          order = 2,
-          min = 1,
-          max = 50,
-          step = 1,
-          get = function()
-            local index = GetTrackedBuffOrder(addon, class, specID, buffID)
-            return index or 1
-          end,
-          set = function(_, value)
-            local index = math.floor(value + 0.5)
-            SetTrackedBuffOrder(addon, class, specID, buffID, index)
-            addon:BuildTrackedBuffFrames()
-            BuildTrackedBuffArgs(addon, container)
-            NotifyOptionsChanged()
-          end,
-        },
-        remove = {
-          type = "execute",
-          name = "Remove",
-          confirm = true,
-          order = 99,
-          func = function()
-            RemoveTrackedBuff(addon, class, specID, buffID)
-            addon:BuildTrackedBuffFrames()
-            BuildTrackedBuffArgs(addon, container)
-            NotifyOptionsChanged()
-          end,
-        },
-      },
-    }
-
-    order = order + 1
-  end
-end
-
 local function BuildBuffLinkArgs(addon, container)
   for k in pairs(container) do container[k] = nil end
 
@@ -1477,23 +1493,218 @@ function ClassHUD_BuildOptions(addon)
     profile.soundAlerts.enabled = false
   end
 
-  local topBarEditorContainer = {}
+  local placementContainers = {
+    TOP = {},
+    BOTTOM = {},
+    LEFT = {},
+    RIGHT = {},
+  }
+  local placementGroupArgs = {
+    TOP = {},
+    BOTTOM = {},
+    LEFT = {},
+    RIGHT = {},
+  }
+
+  addon._optionsState = addon._optionsState or {}
+  local optionsState = addon._optionsState
+  optionsState.spellPlacementMemory = optionsState.spellPlacementMemory or {}
+  optionsState.hasSpells = optionsState.hasSpells or {}
+
+  local RefreshSpellEditors
+
+  local placementStaticArgs = {
+    TOP = {
+      description = {
+        type = "description",
+        name = "Manage spells assigned to the Top Bar and configure linked buffs and sounds.",
+        order = 1,
+      },
+      addSpell = {
+        type = "input",
+        name = "Add Spell ID",
+        order = 2,
+        width = "half",
+        get = function()
+          return ""
+        end,
+        set = function(_, value)
+          local spellID = tonumber(value)
+          if not spellID then return end
+          local class, specID = addon:GetPlayerClassSpec()
+          local lists = EnsurePlacementLists(addon, class, specID)
+          SetSpellPlacement(addon, class, specID, spellID, "TOP", #lists.TOP + 1)
+          addon:BuildFramesForSpec()
+          RefreshSpellEditors()
+          NotifyOptionsChanged()
+        end,
+      },
+      empty = {
+        type = "description",
+        name = "No spells assigned to the Top Bar yet.",
+        order = 3,
+        hidden = function()
+          return optionsState.hasSpells and optionsState.hasSpells.TOP
+        end,
+      },
+    },
+    BOTTOM = {
+      description = {
+        type = "description",
+        name = "Spells ordered on the Bottom Bar.",
+        order = 1,
+      },
+      empty = {
+        type = "description",
+        name = "No spells assigned to the Bottom Bar.",
+        order = 2,
+        hidden = function()
+          return optionsState.hasSpells and optionsState.hasSpells.BOTTOM
+        end,
+      },
+    },
+    LEFT = {
+      description = {
+        type = "description",
+        name = "Manage spells shown on the left sidebar.",
+        order = 1,
+      },
+      empty = {
+        type = "description",
+        name = "No spells assigned to the left sidebar.",
+        order = 2,
+        hidden = function()
+          return optionsState.hasSpells and optionsState.hasSpells.LEFT
+        end,
+      },
+    },
+    RIGHT = {
+      description = {
+        type = "description",
+        name = "Manage spells shown on the right sidebar.",
+        order = 1,
+      },
+      empty = {
+        type = "description",
+        name = "No spells assigned to the right sidebar.",
+        order = 2,
+        hidden = function()
+          return optionsState.hasSpells and optionsState.hasSpells.RIGHT
+        end,
+      },
+    },
+  }
+
   local utilityContainer = {}
+  local utilityGroupArgs = {}
+  local utilityStaticArgs = {
+    description = {
+      type = "description",
+      name = "Utility spells detected for this specialization. Assign them to bars or keep them hidden.",
+      order = 1,
+    },
+    addSpell = {
+      type = "input",
+      name = "Add Spell ID",
+      order = 2,
+      width = "half",
+      get = function()
+        return ""
+      end,
+      set = function(_, value)
+        local spellID = tonumber(value)
+        if not spellID then return end
+        local class, specID = addon:GetPlayerClassSpec()
+        local lists = EnsurePlacementLists(addon, class, specID)
+        SetSpellPlacement(addon, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
+        addon:BuildFramesForSpec()
+        RefreshSpellEditors()
+        NotifyOptionsChanged()
+      end,
+    },
+    empty = {
+      type = "description",
+      name = "No utility spells recorded for this specialization.",
+      order = 3,
+      hidden = function()
+        return optionsState.hasSpells and optionsState.hasSpells.UTILITY
+      end,
+    },
+  }
+
   local trackedContainer = {}
+  local trackedGroupArgs = {}
+  local trackedStaticArgs = {
+    description = {
+      type = "description",
+      name = "Configure the buffs that appear in the tracked buff bar.",
+      order = 1,
+    },
+    addBuff = {
+      type = "input",
+      name = "Add Buff ID",
+      order = 2,
+      width = "half",
+      get = function()
+        return ""
+      end,
+      set = function(_, value)
+        local buffID = tonumber(value)
+        if not buffID then return end
+        local class, specID = addon:GetPlayerClassSpec()
+        local tracked = EnsureBuffTracking(addon, class, specID)
+        local orderList = EnsureTrackedBuffOrder(addon, class, specID)
+        tracked[buffID] = tracked[buffID] or true
+        local exists = false
+        for _, existing in ipairs(orderList) do
+          if (tonumber(existing) or existing) == buffID then
+            exists = true
+            break
+          end
+        end
+        if not exists then
+          orderList[#orderList + 1] = buffID
+        end
+        addon:BuildTrackedBuffFrames()
+        RefreshSpellEditors()
+        NotifyOptionsChanged()
+      end,
+    },
+    empty = {
+      type = "description",
+      name = "No tracked buffs configured for this specialization.",
+      order = 3,
+      hidden = function()
+        return optionsState.hasSpells and optionsState.hasSpells.TRACKED
+      end,
+    },
+  }
+
   local barOrderContainer = {}
   local classBarSpecialContainer = {}
   local summonGroupContainer = {}
-  addon._optionsState = addon._optionsState or {}
-  local optionsState = addon._optionsState
   optionsState.profileCopySource = optionsState.profileCopySource or ""
   optionsState.profileDeleteTarget = optionsState.profileDeleteTarget or ""
   optionsState.profileImportInput = optionsState.profileImportInput or ""
 
+  local function RefreshSpellEditors()
+    PopulatePlacementSpellGroups(addon, placementContainers.TOP, optionsState, "TOP", RefreshSpellEditors)
+    PopulatePlacementSpellGroups(addon, placementContainers.BOTTOM, optionsState, "BOTTOM", RefreshSpellEditors)
+    PopulatePlacementSpellGroups(addon, placementContainers.LEFT, optionsState, "LEFT", RefreshSpellEditors)
+    PopulatePlacementSpellGroups(addon, placementContainers.RIGHT, optionsState, "RIGHT", RefreshSpellEditors)
+    PopulateUtilitySpellGroups(addon, utilityContainer, optionsState, RefreshSpellEditors)
+    PopulateTrackedBuffGroups(addon, trackedContainer, optionsState, RefreshSpellEditors)
+
+    MergeArgs(placementGroupArgs.TOP, placementStaticArgs.TOP, placementContainers.TOP)
+    MergeArgs(placementGroupArgs.BOTTOM, placementStaticArgs.BOTTOM, placementContainers.BOTTOM)
+    MergeArgs(placementGroupArgs.LEFT, placementStaticArgs.LEFT, placementContainers.LEFT)
+    MergeArgs(placementGroupArgs.RIGHT, placementStaticArgs.RIGHT, placementContainers.RIGHT)
+    MergeArgs(utilityGroupArgs, utilityStaticArgs, utilityContainer)
+    MergeArgs(trackedGroupArgs, trackedStaticArgs, trackedContainer)
+  end
+
   local function RefreshDynamicOptionEditors()
-    BuildTopBarSpellsEditor(addon, topBarEditorContainer)
-    BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
-      "No utility cooldowns reported by the snapshot for this spec.")
-    BuildTrackedBuffArgs(addon, trackedContainer)
+    RefreshSpellEditors()
     BuildBarOrderEditor(addon, barOrderContainer)
     BuildClassBarSpecialOptions(addon, classBarSpecialContainer)
     BuildSummonGroups(addon, summonGroupContainer)
@@ -2178,164 +2389,43 @@ function ClassHUD_BuildOptions(addon)
         type = "group",
         name = "Spells & Buffs",
         order = 4,
+        childGroups = "tree",
         args = {
-          -- topBar = {
-          --   type = "group",
-          --   name = "Top Bar Spells",
-          --   order = 1,
-          --   args = {
-          --     description = {
-          --       type = "description",
-          --       name = "Assign essential abilities to HUD positions.",
-          --       order = 1,
-          --     },
-          --     addSpell = {
-          --       type = "input",
-          --       name = "Add Spell ID",
-          --       order = 2,
-          --       width = "half",
-          --       get = function() return "" end,
-          --       set = function(_, value)
-          --         local spellID = tonumber(value)
-          --         if not spellID then return end
-          --         local class, specID = addon:GetPlayerClassSpec()
-          --         addon.db.profile.utilityPlacement[class] = addon.db.profile.utilityPlacement[class] or {}
-          --         addon.db.profile.utilityPlacement[class][specID] = addon.db.profile.utilityPlacement[class][specID] or
-          --             {}
-          --         addon.db.profile.utilityPlacement[class][specID][spellID] = "TOP"
-
-          --         addon:BuildFramesForSpec()
-          --         BuildPlacementArgs(addon, topBarContainer, "essential", "TOP",
-          --           "No essential spells reported for this spec.")
-          --         NotifyOptionsChanged()
-          --       end,
-          --     },
-          --     list = {
-          --       type = "group",
-          --       name = "Assignments",
-          --       inline = true,
-          --       order = 3,
-          --       args = topBarContainer,
-          --     },
-          --   },
-          -- },
           topBar = {
-            type  = "group",
-            name  = "Top Bar Spells",
+            type = "group",
+            name = "Top Bar",
             order = 1,
-            args  = {
-              description = {
-                type  = "description",
-                name  = "Manage spells that appear on the Top Bar and link buffs directly to them.",
-                order = 1,
-              },
-              addSpell = {
-                type  = "input",
-                name  = "Add Spell ID",
-                order = 2,
-                width = "half",
-                get   = function() return "" end,
-                set   = function(_, value)
-                  local spellID = tonumber(value)
-                  if not spellID then return end
-                  local class, specID = addon:GetPlayerClassSpec()
-                  local lists = EnsurePlacementLists(addon, class, specID)
-                  SetSpellPlacement(addon, class, specID, spellID, "TOP", #lists.TOP + 1)
-                  BuildTopBarSpellsEditor(addon, topBarEditorContainer)
-                  addon:BuildFramesForSpec()
-                  local ACR = LibStub("AceConfigRegistry-3.0", true)
-                  if ACR then ACR:NotifyChange("ClassHUD") end
-                end,
-              },
-              editor = {
-                type   = "group",
-                name   = "",   -- tomt navn = ingen label
-                order  = 3,
-                inline = true, -- VIKTIG: ingen ny venstremeny-node
-                args   = topBarEditorContainer,
-              },
-            },
+            args = placementGroupArgs.TOP,
           },
-
-
+          bottomBar = {
+            type = "group",
+            name = "Bottom Bar",
+            order = 2,
+            args = placementGroupArgs.BOTTOM,
+          },
+          leftBar = {
+            type = "group",
+            name = "Left Side",
+            order = 3,
+            args = placementGroupArgs.LEFT,
+          },
+          rightBar = {
+            type = "group",
+            name = "Right Side",
+            order = 4,
+            args = placementGroupArgs.RIGHT,
+          },
           utility = {
             type = "group",
-            name = "Utility Placement",
-            order = 2,
-            args = {
-              addSpell = {
-                type = "input",
-                name = "Add Spell ID",
-                order = 1,
-                width = "half",
-                get = function() return "" end,
-                set = function(_, value)
-                  local spellID = tonumber(value)
-                  if not spellID then return end
-                  local class, specID = addon:GetPlayerClassSpec()
-                  local lists = EnsurePlacementLists(addon, class, specID)
-                  SetSpellPlacement(addon, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
-                  addon:BuildFramesForSpec()
-                  BuildPlacementArgs(addon, utilityContainer, "utility", "HIDDEN",
-                    "No utility cooldowns reported by the snapshot for this spec.")
-                  NotifyOptionsChanged()
-                end,
-              },
-              list = {
-                type = "group",
-                name = "Spells",
-                inline = true,
-                order = 2,
-                args = utilityContainer,
-              },
-            },
+            name = "Utility",
+            order = 5,
+            args = utilityGroupArgs,
           },
           trackedBuffs = {
             type = "group",
             name = "Tracked Buffs",
-            order = 3,
-            args = {
-              description = {
-                type = "description",
-                name = "Configure which buffs appear on the tracked buff bar.",
-                order = 1,
-              },
-              addBuff = {
-                type = "input",
-                name = "Add Buff ID",
-                order = 2,
-                width = "half",
-                get = function() return "" end,
-                set = function(_, value)
-                  local buffID = tonumber(value)
-                  if not buffID then return end
-                  local class, specID = addon:GetPlayerClassSpec()
-                  local tracked = EnsureBuffTracking(addon, class, specID)
-                  local orderList = EnsureTrackedBuffOrder(addon, class, specID)
-                  tracked[buffID] = tracked[buffID] or true
-                  local exists = false
-                  for _, existing in ipairs(orderList) do
-                    if (tonumber(existing) or existing) == buffID then
-                      exists = true
-                      break
-                    end
-                  end
-                  if not exists then
-                    orderList[#orderList + 1] = buffID
-                  end
-                  addon:BuildTrackedBuffFrames()
-                  BuildTrackedBuffArgs(addon, trackedContainer)
-                  NotifyOptionsChanged()
-                end,
-              },
-              list = {
-                type = "group",
-                name = "Entries",
-                inline = true,
-                order = 3,
-                args = trackedContainer,
-              },
-            },
+            order = 6,
+            args = trackedGroupArgs,
           },
         },
       },
@@ -2694,11 +2784,57 @@ function ClassHUD_BuildOptions(addon)
 end
 
 function ClassHUD:GetUtilityOptions()
-  local container = {}
-  BuildPlacementArgs(self, container, "utility", "HIDDEN", "No utility cooldowns reported by the snapshot for this spec.")
+  local state = {
+    spellPlacementMemory = self._optionsState and self._optionsState.spellPlacementMemory or {},
+    hasSpells = {},
+  }
+
+  local dynamic = {}
+  local merged = {}
+
+  local function refresh()
+    PopulateUtilitySpellGroups(self, dynamic, state, refresh)
+    MergeArgs(merged, {
+      description = {
+        type = "description",
+        name = "Utility spells detected for this specialization.",
+        order = 1,
+      },
+      addSpell = {
+        type = "input",
+        name = "Add Spell ID",
+        order = 2,
+        width = "half",
+        get = function()
+          return ""
+        end,
+        set = function(_, value)
+          local spellID = tonumber(value)
+          if not spellID then return end
+          local class, specID = self:GetPlayerClassSpec()
+          local lists = EnsurePlacementLists(self, class, specID)
+          SetSpellPlacement(self, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
+          if self.BuildFramesForSpec then self:BuildFramesForSpec() end
+          refresh()
+          NotifyOptionsChanged()
+        end,
+      },
+      empty = {
+        type = "description",
+        name = "No utility spells recorded for this specialization.",
+        order = 3,
+        hidden = function()
+          return state.hasSpells and state.hasSpells.UTILITY
+        end,
+      },
+    }, dynamic)
+  end
+
+  refresh()
+
   return {
     type = "group",
     name = "Utility Cooldowns",
-    args = container,
+    args = merged,
   }
 end
