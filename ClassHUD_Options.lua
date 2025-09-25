@@ -1616,13 +1616,20 @@ function ClassHUD_BuildOptions(addon)
   optionsState.spellPlacementMemory = optionsState.spellPlacementMemory or {}
   optionsState.hasSpells = optionsState.hasSpells or {}
 
+  local function HasAnyPrimarySpells(state)
+    if not state or not state.hasSpells then
+      return false
+    end
+    return state.hasSpells.TOP or state.hasSpells.BOTTOM or state.hasSpells.LEFT or state.hasSpells.RIGHT
+  end
+
   local RefreshSpellEditors
 
   local placementStaticArgs = {
     TOP = {
       description = {
         type = "description",
-        name = "Manage spells assigned to the Top Bar and configure linked buffs and sounds.",
+        name = "Manage spells assigned to your bars and configure linked buffs and sounds.",
         order = 1,
       },
       addSpell = {
@@ -1646,55 +1653,10 @@ function ClassHUD_BuildOptions(addon)
       },
       empty = {
         type = "description",
-        name = "No spells assigned to the Top Bar yet.",
+        name = "No spells assigned yet.",
         order = 3,
         hidden = function()
-          return optionsState.hasSpells and optionsState.hasSpells.TOP
-        end,
-      },
-    },
-    BOTTOM = {
-      description = {
-        type = "description",
-        name = "Spells ordered on the Bottom Bar.",
-        order = 1,
-      },
-      empty = {
-        type = "description",
-        name = "No spells assigned to the Bottom Bar.",
-        order = 2,
-        hidden = function()
-          return optionsState.hasSpells and optionsState.hasSpells.BOTTOM
-        end,
-      },
-    },
-    LEFT = {
-      description = {
-        type = "description",
-        name = "Manage spells shown on the left sidebar.",
-        order = 1,
-      },
-      empty = {
-        type = "description",
-        name = "No spells assigned to the left sidebar.",
-        order = 2,
-        hidden = function()
-          return optionsState.hasSpells and optionsState.hasSpells.LEFT
-        end,
-      },
-    },
-    RIGHT = {
-      description = {
-        type = "description",
-        name = "Manage spells shown on the right sidebar.",
-        order = 1,
-      },
-      empty = {
-        type = "description",
-        name = "No spells assigned to the right sidebar.",
-        order = 2,
-        hidden = function()
-          return optionsState.hasSpells and optionsState.hasSpells.RIGHT
+          return HasAnyPrimarySpells(optionsState)
         end,
       },
     },
@@ -1800,10 +1762,35 @@ function ClassHUD_BuildOptions(addon)
     PopulateUtilitySpellGroups(addon, utilityContainer, optionsState, RefreshSpellEditors)
     PopulateTrackedBuffGroups(addon, trackedContainer, optionsState, RefreshSpellEditors)
 
-    MergeArgs(placementGroupArgs.TOP, placementStaticArgs.TOP, placementContainers.TOP)
-    MergeArgs(placementGroupArgs.BOTTOM, placementStaticArgs.BOTTOM, placementContainers.BOTTOM)
-    MergeArgs(placementGroupArgs.LEFT, placementStaticArgs.LEFT, placementContainers.LEFT)
-    MergeArgs(placementGroupArgs.RIGHT, placementStaticArgs.RIGHT, placementContainers.RIGHT)
+    local combinedPrimary = {}
+    local nextOrder = 1
+
+    local function AppendPlacement(container)
+      local entries = {}
+      for key, group in pairs(container) do
+        entries[#entries + 1] = { key = key, group = group }
+      end
+      table.sort(entries, function(a, b)
+        local ao = a.group.order or math.huge
+        local bo = b.group.order or math.huge
+        if ao == bo then
+          return a.key < b.key
+        end
+        return ao < bo
+      end)
+      for _, entry in ipairs(entries) do
+        entry.group.order = nextOrder
+        combinedPrimary[entry.key] = entry.group
+        nextOrder = nextOrder + 1
+      end
+    end
+
+    AppendPlacement(placementContainers.TOP)
+    AppendPlacement(placementContainers.BOTTOM)
+    AppendPlacement(placementContainers.LEFT)
+    AppendPlacement(placementContainers.RIGHT)
+
+    MergeArgs(placementGroupArgs.TOP, placementStaticArgs.TOP, combinedPrimary)
     MergeArgs(utilityGroupArgs, utilityStaticArgs, utilityContainer)
     MergeArgs(trackedGroupArgs, trackedStaticArgs, trackedContainer)
   end
@@ -2502,34 +2489,16 @@ function ClassHUD_BuildOptions(addon)
             order = 1,
             args = placementGroupArgs.TOP,
           },
-          bottomBar = {
-            type = "group",
-            name = "Bottom Bar",
-            order = 2,
-            args = placementGroupArgs.BOTTOM,
-          },
-          leftBar = {
-            type = "group",
-            name = "Left Side",
-            order = 3,
-            args = placementGroupArgs.LEFT,
-          },
-          rightBar = {
-            type = "group",
-            name = "Right Side",
-            order = 4,
-            args = placementGroupArgs.RIGHT,
-          },
           utility = {
             type = "group",
             name = "Utility",
-            order = 5,
+            order = 2,
             args = utilityGroupArgs,
           },
           trackedBuffs = {
             type = "group",
             name = "Tracked Buffs",
-            order = 6,
+            order = 3,
             args = trackedGroupArgs,
           },
         },
