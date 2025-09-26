@@ -1192,12 +1192,21 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
   end
 
   local normalizedBuffID = ClassHUD:GetActiveSpellID(buffID) or buffID
-  local iconID = entry and entry.iconID
-  if not iconID then
-    local info = C_Spell.GetSpellInfo(normalizedBuffID)
-    iconID = info and info.iconID
+  local snapshotIconID = entry and entry.iconID
+  local info = C_Spell.GetSpellInfo(normalizedBuffID)
+  local activeIconID = (C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(normalizedBuffID)) or (info and info.iconID)
+  frame.icon:SetTexture(activeIconID or snapshotIconID or 134400)
+
+  local tooltipName = entry and entry.name or (info and info.name) or (C_Spell.GetSpellName and C_Spell.GetSpellName(normalizedBuffID))
+  local tooltipDesc = entry and entry.desc
+  if not tooltipDesc and C_Spell.GetSpellDescription then
+    tooltipDesc = C_Spell.GetSpellDescription(normalizedBuffID)
   end
-  frame.icon:SetTexture(iconID or C_Spell.GetSpellTexture(normalizedBuffID) or 134400)
+
+  frame.tooltipSpellID = normalizedBuffID
+  frame._tooltipSpellID = normalizedBuffID
+  frame.tooltipTitle = tooltipName
+  frame.tooltipText = tooltipDesc
 
   if aura and aura.expirationTime and aura.duration and aura.duration > 0 then
     frame.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration, aura.modRate or 1)
@@ -1305,16 +1314,25 @@ local function UpdateTrackedIconFrame(frame)
 
   if aura then
     local normalizedBuffID = ClassHUD:GetActiveSpellID(buffID) or buffID
-    local iconID = entry and entry.iconID
-    if not iconID then
-      local info = C_Spell.GetSpellInfo(normalizedBuffID)
-      iconID = info and info.iconID
-    end
-    iconID = iconID or C_Spell.GetSpellTexture(normalizedBuffID) or 134400
+    local snapshotIconID = entry and entry.iconID
+    local info = C_Spell.GetSpellInfo(normalizedBuffID)
+    local activeIconID = (C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(normalizedBuffID)) or (info and info.iconID)
+    local iconID = activeIconID or snapshotIconID or 134400
     if cache.iconID ~= iconID then
       frame.icon:SetTexture(iconID)
       cache.iconID = iconID
     end
+
+    local tooltipName = entry and entry.name or (info and info.name) or (C_Spell.GetSpellName and C_Spell.GetSpellName(normalizedBuffID))
+    local tooltipDesc = entry and entry.desc
+    if not tooltipDesc and C_Spell.GetSpellDescription then
+      tooltipDesc = C_Spell.GetSpellDescription(normalizedBuffID)
+    end
+
+    frame.tooltipSpellID = normalizedBuffID
+    frame._tooltipSpellID = normalizedBuffID
+    frame.tooltipTitle = tooltipName
+    frame.tooltipText = tooltipDesc
 
     if aura.expirationTime and aura.duration and aura.duration > 0 then
       frame.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration, aura.modRate or 1)
@@ -1381,6 +1399,10 @@ local function UpdateTrackedIconFrame(frame)
   ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
   frame:Hide()
   frame._layoutActive = false
+  frame.tooltipSpellID = nil
+  frame._tooltipSpellID = nil
+  frame.tooltipTitle = nil
+  frame.tooltipText = nil
   return false
 end
 
@@ -1689,17 +1711,26 @@ local function UpdateSpellFrame(frame)
 
   RegisterFrameAuraWatchers(frame, watcherCandidates, watcherUnits)
 
-  local iconID = entry and entry.iconID
-  if not iconID then
-    local info = C_Spell.GetSpellInfo(sid)
-    iconID = info and info.iconID
-  end
-  iconID = iconID or 134400
+  local snapshotIconID = entry and entry.iconID
+  local info = C_Spell.GetSpellInfo(sid)
+  local activeIconID = (C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid)) or (info and info.iconID)
+  local iconID = activeIconID or snapshotIconID or 134400
   local baseIconID = iconID
   if cache.iconID ~= iconID then
     frame.icon:SetTexture(iconID)
     cache.iconID = iconID
   end
+
+  local tooltipName = entry and entry.name or (info and info.name) or (C_Spell.GetSpellName and C_Spell.GetSpellName(sid))
+  local tooltipDesc = entry and entry.desc
+  if not tooltipDesc and C_Spell.GetSpellDescription then
+    tooltipDesc = C_Spell.GetSpellDescription(sid)
+  end
+
+  frame.tooltipSpellID = sid
+  frame._tooltipSpellID = sid
+  frame.tooltipTitle = tooltipName
+  frame.tooltipText = tooltipDesc
 
   local aura, auraSpellID, auraUnit = nil, nil, nil
   if auraCandidates then
