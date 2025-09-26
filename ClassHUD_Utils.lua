@@ -265,6 +265,26 @@ end
 local DEFAULT_AURA_UNITS = { "player", "pet", "target", "focus", "mouseover" }
 local CATEGORY_PRIORITY = { "bar", "buff", "essential", "utility" }
 
+local function AppendCandidate(self, list, seen, spellID)
+  if not spellID then return end
+
+  local numericID = tonumber(spellID) or spellID
+  if type(numericID) ~= "number" or numericID <= 0 then
+    return
+  end
+
+  if not seen[numericID] then
+    list[#list + 1] = numericID
+    seen[numericID] = true
+  end
+
+  local activeID = self and self.GetActiveSpellID and self:GetActiveSpellID(numericID)
+  if activeID and type(activeID) == "number" and activeID > 0 and not seen[activeID] then
+    list[#list + 1] = activeID
+    seen[activeID] = true
+  end
+end
+
 ---Finds the first relevant aura for the given spell ID across a list of units.
 ---@param spellID number
 ---@param units string[]|nil
@@ -313,46 +333,24 @@ function ClassHUD:_AssembleAuraCandidates(entry, spellID)
     end
   end
 
-  local count = 0
+  local seen = {}
 
   if entry.categories then
     for _, catData in pairs(entry.categories) do
-      local overrideID = catData.overrideSpellID
-      if overrideID then
-        count = count + 1
-        candidates[count] = overrideID
-      end
+      AppendCandidate(self, candidates, seen, catData.overrideSpellID)
 
       local linked = catData.linkedSpellIDs
       if linked then
         for i = 1, #linked do
-          count = count + 1
-          candidates[count] = linked[i]
+          AppendCandidate(self, candidates, seen, linked[i])
         end
       end
 
-      local catSpellID = catData.spellID
-      if catSpellID then
-        count = count + 1
-        candidates[count] = catSpellID
-      end
+      AppendCandidate(self, candidates, seen, catData.spellID)
     end
   end
 
-  if spellID then
-    local seen = false
-    for i = 1, count do
-      if candidates[i] == spellID then
-        seen = true
-        break
-      end
-    end
-
-    if not seen then
-      count = count + 1
-      candidates[count] = spellID
-    end
-  end
+  AppendCandidate(self, candidates, seen, spellID)
 
   return candidates
 end
@@ -372,17 +370,12 @@ function ClassHUD:GetAuraCandidatesForEntry(entry, spellID)
           TMP[i] = cached[i]
         end
 
-        local seen = false
+        local seen = {}
         for i = 1, count do
-          if TMP[i] == spellID then
-            seen = true
-            break
-          end
+          seen[TMP[i]] = true
         end
 
-        if not seen then
-          TMP[count + 1] = spellID
-        end
+        AppendCandidate(self, TMP, seen, spellID)
 
         return TMP
       end
@@ -401,7 +394,8 @@ function ClassHUD:GetAuraCandidatesForEntry(entry, spellID)
     TMP[i] = nil
   end
 
-  TMP[1] = spellID
+  local seen = {}
+  AppendCandidate(self, TMP, seen, spellID)
   return TMP
 end
 
@@ -430,7 +424,8 @@ end
 function ClassHUD:IsHarmfulAuraSpell(spellID, entry)
   if not (C_Spell and C_Spell.IsSpellHarmful) then return false, false end
   local normalizedSpellID = self:GetActiveSpellID(spellID) or spellID
-  if not C_Spell.IsSpellHarmful(normalizedSpellID) then return false, false end
+  local ok, harmful = pcall(C_Spell.IsSpellHarmful, normalizedSpellID)
+  if not ok or not harmful then return false, false end
 
   -- Case 1: snapshot sier dette er en buff/debuff (klassisk DoT)
   if entry and entry.categories and entry.categories.buff then

@@ -556,7 +556,13 @@ local function UpdateGlow(frame, aura, sid, data)
   local allowExtraGlowLogic = true
 
   local normalizedSpellID = ClassHUD:GetActiveSpellID(sid) or sid
-  local isHarmfulSpell = C_Spell and C_Spell.IsSpellHarmful and C_Spell.IsSpellHarmful(normalizedSpellID)
+  local isHarmfulSpell = false
+  if C_Spell and C_Spell.IsSpellHarmful then
+    local ok, result = pcall(C_Spell.IsSpellHarmful, normalizedSpellID)
+    if ok and result then
+      isHarmfulSpell = true
+    end
+  end
 
   if isHarmfulSpell then
     allowExtraGlowLogic = false
@@ -2364,9 +2370,10 @@ function ClassHUD:RebuildTrackedBuffFrames()
     ClassHUD:NormalizeBuffLinkTable(links)
 
     for buffID in pairs(links) do
-      local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
+      local normalizedBuffID = self:GetActiveSpellID(buffID) or buffID
+      local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(normalizedBuffID)
       if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
-        aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
+        aura = C_UnitAuras.GetAuraDataBySpellID("pet", normalizedBuffID)
       end
     end
   end

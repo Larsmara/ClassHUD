@@ -483,9 +483,9 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
       end
     end
     local units = isHarmful and BUFF_LINK_HARMFUL_UNITS or BUFF_LINK_HELPFUL_UNITS
-    local aura = self:GetAuraForSpell(buffID, units)
+    local aura = self:GetAuraForSpell(normalizedBuffID, units)
     if not aura and isHarmful then
-      aura = self:FindAuraByName(buffID, BUFF_LINK_HARMFUL_UNITS)
+      aura = self:FindAuraByName(normalizedBuffID, BUFF_LINK_HARMFUL_UNITS)
     end
 
     if aura then
