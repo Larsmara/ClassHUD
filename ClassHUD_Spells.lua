@@ -953,8 +953,31 @@ local function SpellIsKnown(spellID)
 
   local normalizedSpellID = ClassHUD:GetActiveSpellID(spellID) or spellID
 
-  if C_SpellBook and C_SpellBook.IsSpellKnown then
-    local ok, known = pcall(C_SpellBook.IsSpellKnown, normalizedSpellID)
+  if C_SpellBook then
+    if C_SpellBook.IsSpellInSpellBook then
+      local ok, inBook = pcall(C_SpellBook.IsSpellInSpellBook, normalizedSpellID)
+      if ok and inBook then
+        return true
+      end
+    end
+
+    if C_SpellBook.IsSpellKnownOrOverridesKnown then
+      local ok, known = pcall(C_SpellBook.IsSpellKnownOrOverridesKnown, normalizedSpellID)
+      if ok then
+        return known == true
+      end
+    end
+
+    if C_SpellBook.IsSpellKnown then
+      local ok, known = pcall(C_SpellBook.IsSpellKnown, normalizedSpellID)
+      if ok then
+        return known == true
+      end
+    end
+  end
+
+  if IsSpellKnownOrOverridesKnown then
+    local ok, known = pcall(IsSpellKnownOrOverridesKnown, normalizedSpellID)
     if ok then
       return known == true
     end

@@ -72,6 +72,13 @@ function ClassHUD:GetActiveSpellID(spellID)
     end
   end
 
+  if C_Spell and C_Spell.GetOverrideSpell then
+    local ok, overrideID = pcall(C_Spell.GetOverrideSpell, numericID)
+    if ok and overrideID and overrideID > 0 and overrideID ~= numericID then
+      numericID = overrideID
+    end
+  end
+
   return numericID
 end
 
