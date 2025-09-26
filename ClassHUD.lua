@@ -460,7 +460,6 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
       frame._linkedBuffActive = false
       frame._linkedBuffCount = nil
       RestoreBuffLinkCount(frame)
-      ActionButton_HideOverlayGlow(frame)
       frame._linkedBuffRestoreText = cache.countText
       frame._linkedBuffRestoreShown = cache.countShown
     end
@@ -513,11 +512,8 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
   frame._linkedBuffActive = anyActive
   frame._linkedBuffCount = highestCount
 
-  if anyActive then
-    ActionButton_ShowOverlayGlow(frame)
-  else
+  if not anyActive then
     RestoreBuffLinkCount(frame)
-    ActionButton_HideOverlayGlow(frame)
   end
 
   if anyActive and highestCount and highestCount > 0 then

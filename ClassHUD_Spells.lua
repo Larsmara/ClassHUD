@@ -605,6 +605,10 @@ local function UpdateGlow(frame, aura, sid, data)
     end
   end
 
+  if frame then
+    frame._harmfulGlowPendingState = shouldGlow
+  end
+
   return shouldGlow
 end
 
@@ -697,6 +701,7 @@ local function CreateSpellFrame(spellID)
     local threshold = selfFrame._harmfulGlowThreshold or HARMFUL_GLOW_THRESHOLD
     local auraSpellID = selfFrame._harmfulGlowAuraSpellID or selfFrame.spellID
     local auraStillPresent = true
+    local shouldGlow = false
 
     local nextCheck = selfFrame._harmfulGlowNextAuraCheck
     if not nextCheck or now >= nextCheck then
@@ -707,6 +712,9 @@ local function CreateSpellFrame(spellID)
       end
       if not auraCheck then
         auraStillPresent = false
+      else
+        expiration = auraCheck.expirationTime or expiration
+        selfFrame._harmfulGlowExpiration = expiration
       end
       selfFrame._harmfulGlowNextAuraCheck = now + HARMFUL_GLOW_AURA_CHECK_INTERVAL
     end
@@ -716,24 +724,27 @@ local function CreateSpellFrame(spellID)
       selfFrame._harmfulGlowExpiration = nil
       selfFrame._harmfulGlowAuraSpellID = nil
       selfFrame._harmfulGlowNextAuraCheck = nil
-      SetFrameGlow(selfFrame, false)
     elseif expiration and expiration > 0 then
       local remain = expiration - now
       if remain > 0 then
-        SetFrameGlow(selfFrame, remain <= threshold)
+        shouldGlow = remain <= threshold
       else
         selfFrame._harmfulGlowWatching = false
         selfFrame._harmfulGlowExpiration = nil
         selfFrame._harmfulGlowAuraSpellID = nil
         selfFrame._harmfulGlowNextAuraCheck = nil
-        SetFrameGlow(selfFrame, false)
       end
     else
       selfFrame._harmfulGlowWatching = false
       selfFrame._harmfulGlowExpiration = nil
       selfFrame._harmfulGlowAuraSpellID = nil
       selfFrame._harmfulGlowNextAuraCheck = nil
-      SetFrameGlow(selfFrame, false)
+    end
+
+    local previous = selfFrame._harmfulGlowPendingState
+    if previous ~= shouldGlow then
+      selfFrame._harmfulGlowPendingState = shouldGlow
+      MarkFrameForAuraUpdate(selfFrame)
     end
   end)
 
@@ -1605,20 +1616,8 @@ local function UpdateSpellFrame(frame)
     end
   end
 
-  local hasOverride = sid and resolvedBaseID and (sid ~= resolvedBaseID)
-  if hasOverride then
-    if not frame._overrideGlowActive then
-      if ActionButton_ShowOverlayGlow then
-        ActionButton_ShowOverlayGlow(frame)
-      end
-      frame._overrideGlowActive = true
-    end
-  elseif frame._overrideGlowActive then
-    if ActionButton_HideOverlayGlow then
-      ActionButton_HideOverlayGlow(frame)
-    end
-    frame._overrideGlowActive = nil
-  end
+  local overrideActive = sid and resolvedBaseID and (sid ~= resolvedBaseID)
+  frame._overrideGlowActive = nil
 
   SetFrameActiveSpell(frame, sid)
 
@@ -2213,18 +2212,25 @@ local function UpdateSpellFrame(frame)
     cache.vertexR, cache.vertexG, cache.vertexB = vertexR, vertexG, vertexB
   end
 
+  ClassHUD:EvaluateBuffLinks(frame, baseSpellID)
+
   local shouldGlow = UpdateGlow(frame, aura, sid, data) or false
+  if frame._linkedBuffActive then
+    shouldGlow = true
+  end
   if frame._totemGlowActive then
     shouldGlow = true
   end
+  if overrideActive then
+    shouldGlow = true
+  end
+
   if cache.glow ~= shouldGlow then
     SetFrameGlow(frame, shouldGlow)
     cache.glow = shouldGlow
   else
     cache.glow = shouldGlow
   end
-
-  ClassHUD:EvaluateBuffLinks(frame, baseSpellID)
 
   local overrideIconID = frame._linkedBuffSwapIconID
   if overrideIconID and overrideIconID ~= cache.iconID then

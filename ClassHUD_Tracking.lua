@@ -25,7 +25,6 @@ ClassHUD.WILD_IMP_DISPLAY_SPELL_ID = WILD_IMP_DISPLAY_SPELL_ID
 local ShouldShowCooldownNumbers = ClassHUD.ShouldShowCooldownNumbers
 local PopulateBuffIconFrame = ClassHUD.PopulateBuffIconFrame
 local CreateBuffFrame = ClassHUD.CreateBuffFrame
-local SetFrameGlow = ClassHUD.SetFrameGlow
 
 local function Contains(list, value)
   if type(list) ~= "table" then return false end
@@ -1181,7 +1180,6 @@ function ClassHUD:ApplyTotemOverlay(state)
     cooldown:SetCooldown(startTime, duration)
     cooldown:Show()
     frame._totemGlowActive = nil
-    SetFrameGlow(frame, false)
   else
     if frame.totemCooldown then
       CooldownFrame_Clear(frame.totemCooldown)
@@ -1190,16 +1188,21 @@ function ClassHUD:ApplyTotemOverlay(state)
 
     if style == "GLOW" or not duration or duration <= 0 then
       frame._totemGlowActive = true
-      SetFrameGlow(frame, true)
     else
       frame._totemGlowActive = nil
-      SetFrameGlow(frame, false)
     end
   end
 
   frame._totemActive = true
   frame._totemSlot = state.slot
   frame._activeTotemState = state
+
+  if self.UpdateCooldown then
+    local updateSpellID = state.spellID or frame.spellID
+    if updateSpellID then
+      self:UpdateCooldown(updateSpellID)
+    end
+  end
 
   if self:IsTotemDurationTextEnabled() and self:HasTotemDuration(state) then
     local now = GetTime()
@@ -1228,10 +1231,7 @@ function ClassHUD:ClearTotemOverlay(state)
     frame.totemCooldown:Hide()
   end
 
-  if frame._totemGlowActive then
-    frame._totemGlowActive = nil
-    SetFrameGlow(frame, false)
-  end
+  frame._totemGlowActive = nil
 
   frame._totemActive = nil
   frame._totemSlot = nil
