@@ -30,6 +30,28 @@ ClassHUD.debugEnabled = ClassHUD.debugEnabled or false
 ClassHUD._loggedUntrackedSummons = ClassHUD._loggedUntrackedSummons or {}
 ClassHUD._pendingProfileSeeds = ClassHUD._pendingProfileSeeds or {}
 
+local PET_UNIT_TOKENS = { "pet", "pet1", "pet2", "pet3", "pet4", "pet5" }
+local PET_UNIT_LOOKUP = {}
+for i = 1, #PET_UNIT_TOKENS do
+  PET_UNIT_LOOKUP[PET_UNIT_TOKENS[i]] = true
+end
+
+ClassHUD.PET_UNIT_TOKENS = PET_UNIT_TOKENS
+ClassHUD._petUnitLookup = ClassHUD._petUnitLookup or {}
+for token in pairs(PET_UNIT_LOOKUP) do
+  ClassHUD._petUnitLookup[token] = true
+end
+ClassHUD._spellAuraLinks = ClassHUD._spellAuraLinks or {}
+ClassHUD._shouldRefreshAuraLinks = true
+ClassHUD._suppressAuraLinkRefresh = ClassHUD._suppressAuraLinkRefresh or false
+
+---@param unit string|nil
+---@return boolean
+function ClassHUD:IsPetUnit(unit)
+  if not unit then return false end
+  return (self._petUnitLookup and self._petUnitLookup[unit]) == true
+end
+
 local MAX_DEBUG_LOG_ENTRIES = 2000
 
 local function GetNpcIDFromGUID(guid)
@@ -158,6 +180,171 @@ function ClassHUD:LogDebug(subevent, spellID, spellName, sourceGUID, destGUID, n
   end
 end
 
+---@param unit string|nil
+---@param querySpellID number|nil
+---@param aura table|nil
+function ClassHUD:LogAuraMatch(unit, querySpellID, aura)
+  if not self.debugEnabled then
+    return
+  end
+
+  local auraSpellID = aura and (aura.spellId or aura.spellID or aura.spell or aura.id)
+  local sourceUnit = aura and aura.sourceUnit
+  local sourceGUID = sourceUnit and UnitGUID and UnitGUID(sourceUnit) or sourceUnit
+  local destGUID = unit and UnitGUID and UnitGUID(unit) or unit
+  local auraName = nil
+
+  if C_Spell and (auraSpellID or querySpellID) and C_Spell.GetSpellName then
+    local ok, name = pcall(C_Spell.GetSpellName, auraSpellID or querySpellID)
+    if ok then
+      auraName = name
+    end
+  end
+
+  local message = string.format(
+    "[ClassHUD Debug] Aura match: unit=%s querySpellID=%s matchedSpellID=%s", 
+    FormatLogValue(unit),
+    FormatLogValue(querySpellID),
+    FormatLogValue(auraSpellID)
+  )
+
+  if self.Print then
+    self:Print(message)
+  else
+    print(message)
+  end
+
+  self:LogDebug("AURA_MATCH", auraSpellID or querySpellID, auraName, sourceGUID, destGUID, nil)
+end
+
+local function EnsureAuraLinkBucket(map, key)
+  if type(key) ~= "number" or key <= 0 then
+    return nil
+  end
+  local bucket = map[key]
+  if not bucket then
+    bucket = {}
+    map[key] = bucket
+  end
+  return bucket
+end
+
+---@param spellID number|nil
+---@param auraSpellID number|nil
+function ClassHUD:RegisterSpellAuraLink(spellID, auraSpellID)
+  if type(spellID) ~= "number" or spellID <= 0 then return end
+  if type(auraSpellID) ~= "number" or auraSpellID <= 0 then return end
+
+  local map = self._spellAuraLinks
+  if type(map) ~= "table" then
+    map = {}
+    self._spellAuraLinks = map
+  end
+
+  local function addLink(key, auraID)
+    local bucket = EnsureAuraLinkBucket(map, key)
+    if bucket then
+      bucket[auraID] = true
+    end
+  end
+
+  addLink(spellID, auraSpellID)
+
+  local normalizedSpellID = self:GetActiveSpellID(spellID)
+  if normalizedSpellID and normalizedSpellID ~= spellID then
+    addLink(normalizedSpellID, auraSpellID)
+  end
+
+  local normalizedAuraID = self:GetActiveSpellID(auraSpellID)
+  if normalizedAuraID and normalizedAuraID ~= auraSpellID then
+    addLink(spellID, normalizedAuraID)
+    if normalizedSpellID and normalizedSpellID ~= spellID then
+      addLink(normalizedSpellID, normalizedAuraID)
+    end
+  end
+end
+
+---@param spellID number|nil
+---@return table|nil
+function ClassHUD:GetLinkedAuraSpellIDs(spellID)
+  if spellID == nil then return nil end
+
+  if self._shouldRefreshAuraLinks then
+    self:RefreshAuraSpellLinks(nil, false)
+  end
+
+  local map = self._spellAuraLinks
+  if type(map) ~= "table" then return nil end
+
+  local numericID = tonumber(spellID) or spellID
+  local bucket = numericID and map[numericID] or nil
+  if bucket then
+    return bucket
+  end
+
+  if numericID then
+    local normalized = self:GetActiveSpellID(numericID)
+    if normalized and normalized ~= numericID then
+      return map[normalized]
+    end
+  end
+
+  return nil
+end
+
+---@param specLinks table|nil
+---@param alreadyNormalized boolean|nil
+function ClassHUD:RefreshAuraSpellLinks(specLinks, alreadyNormalized)
+  local map = {}
+  self._spellAuraLinks = map
+
+  local db = self.db
+  local profile = db and db.profile
+  local class, specID = self:GetPlayerClassSpec()
+
+  if not specLinks then
+    local tracking = profile and profile.tracking
+    local linkRoot = tracking and tracking.buffs and tracking.buffs.links
+    specLinks = linkRoot and class and specID and linkRoot[class] and linkRoot[class][specID] or nil
+  end
+
+  if type(specLinks) == "table" then
+    if not alreadyNormalized then
+      local previousSuppress = self._suppressAuraLinkRefresh
+      self._suppressAuraLinkRefresh = true
+      specLinks = self:NormalizeBuffLinkTable(specLinks)
+      self._suppressAuraLinkRefresh = previousSuppress
+    end
+
+    for buffKey, entry in pairs(specLinks) do
+      local spells = entry and entry.spells
+      if type(spells) == "table" then
+        local numericBuffID = tonumber(buffKey) or buffKey
+        if type(numericBuffID) == "number" then
+          for spellKey, enabled in pairs(spells) do
+            if enabled then
+              local spellID = tonumber(spellKey) or spellKey
+              if type(spellID) == "number" then
+                self:RegisterSpellAuraLink(spellID, numericBuffID)
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  if self.trackedBuffToSpell then
+    for buffID, spellID in pairs(self.trackedBuffToSpell) do
+      if type(buffID) == "number" and type(spellID) == "number" then
+        self:RegisterSpellAuraLink(spellID, buffID)
+      end
+    end
+  end
+
+  self._shouldRefreshAuraLinks = false
+end
+
 function ClassHUD:LogUntrackedSummon(npcID, npcName, spellID)
   if not self.debugEnabled then
     return
@@ -213,16 +400,24 @@ ClassHUD._barTickerToken = ClassHUD._barTickerToken or nil
 ClassHUD._cooldownTextFrames = ClassHUD._cooldownTextFrames or {}
 ClassHUD._cooldownTickerToken = ClassHUD._cooldownTickerToken or nil
 ClassHUD._auraWatchersBySpellID = ClassHUD._auraWatchersBySpellID or {}
-ClassHUD._auraWatchersByUnit = ClassHUD._auraWatchersByUnit or {
-  player = {},
-  target = {},
-  focus = {},
-  pet = {},
-}
+ClassHUD._auraWatchersByUnit = ClassHUD._auraWatchersByUnit or {}
+local auraWatchersByUnit = ClassHUD._auraWatchersByUnit
+auraWatchersByUnit.player = auraWatchersByUnit.player or {}
+auraWatchersByUnit.target = auraWatchersByUnit.target or {}
+auraWatchersByUnit.focus = auraWatchersByUnit.focus or {}
+auraWatchersByUnit.mouseover = auraWatchersByUnit.mouseover or {}
+local petUnits = ClassHUD.PET_UNIT_TOKENS or PET_UNIT_TOKENS
+for i = 1, #petUnits do
+  local unit = petUnits[i]
+  auraWatchersByUnit[unit] = auraWatchersByUnit[unit] or {}
+end
 ClassHUD._pendingAuraFrames = ClassHUD._pendingAuraFrames or {}
 ClassHUD._auraFlushTimer = ClassHUD._auraFlushTimer or nil
 
-local BUFF_LINK_HELPFUL_UNITS = { "player", "pet" }
+local BUFF_LINK_HELPFUL_UNITS = { "player" }
+for i = 1, #petUnits do
+  BUFF_LINK_HELPFUL_UNITS[#BUFF_LINK_HELPFUL_UNITS + 1] = petUnits[i]
+end
 local BUFF_LINK_HARMFUL_UNITS = { "target", "focus", "mouseover" }
 
 ---Normalizes a spec's buff link table so each buff maps to spell metadata.
@@ -317,6 +512,10 @@ function ClassHUD:NormalizeBuffLinkTable(specLinks)
     end
   end
 
+  if not self._suppressAuraLinkRefresh then
+    self._shouldRefreshAuraLinks = true
+  end
+
   return specLinks
 end
 
@@ -371,7 +570,10 @@ function ClassHUD:GetLinkedBuffIDsForSpell(spellID, reuse, reuseMeta)
     return list, meta
   end
 
-  self:NormalizeBuffLinkTable(specLinks)
+  local previousSuppress = self._suppressAuraLinkRefresh
+  self._suppressAuraLinkRefresh = true
+  specLinks = self:NormalizeBuffLinkTable(specLinks)
+  self._suppressAuraLinkRefresh = previousSuppress
 
   local normalizedSpellID = tonumber(spellID) or spellID
   if not normalizedSpellID then
@@ -2226,18 +2428,23 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     ClassHUD:UNIT_SPELLCAST_FAILED(unit, ...); return
   end
 
-  if event == "UNIT_AURA" and (unit == "player" or unit == "pet" or unit == "target" or unit == "focus") then
+  if event == "UNIT_AURA" then
     local updateInfo = ...
-    local shouldUpdate = true
-    if ClassHUD.ShouldProcessAuraUpdate then
-      shouldUpdate = ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
-    end
+    local unitWatchers = ClassHUD._auraWatchersByUnit and ClassHUD._auraWatchersByUnit[unit]
+    local hasWatchers = unitWatchers and next(unitWatchers) ~= nil
 
-    if shouldUpdate then
-      if ClassHUD.HandleUnitAuraUpdate then
-        ClassHUD:HandleUnitAuraUpdate(unit, updateInfo)
-      elseif ClassHUD.UpdateAllFrames then
-        ClassHUD:RequestUpdate("aura")
+    if hasWatchers then
+      local shouldUpdate = true
+      if ClassHUD.ShouldProcessAuraUpdate then
+        shouldUpdate = ClassHUD:ShouldProcessAuraUpdate(unit, updateInfo)
+      end
+
+      if shouldUpdate then
+        if ClassHUD.HandleUnitAuraUpdate then
+          ClassHUD:HandleUnitAuraUpdate(unit, updateInfo)
+        elseif ClassHUD.UpdateAllFrames then
+          ClassHUD:RequestUpdate("aura")
+        end
       end
     end
 

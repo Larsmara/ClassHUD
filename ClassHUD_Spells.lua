@@ -66,7 +66,11 @@ local INACTIVE_BAR_COLOR = { r = 0.25, g = 0.25, b = 0.25, a = 0.6 }
 local HARMFUL_GLOW_THRESHOLD = 5
 local HARMFUL_GLOW_AURA_CHECK_INTERVAL = 0.1
 local HARMFUL_GLOW_UNITS = { "target", "focus" }
-local TRACKED_UNITS = { "player", "pet" }
+local PET_UNITS = (ClassHUD and ClassHUD.PET_UNIT_TOKENS) or { "pet" }
+local TRACKED_UNITS = { "player" }
+for i = 1, #PET_UNITS do
+  TRACKED_UNITS[#TRACKED_UNITS + 1] = PET_UNITS[i]
+end
 local SPELL_AURA_UNITS_DEFAULT = TRACKED_UNITS
 local SPELL_AURA_UNITS_HARMFUL = { "target", "focus" }
 local SPELL_AURA_UNITS_TARGET_ONLY = { "target" }
@@ -2423,7 +2427,10 @@ function ClassHUD:RebuildTrackedBuffFrames()
   local links = linkRoot[class] and linkRoot[class][specID]
 
   if type(links) == "table" then
-    ClassHUD:NormalizeBuffLinkTable(links)
+    local previousSuppress = self._suppressAuraLinkRefresh
+    self._suppressAuraLinkRefresh = true
+    self:NormalizeBuffLinkTable(links)
+    self._suppressAuraLinkRefresh = previousSuppress
 
     for buffID in pairs(links) do
       local normalizedBuffID = self:GetActiveSpellID(buffID) or buffID
@@ -2695,6 +2702,8 @@ function ClassHUD:BuildFramesForSpec()
       end
     end
   end
+
+  ClassHUD:RefreshAuraSpellLinks(specLinks, true)
 
   self:RefreshActiveSpellMap()
   self:UpdateAllFrames()

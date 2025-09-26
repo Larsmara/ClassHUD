@@ -262,7 +262,14 @@ function ClassHUD.FormatSeconds(seconds)
   end
 end
 
-local DEFAULT_AURA_UNITS = { "player", "pet", "target", "focus", "mouseover" }
+local PET_UNITS = (ClassHUD and ClassHUD.PET_UNIT_TOKENS) or { "pet" }
+local DEFAULT_AURA_UNITS = { "player" }
+for i = 1, #PET_UNITS do
+  DEFAULT_AURA_UNITS[#DEFAULT_AURA_UNITS + 1] = PET_UNITS[i]
+end
+DEFAULT_AURA_UNITS[#DEFAULT_AURA_UNITS + 1] = "target"
+DEFAULT_AURA_UNITS[#DEFAULT_AURA_UNITS + 1] = "focus"
+DEFAULT_AURA_UNITS[#DEFAULT_AURA_UNITS + 1] = "mouseover"
 local CATEGORY_PRIORITY = { "bar", "buff", "essential", "utility" }
 
 local function AppendCandidate(self, list, seen, spellID)
@@ -283,6 +290,30 @@ local function AppendCandidate(self, list, seen, spellID)
     list[#list + 1] = activeID
     seen[activeID] = true
   end
+
+  if self and self.GetLinkedAuraSpellIDs then
+    local linked = self:GetLinkedAuraSpellIDs(numericID)
+    if type(linked) == "table" then
+      for auraID in pairs(linked) do
+        if type(auraID) == "number" and auraID > 0 and not seen[auraID] then
+          list[#list + 1] = auraID
+          seen[auraID] = true
+        end
+      end
+    end
+
+    if activeID and type(activeID) == "number" and activeID > 0 then
+      local activeLinked = self:GetLinkedAuraSpellIDs(activeID)
+      if type(activeLinked) == "table" then
+        for auraID in pairs(activeLinked) do
+          if type(auraID) == "number" and auraID > 0 and not seen[auraID] then
+            list[#list + 1] = auraID
+            seen[auraID] = true
+          end
+        end
+      end
+    end
+  end
 end
 
 ---Finds the first relevant aura for the given spell ID across a list of units.
@@ -292,22 +323,59 @@ end
 function ClassHUD:GetAuraForSpell(spellID, units)
   if not C_UnitAuras then return nil end
 
-  local normalizedSpellID = self:GetActiveSpellID(spellID) or spellID
+  local numericSpellID = tonumber(spellID) or spellID
+  if type(numericSpellID) ~= "number" or numericSpellID <= 0 then
+    return nil
+  end
+
+  local normalizedSpellID = self:GetActiveSpellID(numericSpellID) or numericSpellID
+
+  local candidates = {}
+  local candidateSeen = {}
+  local function addCandidate(id)
+    if type(id) == "number" and id > 0 and not candidateSeen[id] then
+      candidates[#candidates + 1] = id
+      candidateSeen[id] = true
+    end
+  end
+
+  addCandidate(normalizedSpellID)
+  addCandidate(numericSpellID)
 
   units = units or DEFAULT_AURA_UNITS
 
   if C_UnitAuras.GetPlayerAuraBySpellID then
-    local aura = C_UnitAuras.GetPlayerAuraBySpellID(normalizedSpellID)
-    if aura then return aura, "player" end
+    for i = 1, #candidates do
+      local queryID = candidates[i]
+      local aura = C_UnitAuras.GetPlayerAuraBySpellID(queryID)
+      if aura then
+        if self.LogAuraMatch then
+          self:LogAuraMatch("player", queryID, aura)
+        end
+        return aura, "player"
+      end
+    end
   end
 
   if C_UnitAuras.GetAuraDataBySpellID then
     for i = 1, #units do
       local unit = units[i]
-      if unit ~= "player" and UnitExists(unit) then
-        local aura = C_UnitAuras.GetAuraDataBySpellID(unit, normalizedSpellID)
-        if aura and (aura.isFromPlayer or aura.sourceUnit == "player" or aura.sourceUnit == "pet") then
-          return aura, unit
+      if type(unit) == "string" and unit ~= "player" then
+        local isPetUnit = self.IsPetUnit and self:IsPetUnit(unit)
+        if isPetUnit or UnitExists(unit) then
+          local attempts = isPetUnit and #candidates or (#candidates > 0 and 1 or 0)
+          for attempt = 1, attempts do
+            local queryID = candidates[attempt]
+            if queryID then
+              local aura = C_UnitAuras.GetAuraDataBySpellID(unit, queryID)
+              if aura and (aura.isFromPlayer or aura.sourceUnit == "player" or aura.sourceUnit == "pet") then
+                if self.LogAuraMatch then
+                  self:LogAuraMatch(unit, queryID, aura)
+                end
+                return aura, unit
+              end
+            end
+          end
         end
       end
     end
