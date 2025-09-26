@@ -6,6 +6,7 @@ local AceConsole = LibStub("AceConsole-3.0")
 local AceTimer   = LibStub("AceTimer-3.0")
 local AceDB      = LibStub("AceDB-3.0")
 local LSM        = LibStub("LibSharedMedia-3.0")
+local SOUND_NONE_KEY = "None"
 
 ---@class ClassHUD : AceAddon, AceEvent, AceConsole, AceTimer
 ---@field BuildFramesForSpec fun(self:ClassHUD)  -- defined in Spells.lua
@@ -318,6 +319,113 @@ function ClassHUD:NormalizeBuffLinkTable(specLinks)
   end
 
   return specLinks
+end
+
+local function HasSoundConfigValue(entry)
+  if type(entry) ~= "table" then
+    return false
+  end
+
+  local function hasValue(value)
+    if value == nil then return false end
+    if value == SOUND_NONE_KEY then return false end
+    if value == "" then return false end
+    return true
+  end
+
+  return hasValue(entry.soundReady or entry.onReady)
+      or hasValue(entry.soundApplied or entry.onApplied)
+      or hasValue(entry.soundRemoved or entry.onRemoved)
+end
+
+---Returns the saved sound configuration for the provided spell, if any.
+---@param spellID number|string
+---@return table|nil
+function ClassHUD:GetSpellSoundConfig(spellID)
+  local db = self.db and self.db.profile
+  if not db then
+    return nil
+  end
+
+  local class, specID = self:GetPlayerClassSpec()
+  if not class or not specID or specID == 0 then
+    return nil
+  end
+
+  local root = db.soundAlerts
+  if type(root) ~= "table" then
+    return nil
+  end
+
+  local perClass = root[class]
+  local perSpec = perClass and perClass[specID]
+  if type(perSpec) ~= "table" then
+    return nil
+  end
+
+  local numericID = tonumber(spellID) or spellID
+  if not numericID then
+    return nil
+  end
+
+  local entry = perSpec[numericID] or perSpec[tostring(numericID)]
+  if not HasSoundConfigValue(entry) then
+    return nil
+  end
+
+  return entry
+end
+
+---Evaluates configured sound alerts for a spell frame and plays them on transitions.
+---@param frame table
+---@param spellID number|string
+---@param onCooldown boolean
+---@param auraActive boolean
+---@param tracksAura boolean|nil
+function ClassHUD:ProcessSpellSound(frame, spellID, onCooldown, auraActive, tracksAura)
+  if not frame then
+    return
+  end
+
+  local state = frame._soundState
+  if not state then
+    state = { wasReady = nil, auraWasActive = nil }
+    frame._soundState = state
+  end
+
+  local config = self:GetSpellSoundConfig(spellID)
+
+  if state.wasReady == nil then
+    state.wasReady = not onCooldown
+  end
+  if state.auraWasActive == nil then
+    state.auraWasActive = tracksAura and auraActive or false
+  end
+
+  if config then
+    local readyKey = config.soundReady or config.onReady
+    local appliedKey = config.soundApplied or config.onApplied
+    local removedKey = config.soundRemoved or config.onRemoved
+
+    if not onCooldown and state.wasReady == false then
+      self:PlayAlertSound(readyKey)
+    end
+
+    if tracksAura and auraActive and state.auraWasActive == false then
+      self:PlayAlertSound(appliedKey)
+    end
+
+    if tracksAura and not auraActive and state.auraWasActive == true then
+      self:PlayAlertSound(removedKey)
+    end
+  end
+
+  state.wasReady = not onCooldown
+  if tracksAura then
+    state.auraWasActive = auraActive
+  else
+    state.auraWasActive = false
+  end
 end
 
 ---Collects all buff spell IDs linked to the provided spell for the current spec.
@@ -1144,9 +1252,7 @@ local defaults = {
       timerStyle  = "Blizzard",
     },
     fontSize      = 12,
-    soundAlerts   = {
-      enabled = false,
-    },
+    soundAlerts   = {},
   },
 }
 

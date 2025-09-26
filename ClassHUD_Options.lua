@@ -311,7 +311,7 @@ local function GetMaxLinkedBuffOrder(linkTable, normalizedSpellID)
 end
 
 local function EnsureSoundConfig(addon, class, specID)
-  addon.db.profile.soundAlerts = addon.db.profile.soundAlerts or { enabled = false }
+  addon.db.profile.soundAlerts = addon.db.profile.soundAlerts or {}
   local root = addon.db.profile.soundAlerts
   root[class] = root[class] or {}
   root[class][specID] = root[class][specID] or {}
@@ -319,6 +319,64 @@ local function EnsureSoundConfig(addon, class, specID)
 end
 
 local SOUND_NONE = "None"
+
+local SOUND_FIELD_MAP = {
+  ready = { new = "soundReady", legacy = "onReady" },
+  applied = { new = "soundApplied", legacy = "onApplied" },
+  removed = { new = "soundRemoved", legacy = "onRemoved" },
+}
+
+local function GetConfiguredSound(perSpell, key)
+  if type(perSpell) ~= "table" then
+    return nil
+  end
+
+  local mapping = SOUND_FIELD_MAP[key]
+  if not mapping then
+    return nil
+  end
+
+  return perSpell[mapping.new] or perSpell[mapping.legacy]
+end
+
+local function SetConfiguredSound(target, key, value)
+  local mapping = SOUND_FIELD_MAP[key]
+  if not mapping then
+    return
+  end
+
+  target[mapping.new] = value
+  if mapping.legacy then
+    target[mapping.legacy] = nil
+  end
+end
+
+local function ClearConfiguredSound(target, key)
+  if type(target) ~= "table" then
+    return
+  end
+
+  local mapping = SOUND_FIELD_MAP[key]
+  if not mapping then
+    return
+  end
+
+  target[mapping.new] = nil
+  if mapping.legacy then
+    target[mapping.legacy] = nil
+  end
+end
+
+local function CleanupEmptySoundEntry(container, spellID)
+  local entry = container[spellID]
+  if type(entry) ~= "table" then
+    return
+  end
+
+  if next(entry) == nil then
+    container[spellID] = nil
+  end
+end
 
 local function BuildSoundDropdownValues()
   local values = { [SOUND_NONE] = SOUND_NONE }
@@ -900,21 +958,38 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
         type = "select",
         name = "Ready",
         order = 1,
-        width = "full",
+        width = 1.5,
         dialogControl = "LSM30_Sound",
         values = soundValues,
         get = function()
           local conf = EnsureSoundConfig(addon, class, specID)
           local per = conf[spellID]
-          return (per and per.onReady) or SOUND_NONE
+          return GetConfiguredSound(per, "ready") or SOUND_NONE
         end,
         set = function(_, value)
           local conf = EnsureSoundConfig(addon, class, specID)
           conf[spellID] = conf[spellID] or {}
           if value == SOUND_NONE then
-            conf[spellID].onReady = nil
+            ClearConfiguredSound(conf[spellID], "ready")
+            CleanupEmptySoundEntry(conf, spellID)
           else
-            conf[spellID].onReady = value
+            SetConfiguredSound(conf[spellID], "ready", value)
+          end
+          addon:UpdateAllSpellFrames()
+          -- NotifyOptionsChanged()
+        end,
+      },
+      readyReset = {
+        type = "execute",
+        name = "Reset",
+        order = 1.1,
+        width = 0.8,
+        func = function()
+          local conf = EnsureSoundConfig(addon, class, specID)
+          local per = conf[spellID]
+          if per then
+            ClearConfiguredSound(per, "ready")
+            CleanupEmptySoundEntry(conf, spellID)
           end
           addon:UpdateAllSpellFrames()
           -- NotifyOptionsChanged()
@@ -924,21 +999,38 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
         type = "select",
         name = "Applied",
         order = 2,
-        width = "full",
+        width = 1.5,
         dialogControl = "LSM30_Sound",
         values = soundValues,
         get = function()
           local conf = EnsureSoundConfig(addon, class, specID)
           local per = conf[spellID]
-          return (per and per.onApplied) or SOUND_NONE
+          return GetConfiguredSound(per, "applied") or SOUND_NONE
         end,
         set = function(_, value)
           local conf = EnsureSoundConfig(addon, class, specID)
           conf[spellID] = conf[spellID] or {}
           if value == SOUND_NONE then
-            conf[spellID].onApplied = nil
+            ClearConfiguredSound(conf[spellID], "applied")
+            CleanupEmptySoundEntry(conf, spellID)
           else
-            conf[spellID].onApplied = value
+            SetConfiguredSound(conf[spellID], "applied", value)
+          end
+          addon:UpdateAllSpellFrames()
+          -- NotifyOptionsChanged()
+        end,
+      },
+      appliedReset = {
+        type = "execute",
+        name = "Reset",
+        order = 2.1,
+        width = 0.8,
+        func = function()
+          local conf = EnsureSoundConfig(addon, class, specID)
+          local per = conf[spellID]
+          if per then
+            ClearConfiguredSound(per, "applied")
+            CleanupEmptySoundEntry(conf, spellID)
           end
           addon:UpdateAllSpellFrames()
           -- NotifyOptionsChanged()
@@ -948,21 +1040,38 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
         type = "select",
         name = "Removed",
         order = 3,
-        width = "full",
+        width = 1.5,
         dialogControl = "LSM30_Sound",
         values = soundValues,
         get = function()
           local conf = EnsureSoundConfig(addon, class, specID)
           local per = conf[spellID]
-          return (per and per.onRemoved) or SOUND_NONE
+          return GetConfiguredSound(per, "removed") or SOUND_NONE
         end,
         set = function(_, value)
           local conf = EnsureSoundConfig(addon, class, specID)
           conf[spellID] = conf[spellID] or {}
           if value == SOUND_NONE then
-            conf[spellID].onRemoved = nil
+            ClearConfiguredSound(conf[spellID], "removed")
+            CleanupEmptySoundEntry(conf, spellID)
           else
-            conf[spellID].onRemoved = value
+            SetConfiguredSound(conf[spellID], "removed", value)
+          end
+          addon:UpdateAllSpellFrames()
+          -- NotifyOptionsChanged()
+        end,
+      },
+      removedReset = {
+        type = "execute",
+        name = "Reset",
+        order = 3.1,
+        width = 0.8,
+        func = function()
+          local conf = EnsureSoundConfig(addon, class, specID)
+          local per = conf[spellID]
+          if per then
+            ClearConfiguredSound(per, "removed")
+            CleanupEmptySoundEntry(conf, spellID)
           end
           addon:UpdateAllSpellFrames()
           -- NotifyOptionsChanged()
@@ -1819,10 +1928,7 @@ function ClassHUD_BuildOptions(addon)
   tracking.buffs.links = tracking.buffs.links or {}
   tracking.buffs.tracked = tracking.buffs.tracked or {}
 
-  profile.soundAlerts = profile.soundAlerts or { enabled = false }
-  if profile.soundAlerts.enabled == nil then
-    profile.soundAlerts.enabled = false
-  end
+  profile.soundAlerts = profile.soundAlerts or {}
 
   local placementContainers = {
     TOP = {},
@@ -2185,25 +2291,10 @@ function ClassHUD_BuildOptions(addon)
                   NotifyOptionsChanged()
                 end,
               },
-              soundAlerts = {
-                type = "toggle",
-                name = "Enable Sound Alerts",
-                order = 4,
-                width = "full",
-                get = function()
-                  return db.profile.soundAlerts and db.profile.soundAlerts.enabled
-                end,
-                set = function(_, value)
-                  db.profile.soundAlerts = db.profile.soundAlerts or { enabled = false }
-                  db.profile.soundAlerts.enabled = value and true or false
-                  addon:UpdateAllSpellFrames()
-                  NotifyOptionsChanged()
-                end,
-              },
               borderColor = {
                 type = "color",
                 name = "Bar Border Color",
-                order = 5,
+                order = 4,
                 hasAlpha = true,
                 get = function()
                   local c = profile.colors.border or { r = 0, g = 0, b = 0, a = 1 }
