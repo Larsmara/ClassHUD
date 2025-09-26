@@ -1,67 +1,56 @@
 # ClassHUD
 
-**ClassHUD** is a minimalist and customizable _class HUD_ for World of Warcraft. It brings your most important resources and cooldowns to the center of the screen, giving you better combat awareness without having to look down at your action bars.
+ClassHUD is a modern World of Warcraft® addon that puts the most important parts of your class kit directly in the center of your screen. It extends Blizzard's classic Cooldown Manager with a more flexible heads-up display so you can watch spells, buffs, summons, and resources without taking your eyes off the action.
 
-✨ **Main Features:**
+## Project Overview
+- **Customizable class HUD** that tracks the spells, buffs, and cooldowns you care about for every spec.
+- **Resource and class mechanics support** for combo points, eclipse, chi, runes, and other spec-specific bars.
+- **Summon awareness** for totems, demons, and the ever-important Wild Imps counter.
+- **Blizzard-friendly**: builds on the modern ActionButton overlay system (`ActionButtonSpellAlertManager`) and safe spell override handling via `GetActiveSpellID`.
 
-- **Resource bars** – HP, primary resource (mana/energy/rage), and class-specific power (e.g. combo points).
-- **Castbar** – compact castbar with icon and timer placed directly in the HUD.
-- **Top/Bottom bars for spells & buffs** – track cooldowns and buffs in a clean layout, with the option to link spells to buffs (e.g. “show buff on this cooldown”).
-- **Buff tracking** – always see uptime for your most important buffs/debuffs.
-- **Full configuration** via options – adjust fonts, textures, spacing, borders, and which spells/buffs to show.
-- **No external dependencies** – Ace3 and LibSharedMedia are embedded, so you don’t need to install anything extra.
+Whether you just want a cleaner way to watch core cooldowns or a full-featured combat cockpit, ClassHUD delivers a configurable, profile-driven experience that stays true to Blizzard's UI while bringing it into the Dragonflight / The War Within era.
 
-🎯 **Goal:** Provide a clean and functional HUD that helps you focus on gameplay and reactions, instead of staring at action bars.
+## Features
+- **Spell tracking** for essential rotation abilities, utility spells, and tracked buffs.
+- **Class bars** for primary resources and spec mechanics (combo points, eclipse, chi, runes, essences, and more).
+- **Totem & demon tracking**, including per-slot timers and visual alerts.
+- **Wild Imp counter** for Demonology Warlocks with automatic cleanup of expired summons.
+- **Options UI** powered by Ace3 that lets you adjust layout, fonts, textures, and visibility in real time.
+- **Override-safe spell handling** so base, permanent, and temporary spell overrides stay in sync with your layout.
+- **Modern overlay glow system** that mirrors Blizzard's spell alert glows for procs and highlights.
 
----
+## Installation
+### Manual install
+1. Download or clone the repository.
+2. Copy the `ClassHUD` folder into your `_retail_/Interface/AddOns/` directory so the final path is `_retail_/Interface/AddOns/ClassHUD`.
+3. Restart World of Warcraft and enable **ClassHUD** from the AddOns list at the character select screen.
 
-## 🔧 Installation
+### Release packaging
+We plan to publish packaged builds through GitHub Releases and, when ready, on CurseForge/Wago for streamlined updates. Watch this repository for tagged releases.
 
-1. Download the latest release from [Releases](../../releases).
-2. Extract into your WoW `_retail_/Interface/AddOns/` folder.
-3. Make sure the folder is named **ClassHUD**.
-4. Launch WoW and enable **ClassHUD** in the AddOns menu.
+## Usage
+- Open the in-game options with `/classhud` (alias `/chud`).
+- Use the **Spells & Buffs** panels to add or remove abilities, reorder them, and toggle tracked buffs or utility spells.
+- Enable or disable class bars, buff trackers, and utility rows through the options UI — changes apply immediately.
+- Totem, demon, and Wild Imp tracking are configured out of the box with sensible defaults for supported specs.
+- Profiles are managed via AceDB, so you can maintain per-spec or per-character layouts.
 
----
+## Development
+- **Dependencies**: Ace3, AceTimer-3.0, AceEvent-3.0, AceConfig-3.0, AceGUI-3.0, AceDB-3.0, LibSharedMedia-3.0 (embedded in `Libs/`).
+- **Coding style**: Lua modules structured around AceAddon-3.0 mixins; prefer local functions and tables over globals.
+- **Module layout**: Each major system lives in its own file (`ClassHUD.lua`, `ClassHUD_Spells.lua`, `ClassHUD_Bars.lua`, `ClassHUD_Classbar.lua`, `ClassHUD_Tracking.lua`, `ClassHUD_Options.lua`). See `AGENTS.md` for a deeper architecture guide and extension tips.
+- **Build/test workflow**: Develop directly in the addon folder or symlink into your WoW AddOns directory for live testing. No external build tooling is required.
 
-## 🛠 Usage
+## Contributing
+We welcome pull requests and issue reports! Before submitting changes:
+- Follow the Lua style and module boundaries outlined above and in `AGENTS.md`.
+- Keep features modular so they can be toggled or configured through the options UI.
+- Describe reproduction steps for bugs and include screenshots or videos when relevant.
 
-- Open options with `/chud`.
-- Refresh the Blizzard snapshot (if needed) from **Snapshot → Refresh Snapshot**.
-- Configure which utility cooldowns appear on each bar under **Spells & Buffs → Utility Placement**.
-- Toggle tracked buffs and manage buff links under **Spells & Buffs**.
-- Move the anchor by unlocking the frame in **General**.
+## Future Plans
+- Migrate spell handling to Blizzard's spell mixin architecture for better compatibility with future patches.
+- Expand dynamic buff linking so spell frames automatically pick up spec variants and proc auras.
+- Continue modernizing the HUD for Dragonflight and The War Within updates, with ongoing compatibility fixes.
 
-## 🗂 Architecture
-
-The addon is organised into lightweight modules:
-
-| File                            | Responsibility                                                                   |
-| ------------------------------- | -------------------------------------------------------------------------------- |
-| `ClassHUD.lua`                  | Core addon lifecycle, events, saved variables, snapshot management.              |
-| `ClassHUD_Utils.lua`            | Shared helpers for profile access, snapshot lookup, formatting, and aura search. |
-| `ClassHUD_Bars.lua`             | Anchor frame creation, cast/resource/health bar layout and updates.              |
-| `ClassHUD_Classbar.lua`         | Class-specific special power/segment handling.                                   |
-| `ClassHUD_Spells.lua`           | Snapshot-driven spell frame creation, cooldown/aura updates, tracked buff bar.   |
-| `ClassHUD_Options.lua`          | Ace3 configuration rebuilt around the snapshot cache.                            |
-| `ClassHUD_SpellSuggestions.lua` | Optional pre-filled spell suggestions (data only).                               |
-
-### Suggested future structure
-
-To keep modules focused as the addon grows, consider grouping files under folders:
-
-- `core/` for bootstrap (`ClassHUD.lua`, `ClassHUD_Utils.lua`).
-- `ui/` for bars, spell frames, and any future UI widgets.
-- `config/` for options and suggestion data.
-- `modules/` for optional trackers (e.g., interrupt tracker, class-specific extras).
-
-## 🦴 Todo
-
-- [ ] Add optional sound notifications.
-- [ ] Extend spell suggestions for remaining specs.
-
----
-
-## 📜 License
-
-This project is licensed under the [MIT License](LICENSE).
+## License
+ClassHUD is released under the [MIT License](LICENSE) so you can fork, extend, and share improvements freely.
