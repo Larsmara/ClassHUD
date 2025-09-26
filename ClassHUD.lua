@@ -819,13 +819,18 @@ function ClassHUD:UnregisterCooldownTextFrame(frame)
   EnsureTicker(self, "_cooldownTickerToken", "TickCooldownText", COOLDOWN_TICK_INTERVAL, frames)
 end
 
-function ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
+function ClassHUD:ApplyCooldownText(frame, remaining)
   if not frame or not frame.cooldownText then return end
 
   local cache = frame._last
   if not cache then
     cache = {}
     frame._last = cache
+  end
+
+  local showNumbers = true
+  if self.ShouldShowCooldownNumbers then
+    showNumbers = self:ShouldShowCooldownNumbers()
   end
 
   if frame._gcdActive then
@@ -886,11 +891,8 @@ function ClassHUD:TickCooldownText()
   end
 
   local showNumbers = true
-  if self.db and self.db.profile and self.db.profile.cooldowns then
-    local setting = self.db.profile.cooldowns.showText
-    if setting ~= nil then
-      showNumbers = setting
-    end
+  if self.ShouldShowCooldownNumbers then
+    showNumbers = self:ShouldShowCooldownNumbers()
   end
 
   if not showNumbers then
