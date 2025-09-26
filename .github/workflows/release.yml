@@ -21,7 +21,7 @@ jobs:
         id: version
         run: |
           TAG_NAME="${GITHUB_REF_NAME}"
-          VERSION="${TAG_NAME#v}"
+          VERSION="${TAG_NAME#}"
           ZIP_NAME="${ADDON_NAME}-${TAG_NAME}.zip"
 
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
@@ -39,6 +39,7 @@ jobs:
             --exclude='.git/' \
             --exclude='.github/' \
             --exclude='build/' \
+            --exclude='*.md' \
             ./ build/${ADDON_NAME}/
           cd build
           zip -r "../${{ steps.version.outputs.zip_name }}" "${ADDON_NAME}"
