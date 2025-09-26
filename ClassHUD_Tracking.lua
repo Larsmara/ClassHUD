@@ -22,7 +22,6 @@ ClassHUD.IMPLOSION_SPELL_ID = IMPLOSION_SPELL_ID
 ClassHUD.FEL_FIREBOLT_SPELL_ID = FEL_FIREBOLT_SPELL_ID
 ClassHUD.WILD_IMP_DISPLAY_SPELL_ID = WILD_IMP_DISPLAY_SPELL_ID
 
-local ShouldShowCooldownNumbers = ClassHUD.ShouldShowCooldownNumbers
 local PopulateBuffIconFrame = ClassHUD.PopulateBuffIconFrame
 local CreateBuffFrame = ClassHUD.CreateBuffFrame
 
@@ -875,7 +874,7 @@ function ClassHUD:HideWildImpBuffFrame()
   frame.count:SetText("")
   frame.count:Hide()
 
-  self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+  self:ApplyCooldownText(frame, nil)
 
   frame._layoutActive = false
   frame:Hide()
@@ -1098,14 +1097,30 @@ function ClassHUD:FlushTotemChanges()
   end
 
   if not self:IsTotemDurationTextEnabled() then
+    local now = GetTime()
     for frame in pairs(bucket) do
       bucket[frame] = nil
       if frame then
         frame._nextTotemTimerUpdate = nil
-        self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+        local remaining = nil
+        local state = frame._activeTotemState
+        if state and state.expiration then
+          remaining = state.expiration - now
+          if remaining <= 0 then
+            remaining = nil
+          end
+        end
+        if frame._cooldownTextVisible or frame._lastCooldownText ~= nil then
+          self:ApplyCooldownText(frame, remaining, true)
+        end
       end
     end
     return
+  end
+
+  local showNumbers = true
+  if self.ShouldShowCooldownNumbers then
+    showNumbers = self:ShouldShowCooldownNumbers()
   end
 
   local now = GetTime()
@@ -1118,19 +1133,32 @@ function ClassHUD:FlushTotemChanges()
         keepTicker = true
         local nextUpdate = frame._nextTotemTimerUpdate or 0
         if now >= nextUpdate then
-          self:ApplyCooldownText(frame, true, remaining)
+          if showNumbers then
+            local formatted = ClassHUD.FormatSeconds(remaining)
+            if frame._lastCooldownText ~= formatted or not frame._cooldownTextVisible then
+              self:ApplyCooldownText(frame, remaining)
+            end
+          else
+            if frame._cooldownTextVisible or frame._lastCooldownText ~= nil then
+              self:ApplyCooldownText(frame, remaining, true)
+            end
+          end
           frame._nextTotemTimerUpdate = now + TOTEM_DURATION_UPDATE_INTERVAL
         end
       else
         bucket[frame] = nil
         frame._nextTotemTimerUpdate = nil
-        self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+        if frame._cooldownTextVisible or frame._lastCooldownText ~= nil then
+          self:ApplyCooldownText(frame, nil)
+        end
       end
     else
       bucket[frame] = nil
       if frame then
         frame._nextTotemTimerUpdate = nil
-        self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+        if frame._cooldownTextVisible or frame._lastCooldownText ~= nil then
+          self:ApplyCooldownText(frame, nil)
+        end
       end
     end
   end
@@ -1204,17 +1232,35 @@ function ClassHUD:ApplyTotemOverlay(state)
     end
   end
 
-  if self:IsTotemDurationTextEnabled() and self:HasTotemDuration(state) then
+  local showDuration = self:IsTotemDurationTextEnabled()
+  local hasDuration = self:HasTotemDuration(state)
+
+  if showDuration and hasDuration then
     local now = GetTime()
     local remaining = state.expiration - now
     if remaining and remaining > 0 then
-      self:ApplyCooldownText(frame, true, remaining)
+      self:ApplyCooldownText(frame, remaining)
       frame._nextTotemTimerUpdate = now + TOTEM_DURATION_UPDATE_INTERVAL
     else
-      self:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+      if frame._cooldownTextVisible or frame._lastCooldownText ~= nil then
+        self:ApplyCooldownText(frame, nil)
+      end
       frame._nextTotemTimerUpdate = nil
     end
   else
+    local suppress = (not showDuration) and hasDuration
+    local remaining = nil
+    if hasDuration and state and state.expiration then
+      local now = GetTime()
+      remaining = state.expiration - now
+      if remaining and remaining <= 0 then
+        remaining = nil
+      end
+    end
+
+    if frame._cooldownTextVisible or frame._lastCooldownText ~= nil then
+      self:ApplyCooldownText(frame, remaining, suppress)
+    end
     frame._nextTotemTimerUpdate = nil
   end
 
@@ -1237,6 +1283,10 @@ function ClassHUD:ClearTotemOverlay(state)
   frame._totemSlot = nil
   frame._activeTotemState = nil
   frame._nextTotemTimerUpdate = nil
+
+  if frame._cooldownTextVisible or frame._lastCooldownText ~= nil then
+    self:ApplyCooldownText(frame, nil)
+  end
 
   if state.spellID and self and self.UpdateCooldown then
     self:UpdateCooldown(state.spellID)

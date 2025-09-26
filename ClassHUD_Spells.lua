@@ -1258,15 +1258,14 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
     frame.count:Hide()
   end
 
-  local showNumbers = ShouldShowCooldownNumbers()
   local remaining = nil
-  if showNumbers and cache.hasCooldown and cache.cooldownEnd then
+  if cache.hasCooldown and cache.cooldownEnd then
     remaining = cache.cooldownEnd - GetTime()
     if remaining and remaining <= 0 then
       remaining = nil
     end
   end
-  ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
+  ClassHUD:ApplyCooldownText(frame, remaining)
 
   frame:Show()
 end
@@ -1382,15 +1381,14 @@ local function UpdateTrackedIconFrame(frame)
       frame.count:Hide()
     end
 
-    local showNumbers = ShouldShowCooldownNumbers()
     local remaining = nil
-    if showNumbers and cache.hasCooldown and cache.cooldownEnd then
+    if cache.hasCooldown and cache.cooldownEnd then
       remaining = cache.cooldownEnd - GetTime()
       if remaining and remaining <= 0 then
         remaining = nil
       end
     end
-    ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
+    ClassHUD:ApplyCooldownText(frame, remaining)
 
     frame:Show()
     frame._layoutActive = true
@@ -1407,7 +1405,7 @@ local function UpdateTrackedIconFrame(frame)
   cache.cooldownEnd = nil
   cache.hasCooldown = false
   cache.hasChargeCooldown = false
-  ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
+  ClassHUD:ApplyCooldownText(frame, nil)
   frame:Hide()
   frame._layoutActive = false
   frame.tooltipSpellID = nil
@@ -1887,12 +1885,12 @@ local function UpdateSpellFrame(frame)
   local hasCooldown = cdStart and cdDuration and cdDuration > 0
   local modRate = cdModRate or 1
   if hasCooldown then
-    local changed = not cache.hasCooldown
-        or cache.cooldownStart ~= cdStart
-        or cache.cooldownDuration ~= cdDuration
-        or cache.cooldownModRate ~= modRate
-    if changed then
+    local startChanged = cache.cooldownStart ~= cdStart
+    local durationChanged = cache.cooldownDuration ~= cdDuration
+    if startChanged or durationChanged then
       frame.cooldown:SetCooldown(cdStart, cdDuration, modRate)
+    end
+    if not frame.cooldown:IsShown() then
       frame.cooldown:Show()
     end
     cache.cooldownStart = cdStart
@@ -1915,12 +1913,12 @@ local function UpdateSpellFrame(frame)
       and chargesValue ~= nil and chargesValue < maxCharges
   local chargeRate = chargeModRate or 1
   if hasChargeCooldown then
-    local changed = not cache.hasChargeCooldown
-        or cache.chargeCooldownStart ~= chargeStart
-        or cache.chargeCooldownDuration ~= chargeDuration
-        or cache.chargeCooldownModRate ~= chargeRate
-    if changed then
+    local chargeStartChanged = cache.chargeCooldownStart ~= chargeStart
+    local chargeDurationChanged = cache.chargeCooldownDuration ~= chargeDuration
+    if chargeStartChanged or chargeDurationChanged then
       frame.cooldown2:SetCooldown(chargeStart, chargeDuration, chargeRate)
+    end
+    if not frame.cooldown2:IsShown() then
       frame.cooldown2:Show()
     end
     cache.chargeCooldownStart = chargeStart
@@ -2033,9 +2031,8 @@ local function UpdateSpellFrame(frame)
   local isGCDCooldown = cooldownSource == "gcd"
   frame._gcdActive = hasCooldown and isGCDCooldown or false
 
-  local showNumbers = ShouldShowCooldownNumbers()
   local cooldownTextRemaining = nil
-  if showNumbers and hasCooldown and cooldownEndTime then
+  if hasCooldown and cooldownEndTime then
     local remaining = cooldownEndTime - now
     if remaining > 0 then
       cooldownTextRemaining = remaining
@@ -2071,7 +2068,7 @@ local function UpdateSpellFrame(frame)
   end
 
   if not totemOverride then
-    ClassHUD:ApplyCooldownText(frame, showNumbers, cooldownTextRemaining)
+    ClassHUD:ApplyCooldownText(frame, cooldownTextRemaining)
   end
 
   shouldDesaturate = false

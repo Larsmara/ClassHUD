@@ -819,60 +819,56 @@ function ClassHUD:UnregisterCooldownTextFrame(frame)
   EnsureTicker(self, "_cooldownTickerToken", "TickCooldownText", COOLDOWN_TICK_INTERVAL, frames)
 end
 
-function ClassHUD:ApplyCooldownText(frame, showNumbers, remaining)
+function ClassHUD:ApplyCooldownText(frame, remaining, suppressDisplay)
   if not frame or not frame.cooldownText then return end
 
-  local cache = frame._last
-  if not cache then
-    cache = {}
-    frame._last = cache
+  frame._last = frame._last or {}
+
+  local showNumbers = true
+  if self.ShouldShowCooldownNumbers then
+    showNumbers = self:ShouldShowCooldownNumbers()
   end
 
-  if frame._gcdActive then
-    if cache.cooldownTextShown then
-      frame.cooldownText:Hide()
-      cache.cooldownTextShown = false
-    end
-    if cache.cooldownTextValue then
-      frame.cooldownText:SetText("")
-      cache.cooldownTextValue = nil
-    end
-    self:UnregisterCooldownTextFrame(frame)
-    return
-  end
+  local cooldownText = frame.cooldownText
+  local wasVisible = frame._cooldownTextVisible == true
 
-  if not showNumbers then
-    if cache.cooldownTextShown then
-      frame.cooldownText:Hide()
-      cache.cooldownTextShown = false
+  local numbersSuppressed = suppressDisplay or frame._gcdActive or not showNumbers
+  if numbersSuppressed then
+    if wasVisible then
+      cooldownText:Hide()
+      frame._cooldownTextVisible = false
     end
-    if cache.cooldownTextValue then
-      frame.cooldownText:SetText("")
-      cache.cooldownTextValue = nil
+
+    if not remaining or remaining <= 0 then
+      if frame._lastCooldownText ~= nil then
+        cooldownText:SetText("")
+        frame._lastCooldownText = nil
+      end
     end
+
     self:UnregisterCooldownTextFrame(frame)
     return
   end
 
   if remaining and remaining > 0 then
     local formatted = ClassHUD.FormatSeconds(remaining)
-    if cache.cooldownTextValue ~= formatted then
-      frame.cooldownText:SetText(formatted or "")
-      cache.cooldownTextValue = formatted
+    if frame._lastCooldownText ~= formatted then
+      cooldownText:SetText(formatted or "")
+      frame._lastCooldownText = formatted
     end
-    if not cache.cooldownTextShown then
-      frame.cooldownText:Show()
-      cache.cooldownTextShown = true
+    if not wasVisible then
+      cooldownText:Show()
+      frame._cooldownTextVisible = true
     end
     self:RegisterCooldownTextFrame(frame)
   else
-    if cache.cooldownTextShown then
-      frame.cooldownText:Hide()
-      cache.cooldownTextShown = false
+    if wasVisible then
+      cooldownText:Hide()
+      frame._cooldownTextVisible = false
     end
-    if cache.cooldownTextValue then
-      frame.cooldownText:SetText("")
-      cache.cooldownTextValue = nil
+    if frame._lastCooldownText ~= nil then
+      cooldownText:SetText("")
+      frame._lastCooldownText = nil
     end
     self:UnregisterCooldownTextFrame(frame)
   end
@@ -886,22 +882,17 @@ function ClassHUD:TickCooldownText()
   end
 
   local showNumbers = true
-  if self.db and self.db.profile and self.db.profile.cooldowns then
-    local setting = self.db.profile.cooldowns.showText
-    if setting ~= nil then
-      showNumbers = setting
-    end
+  if self.ShouldShowCooldownNumbers then
+    showNumbers = self:ShouldShowCooldownNumbers()
   end
 
   if not showNumbers then
     for frame in pairs(frames) do
       frames[frame] = nil
       if frame and frame.cooldownText then
-        frame.cooldownText:SetText("")
-        frame.cooldownText:Hide()
-        if frame._last then
-          frame._last.cooldownTextShown = false
-          frame._last.cooldownTextValue = nil
+        if frame._cooldownTextVisible then
+          frame.cooldownText:Hide()
+          frame._cooldownTextVisible = false
         end
       end
     end
@@ -920,26 +911,32 @@ function ClassHUD:TickCooldownText()
         local remaining = cache.cooldownEnd - now
         if remaining > 0 then
           local formatted = ClassHUD.FormatSeconds(remaining)
-          if cache.cooldownTextValue ~= formatted then
+          if frame._lastCooldownText ~= formatted then
             frame.cooldownText:SetText(formatted or "")
-            cache.cooldownTextValue = formatted
+            frame._lastCooldownText = formatted
           end
-          if not cache.cooldownTextShown then
+          if not frame._cooldownTextVisible then
             frame.cooldownText:Show()
-            cache.cooldownTextShown = true
+            frame._cooldownTextVisible = true
           end
           keep = true
         end
       end
 
       if not keep then
-        if frame.cooldownText:GetText() ~= "" then
-          frame.cooldownText:SetText("")
+        if frame._nextTotemTimerUpdate then
+          keep = true
         end
-        frame.cooldownText:Hide()
-        if frame._last then
-          frame._last.cooldownTextValue = nil
-          frame._last.cooldownTextShown = false
+      end
+
+      if not keep then
+        if frame._lastCooldownText ~= nil then
+          frame.cooldownText:SetText("")
+          frame._lastCooldownText = nil
+        end
+        if frame._cooldownTextVisible then
+          frame.cooldownText:Hide()
+          frame._cooldownTextVisible = false
         end
       end
     end
