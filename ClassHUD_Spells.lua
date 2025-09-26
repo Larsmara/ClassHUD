@@ -971,14 +971,8 @@ local function SpellIsCurrentlyUsable(spellID)
     return false, false
   end
 
-  local normalizedSpellID = ClassHUD:GetActiveSpellID(spellID) or spellID
-
-  if C_Spell and C_Spell.IsSpellUsable then
-    local usable, insufficient = C_Spell.IsSpellUsable(normalizedSpellID)
-    return usable == true, insufficient and true or false
-  end
-
-  return true, false
+  local usable, noMana = ClassHUD:IsSpellUsableResolved(spellID)
+  return usable == true, noMana == true
 end
 
 local function FilterKnownFrames(frames)
@@ -1933,16 +1927,19 @@ local function UpdateSpellFrame(frame)
   end
 
   local usable, noMana = SpellIsCurrentlyUsable(sid)
-  local resourceLimited = false
-  if usable == false and noMana then
-    resourceLimited = true
-  end
+  local isUsable = usable == true
+  local lacksMana = noMana == true
 
   local lacksResources = ClassHUD:LacksResources(sid)
-  cache.lacksResources = lacksResources
+  local hasResourceConstraint = false
   if lacksResources then
-    resourceLimited = true
+    hasResourceConstraint = true
+  elseif lacksMana then
+    hasResourceConstraint = true
   end
+  cache.lacksResources = not not lacksResources
+
+  local usabilityLimited = not isUsable or hasResourceConstraint
 
   local auraRemaining = nil
   local auraActive = false
@@ -2038,7 +2035,7 @@ local function UpdateSpellFrame(frame)
   if onCooldown and not isGCDCooldown and (not chargesShown or chargesDepleted) then
     shouldDesaturate = true
   end
-  if resourceLimited then
+  if usabilityLimited then
     shouldDesaturate = true
   end
 
@@ -2095,9 +2092,13 @@ local function UpdateSpellFrame(frame)
     hasTarget = not not exists
   end
 
+  local forceActiveColor = trackOnTarget and auraActive
+
   local finalDesaturate
-  if useDotStates then
-    finalDesaturate = stateOnCooldown or resourceLimited
+  if forceActiveColor then
+    finalDesaturate = false
+  elseif useDotStates then
+    finalDesaturate = stateOnCooldown or usabilityLimited
     if trackOnTarget and (not hasTarget or not auraActive) then
       finalDesaturate = true
     end

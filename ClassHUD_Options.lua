@@ -430,19 +430,6 @@ local function SetTrackedBuffOrder(addon, class, specID, buffID, position)
   table.insert(orderList, target, buffID)
 end
 
-local function RemoveTrackedBuff(addon, class, specID, buffID)
-  local tracked, links = EnsureBuffTracking(addon, class, specID)
-  local orderList = EnsureTrackedBuffOrder(addon, class, specID)
-  tracked[buffID] = nil
-  links[buffID] = nil
-  for index = #orderList, 1, -1 do
-    local value = tonumber(orderList[index]) or orderList[index]
-    if value == buffID then
-      table.remove(orderList, index)
-    end
-  end
-end
-
 local function EnsurePlacementLists(addon, class, specID)
   addon.db.profile.layout = addon.db.profile.layout or {}
   local layout = addon.db.profile.layout
@@ -1409,8 +1396,7 @@ local function PopulateTrackedBuffGroups(addon, container, state, refreshFn)
           confirm = true,
           order = 99,
           func = function()
-            RemoveTrackedBuff(addon, class, specID, buffID)
-            addon:BuildTrackedBuffFrames()
+            addon:RemoveTrackedBuff(buffID, class, specID)
             if type(refreshFn) == "function" then refreshFn() end
             -- NotifyOptionsChanged()
           end,

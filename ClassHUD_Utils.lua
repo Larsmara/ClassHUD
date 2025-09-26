@@ -7,8 +7,8 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 ClassHUD._lastSpecID = ClassHUD._lastSpecID or 0
 ClassHUD._snapshotStore = ClassHUD._snapshotStore or {}
 
-local C_Spell, C_UnitAuras, GetTime, floor, tostring, ipairs, pairs = C_Spell, C_UnitAuras, GetTime, floor, tostring,
-    ipairs, pairs
+local C_Spell, C_UnitAuras, GetTime, floor, tostring, ipairs, pairs, IsUsableSpell = C_Spell, C_UnitAuras, GetTime, floor,
+    tostring, ipairs, pairs, IsUsableSpell
 
 local DEFAULT_TRACKED_BAR_COLOR = { r = 0.25, g = 0.65, b = 1.00, a = 1 }
 local SOUND_NONE_KEY = "None"
@@ -180,6 +180,29 @@ function ClassHUD:PlayAlertSound(soundKey)
   end
 
   return false
+end
+
+---Checks whether a spell is currently usable, resolving override spell IDs first.
+---@param spellID number|string|nil
+---@return boolean usable, boolean noMana
+function ClassHUD:IsSpellUsableResolved(spellID)
+  if spellID == nil then
+    return false, false
+  end
+
+  local resolved = self:GetActiveSpellID(spellID) or tonumber(spellID)
+  if not resolved then
+    return false, false
+  end
+
+  if IsUsableSpell then
+    local ok, usable, noMana = pcall(IsUsableSpell, resolved)
+    if ok then
+      return usable == true, noMana and true or false
+    end
+  end
+
+  return true, false
 end
 
 local function NormalizeTrackedConfigTable(config)

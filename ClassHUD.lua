@@ -1828,6 +1828,88 @@ function ClassHUD:SyncSnapshotToDB()
   return changed
 end
 
+---Removes a tracked buff from the current (or specified) class/spec configuration.
+---@param buffID number|string
+---@param class string|nil
+---@param specID number|nil
+---@return boolean removed True if the buff was removed from any data structure.
+function ClassHUD:RemoveTrackedBuff(buffID, class, specID)
+  if not buffID then
+    return false
+  end
+
+  if not (self.db and self.db.profile) then
+    return false
+  end
+
+  local normalizedID = tonumber(buffID) or buffID
+  if not normalizedID then
+    return false
+  end
+
+  local playerClass, playerSpec = self:GetPlayerClassSpec()
+  class = class or playerClass
+  specID = specID or playerSpec
+
+  if not class or not specID or specID == 0 then
+    return false
+  end
+
+  local removed = false
+
+  local layout = self.db.profile.layout
+  if layout and layout.trackedBuffBar and layout.trackedBuffBar.buffs then
+    local classBuckets = layout.trackedBuffBar.buffs[class]
+    local orderList = classBuckets and classBuckets[specID]
+    if type(orderList) == "table" then
+      for index = #orderList, 1, -1 do
+        local value = tonumber(orderList[index]) or orderList[index]
+        if value == normalizedID then
+          table.remove(orderList, index)
+          removed = true
+        end
+      end
+    end
+  end
+
+  local tracking = self.db.profile.tracking
+  if tracking and tracking.buffs then
+    local trackedByClass = tracking.buffs.tracked
+    if type(trackedByClass) == "table" then
+      local classTracked = trackedByClass[class]
+      local specTracked = classTracked and classTracked[specID]
+      if type(specTracked) == "table" and specTracked[normalizedID] ~= nil then
+        specTracked[normalizedID] = nil
+        removed = true
+      end
+    end
+
+    local linkByClass = tracking.buffs.links
+    if type(linkByClass) == "table" then
+      local classLinks = linkByClass[class]
+      local specLinks = classLinks and classLinks[specID]
+      if type(specLinks) == "table" and specLinks[normalizedID] ~= nil then
+        specLinks[normalizedID] = nil
+        removed = true
+      end
+    end
+  end
+
+  if removed then
+    if self.RebuildTrackedBuffFrames then
+      self:RebuildTrackedBuffFrames()
+    end
+    if self.UpdateAllFrames then
+      self:UpdateAllFrames()
+    end
+    if self.RefreshRegisteredOptions then
+      self:RefreshRegisteredOptions()
+    end
+  end
+
+  return removed
+end
+
 ---Manually updates the snapshot from Cooldown Manager and merges new entries into the DB.
 ---@return boolean changed True if new spells or buffs were added to the profile.
 function ClassHUD:RescanFromCDM()
