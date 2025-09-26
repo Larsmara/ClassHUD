@@ -41,6 +41,8 @@ ClassHUD._petUnitLookup = ClassHUD._petUnitLookup or {}
 for token in pairs(PET_UNIT_LOOKUP) do
   ClassHUD._petUnitLookup[token] = true
 end
+local EXPANDED_UNIT_BUFFER = {}
+local EXPANDED_UNIT_SEEN = {}
 ClassHUD._spellAuraLinks = ClassHUD._spellAuraLinks or {}
 ClassHUD._shouldRefreshAuraLinks = true
 ClassHUD._suppressAuraLinkRefresh = ClassHUD._suppressAuraLinkRefresh or false
@@ -50,6 +52,60 @@ ClassHUD._suppressAuraLinkRefresh = ClassHUD._suppressAuraLinkRefresh or false
 function ClassHUD:IsPetUnit(unit)
   if not unit then return false end
   return (self._petUnitLookup and self._petUnitLookup[unit]) == true
+end
+
+---@param units string[]|nil
+---@return string[]|nil
+function ClassHUD:GetExpandedAuraUnitList(units)
+  if type(units) ~= "table" then
+    return units
+  end
+
+  local needsPetExpansion = false
+  for i = 1, #units do
+    if units[i] == "pet" then
+      needsPetExpansion = true
+      break
+    end
+  end
+
+  if not needsPetExpansion then
+    return units
+  end
+
+  local buffer = EXPANDED_UNIT_BUFFER
+  for i = #buffer, 1, -1 do
+    buffer[i] = nil
+  end
+
+  local seen = EXPANDED_UNIT_SEEN
+  for key in pairs(seen) do
+    seen[key] = nil
+  end
+
+  for i = 1, #units do
+    local unit = units[i]
+    if type(unit) == "string" then
+      if unit == "pet" then
+        for j = 1, #PET_UNIT_TOKENS do
+          local petUnit = PET_UNIT_TOKENS[j]
+          if not seen[petUnit] then
+            buffer[#buffer + 1] = petUnit
+            seen[petUnit] = true
+          end
+        end
+      elseif not seen[unit] then
+        buffer[#buffer + 1] = unit
+        seen[unit] = true
+      end
+    end
+  end
+
+  for key in pairs(seen) do
+    seen[key] = nil
+  end
+
+  return buffer
 end
 
 local MAX_DEBUG_LOG_ENTRIES = 2000

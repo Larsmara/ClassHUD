@@ -186,10 +186,19 @@ local function RegisterFrameAuraWatchers(frame, candidates, units)
   if type(units) == "table" and unitBuckets then
     frame._registeredAuraUnits = frame._registeredAuraUnits or {}
     local registeredUnits = frame._registeredAuraUnits
-    for i = 1, #units do
-      local unit = units[i]
-      if unitBuckets[unit] then
-        unitBuckets[unit][frame] = true
+    local unitList = units
+    if ClassHUD.GetExpandedAuraUnitList then
+      unitList = ClassHUD:GetExpandedAuraUnitList(units) or units
+    end
+    for i = 1, #unitList do
+      local unit = unitList[i]
+      if type(unit) == "string" then
+        local bucket = unitBuckets[unit]
+        if not bucket then
+          bucket = {}
+          unitBuckets[unit] = bucket
+        end
+        bucket[frame] = true
         registeredUnits[unit] = true
       end
     end

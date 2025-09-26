@@ -342,7 +342,10 @@ function ClassHUD:GetAuraForSpell(spellID, units)
   addCandidate(normalizedSpellID)
   addCandidate(numericSpellID)
 
-  units = units or DEFAULT_AURA_UNITS
+  local unitList = units or DEFAULT_AURA_UNITS
+  if ClassHUD and ClassHUD.GetExpandedAuraUnitList then
+    unitList = ClassHUD:GetExpandedAuraUnitList(unitList) or unitList
+  end
 
   if C_UnitAuras.GetPlayerAuraBySpellID then
     for i = 1, #candidates do
@@ -358,8 +361,8 @@ function ClassHUD:GetAuraForSpell(spellID, units)
   end
 
   if C_UnitAuras.GetAuraDataBySpellID then
-    for i = 1, #units do
-      local unit = units[i]
+    for i = 1, #unitList do
+      local unit = unitList[i]
       if type(unit) == "string" and unit ~= "player" then
         local isPetUnit = self.IsPetUnit and self:IsPetUnit(unit)
         if isPetUnit or UnitExists(unit) then
@@ -368,11 +371,17 @@ function ClassHUD:GetAuraForSpell(spellID, units)
             local queryID = candidates[attempt]
             if queryID then
               local aura = C_UnitAuras.GetAuraDataBySpellID(unit, queryID)
-              if aura and (aura.isFromPlayer or aura.sourceUnit == "player" or aura.sourceUnit == "pet") then
-                if self.LogAuraMatch then
-                  self:LogAuraMatch(unit, queryID, aura)
+              if aura then
+                local sourceUnit = aura.sourceUnit
+                local sourceIsPlayer = aura.isFromPlayer or sourceUnit == "player"
+                local sourceIsPet = sourceUnit and self.IsPetUnit and self:IsPetUnit(sourceUnit)
+                local allowPetAura = isPetUnit and (sourceIsPlayer or sourceIsPet or sourceUnit == nil)
+                if sourceIsPlayer or sourceIsPet or allowPetAura then
+                  if self.LogAuraMatch then
+                    self:LogAuraMatch(unit, queryID, aura)
+                  end
+                  return aura, unit
                 end
-                return aura, unit
               end
             end
           end
