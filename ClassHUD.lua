@@ -82,6 +82,45 @@ function ClassHUD:GetActiveSpellID(spellID)
   return numericID
 end
 
+---@param baseID number|nil
+---@return number|nil
+function ClassHUD:GetPermanentOverrideID(baseID)
+  local resolvedBase = tonumber(baseID)
+  if not resolvedBase or resolvedBase <= 0 then
+    return nil
+  end
+
+  if not FindSpellOverrideByID then
+    return nil
+  end
+
+  local ok, overrideID = pcall(FindSpellOverrideByID, resolvedBase)
+  if ok and overrideID and overrideID > 0 and overrideID ~= resolvedBase then
+    return overrideID
+  end
+
+  return nil
+end
+
+---@param baseID number|nil
+---@return boolean
+function ClassHUD:HasTemporaryOverride(baseID)
+  local resolvedBase = tonumber(baseID)
+  if not resolvedBase or resolvedBase <= 0 then
+    return false
+  end
+
+  local permanent = self:GetPermanentOverrideID(resolvedBase)
+  if C_Spell and C_Spell.GetOverrideSpell then
+    local ok, overrideID = pcall(C_Spell.GetOverrideSpell, resolvedBase)
+    if ok and overrideID and overrideID > 0 and overrideID ~= resolvedBase and overrideID ~= permanent then
+      return true
+    end
+  end
+
+  return false
+end
+
 local function FormatLogValue(value)
   if value == nil or value == "" then
     return "-"

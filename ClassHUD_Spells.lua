@@ -1604,19 +1604,18 @@ end
 -- UpdateSpellFrame
 -- ==================================================
 local function UpdateSpellFrame(frame)
-  local baseSpellID = frame.spellID
-  if not baseSpellID then return end
+  local originalSpellID = frame.spellID
+  if not originalSpellID then return end
 
-  local sid = ClassHUD:GetActiveSpellID(baseSpellID) or baseSpellID
-  local resolvedBaseID = baseSpellID
+  local baseSpellID = originalSpellID
   if FindBaseSpellByID then
-    local ok, baseID = pcall(FindBaseSpellByID, baseSpellID)
+    local ok, baseID = pcall(FindBaseSpellByID, originalSpellID)
     if ok and baseID and baseID ~= 0 then
-      resolvedBaseID = baseID
+      baseSpellID = baseID
     end
   end
 
-  local overrideActive = sid and resolvedBaseID and (sid ~= resolvedBaseID)
+  local sid = ClassHUD:GetActiveSpellID(baseSpellID) or baseSpellID
   frame._overrideGlowActive = nil
 
   SetFrameActiveSpell(frame, sid)
@@ -2221,7 +2220,7 @@ local function UpdateSpellFrame(frame)
   if frame._totemGlowActive then
     shouldGlow = true
   end
-  if overrideActive then
+  if ClassHUD.HasTemporaryOverride and ClassHUD:HasTemporaryOverride(baseSpellID) then
     shouldGlow = true
   end
 
