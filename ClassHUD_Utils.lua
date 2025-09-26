@@ -292,22 +292,56 @@ end
 function ClassHUD:GetAuraForSpell(spellID, units)
   if not C_UnitAuras then return nil end
 
-  local normalizedSpellID = self:GetActiveSpellID(spellID) or spellID
+  local id = tonumber(spellID) or spellID
+  if type(id) ~= "number" or id <= 0 then return nil end
 
-  units = units or DEFAULT_AURA_UNITS
+  local normalized = (self.GetActiveSpellID and self:GetActiveSpellID(id)) or id
+  units = units or { "player", "pet", "target", "focus", "mouseover" }
 
+  -- Fast path for player
   if C_UnitAuras.GetPlayerAuraBySpellID then
-    local aura = C_UnitAuras.GetPlayerAuraBySpellID(normalizedSpellID)
-    if aura then return aura, "player" end
+    local a = C_UnitAuras.GetPlayerAuraBySpellID(normalized)
+    if a then return a, "player" end
   end
 
-  if C_UnitAuras.GetAuraDataBySpellID then
+  -- Spell name (for name matching in the scan below)
+  local spellName
+  if C_Spell and C_Spell.GetSpellInfo then
+    local info = C_Spell.GetSpellInfo(normalized)
+    spellName = info and info.name or nil
+  end
+
+  -- Pick a sensible primary filter for the scan (HELPFUL for buffs like Frenzy)
+  local isHarmful = false
+  if C_Spell and C_Spell.IsSpellHarmful then
+    local ok, harmful = pcall(C_Spell.IsSpellHarmful, normalized)
+    isHarmful = ok and harmful or false
+  end
+  local primaryFilter = isHarmful and "HARMFUL" or "HELPFUL"
+  local altFilter = (primaryFilter == "HELPFUL") and "HARMFUL" or "HELPFUL"
+
+  -- Scan non-player units by index (this is what finds pet Frenzy)
+  if C_UnitAuras.GetAuraDataByIndex then
     for i = 1, #units do
       local unit = units[i]
-      if unit ~= "player" and UnitExists(unit) then
-        local aura = C_UnitAuras.GetAuraDataBySpellID(unit, normalizedSpellID)
-        if aura and (aura.isFromPlayer or aura.sourceUnit == "player" or aura.sourceUnit == "pet") then
-          return aura, unit
+      if type(unit) == "string" and unit ~= "player" and UnitExists(unit) then
+        local isPet = (self.IsPetUnit and self:IsPetUnit(unit)) or (unit == "pet")
+
+        -- Try the expected filter first
+        for _, filter in ipairs({ primaryFilter, altFilter }) do
+          local idx = 1
+          while true do
+            local a = C_UnitAuras.GetAuraDataByIndex(unit, idx, filter)
+            if not a then break end
+            if (a.spellId == normalized) or (spellName and a.name == spellName) then
+              local src = a.sourceUnit
+              local okSrc = a.isFromPlayer or src == "player" or (isPet and (src == "pet" or src == nil))
+              if okSrc then
+                return a, unit
+              end
+            end
+            idx = idx + 1
+          end
         end
       end
     end

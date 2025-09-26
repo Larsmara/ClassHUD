@@ -77,7 +77,8 @@ local function GetSpellDisplayName(spellID)
   return "Spell " .. idText
 end
 
-local TrimString do
+local TrimString
+do
   if type(strtrim) == "function" then
     TrimString = function(value)
       return strtrim(value or "")
@@ -512,7 +513,7 @@ local function MergeArgs(target, staticArgs, dynamicArgs)
 end
 
 local function CreateSpellOptionGroup(addon, state, class, specID, spellID, placementKey, snapshot, lists, linkTable,
-  soundValues, refreshFn)
+                                      soundValues, refreshFn)
   local entry = snapshot and snapshot[spellID]
   local info = GetSpellInfoSafe(spellID)
   local icon = (entry and entry.iconID) or (info and info.iconID)
@@ -576,7 +577,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
 
     addon:BuildFramesForSpec()
     rebuild()
-    NotifyOptionsChanged()
+    -- NotifyOptionsChanged()
   end
 
   args.enabled = {
@@ -621,7 +622,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
 
       addon:BuildFramesForSpec()
       rebuild()
-      NotifyOptionsChanged()
+      -- NotifyOptionsChanged()
     end,
   }
 
@@ -645,13 +646,13 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
       state.spellPlacementMemory[spellKey] = value
       addon:BuildFramesForSpec()
       rebuild()
-      NotifyOptionsChanged()
+      -- NotifyOptionsChanged()
     end,
   }
 
   args.moveUp = {
     type = "execute",
-    name = "↑",
+    name = "Up",
     order = 1.8,
     width = "half",
     disabled = function()
@@ -664,7 +665,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
 
   args.moveDown = {
     type = "execute",
-    name = "↓",
+    name = "Down",
     order = 1.9,
     width = "half",
     disabled = function()
@@ -690,7 +691,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
       SetSpellOrder(addon, class, specID, spellID, value)
       addon:BuildFramesForSpec()
       rebuild()
-      NotifyOptionsChanged()
+      -- NotifyOptionsChanged()
     end,
     disabled = function()
       local placement = GetSpellPlacement(addon, class, specID, spellID)
@@ -705,7 +706,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
       order = 2.2,
       width = "full",
       desc =
-        "When enabled, this spell will track its DoT/debuff on your current target. Uses the debuff state machine (cooldown, active, pandemic). If no target or the debuff is missing, the icon is shown greyed out.",
+      "When enabled, this spell will track its DoT/debuff on your current target. Uses the debuff state machine (cooldown, active, pandemic). If no target or the debuff is missing, the icon is shown greyed out.",
       get = function()
         local numericID = tonumber(spellID) or spellID
         local flagsRoot = addon:GetProfileTable(false, "layout", "topBar", "flags", class, specID)
@@ -738,7 +739,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
           end
         end
         addon:BuildFramesForSpec()
-        NotifyOptionsChanged()
+        -- NotifyOptionsChanged()
       end,
     }
   end
@@ -813,7 +814,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
               config.order = clamped
               addon:BuildFramesForSpec()
               rebuild()
-              NotifyOptionsChanged()
+              -- NotifyOptionsChanged()
             end,
           },
           swapIcon = {
@@ -836,7 +837,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
               end
               addon:BuildFramesForSpec()
               rebuild()
-              NotifyOptionsChanged()
+              -- NotifyOptionsChanged()
             end,
           },
           remove = {
@@ -847,7 +848,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
               RemoveBuffLink(linkTable, buffID, normalizedSpellID)
               addon:BuildFramesForSpec()
               rebuild()
-              NotifyOptionsChanged()
+              -- NotifyOptionsChanged()
             end,
           },
         },
@@ -877,7 +878,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
       end
       addon:BuildFramesForSpec()
       rebuild()
-      NotifyOptionsChanged()
+      -- NotifyOptionsChanged()
     end,
   }
 
@@ -916,7 +917,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
             conf[spellID].onReady = value
           end
           addon:UpdateAllSpellFrames()
-          NotifyOptionsChanged()
+          -- NotifyOptionsChanged()
         end,
       },
       applied = {
@@ -940,7 +941,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
             conf[spellID].onApplied = value
           end
           addon:UpdateAllSpellFrames()
-          NotifyOptionsChanged()
+          -- NotifyOptionsChanged()
         end,
       },
       removed = {
@@ -964,7 +965,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
             conf[spellID].onRemoved = value
           end
           addon:UpdateAllSpellFrames()
-          NotifyOptionsChanged()
+          -- NotifyOptionsChanged()
         end,
       },
     },
@@ -1001,7 +1002,7 @@ local function CreateSpellOptionGroup(addon, state, class, specID, spellID, plac
       end
       addon:BuildFramesForSpec()
       rebuild()
-      NotifyOptionsChanged()
+      -- NotifyOptionsChanged()
     end,
   }
 
@@ -1139,7 +1140,8 @@ local function PopulateUtilitySpellGroups(addon, container, state, refreshFn)
   end
 
   local utilityRoot = addon.db.profile.layout and addon.db.profile.layout.utility
-  local utilityList = utilityRoot and utilityRoot.spells and utilityRoot.spells[class] and utilityRoot.spells[class][specID]
+  local utilityList = utilityRoot and utilityRoot.spells and utilityRoot.spells[class] and
+  utilityRoot.spells[class][specID]
 
   if type(utilityList) == "table" then
     for _, spellID in ipairs(utilityList) do
@@ -1270,7 +1272,7 @@ local function PopulateTrackedBuffGroups(addon, container, state, refreshFn)
             cfg.showIcon = not not value
             addon:BuildTrackedBuffFrames()
             if type(refreshFn) == "function" then refreshFn() end
-            NotifyOptionsChanged()
+            -- NotifyOptionsChanged()
           end,
         },
         orderControl = {
@@ -1289,7 +1291,7 @@ local function PopulateTrackedBuffGroups(addon, container, state, refreshFn)
             SetTrackedBuffOrder(addon, class, specID, buffID, index)
             addon:BuildTrackedBuffFrames()
             if type(refreshFn) == "function" then refreshFn() end
-            NotifyOptionsChanged()
+            -- NotifyOptionsChanged()
           end,
         },
         remove = {
@@ -1301,7 +1303,7 @@ local function PopulateTrackedBuffGroups(addon, container, state, refreshFn)
             RemoveTrackedBuff(addon, class, specID, buffID)
             addon:BuildTrackedBuffFrames()
             if type(refreshFn) == "function" then refreshFn() end
-            NotifyOptionsChanged()
+            -- NotifyOptionsChanged()
           end,
         },
       },
@@ -1339,7 +1341,7 @@ local function BuildSummonSpellArgs(addon, classConfig)
         if addon.RefreshTemporaryBuffs then
           addon:RefreshTemporaryBuffs(true)
         end
-        NotifyOptionsChanged()
+        -- NotifyOptionsChanged()
       end,
       disabled = function()
         local tracking = addon.db.profile.tracking
@@ -1713,7 +1715,7 @@ local function BuildBarOrderEditor(addon, container)
       args   = {
         up = {
           type     = "execute",
-          name     = "↑",
+          name     = "Up",
           width    = "half",
           disabled = (index == 1),
           func     = function()
@@ -1725,7 +1727,7 @@ local function BuildBarOrderEditor(addon, container)
         },
         down = {
           type     = "execute",
-          name     = "↓",
+          name     = "Down",
           width    = "half",
           disabled = (index == #barOrder),
           func     = function()
@@ -1907,20 +1909,20 @@ function ClassHUD_BuildOptions(addon)
       get = function()
         return ""
       end,
-        set = function(_, value)
-          local spellID = tonumber(value)
-          if not spellID then return end
-          if FindBaseSpellByID then
-            local baseID = FindBaseSpellByID(spellID)
-            if baseID and baseID ~= 0 then
-              spellID = baseID
-            end
+      set = function(_, value)
+        local spellID = tonumber(value)
+        if not spellID then return end
+        if FindBaseSpellByID then
+          local baseID = FindBaseSpellByID(spellID)
+          if baseID and baseID ~= 0 then
+            spellID = baseID
           end
-          local class, specID = addon:GetPlayerClassSpec()
-          local lists = EnsurePlacementLists(addon, class, specID)
-          SetSpellPlacement(addon, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
-          addon:BuildFramesForSpec()
-          addon:SafeRefreshOptions()
+        end
+        local class, specID = addon:GetPlayerClassSpec()
+        local lists = EnsurePlacementLists(addon, class, specID)
+        SetSpellPlacement(addon, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
+        addon:BuildFramesForSpec()
+        addon:SafeRefreshOptions()
       end,
     },
     empty = {
@@ -3061,7 +3063,8 @@ function ClassHUD_BuildOptions(addon)
             name = "Rescan from Cooldown Manager",
             order = 20,
             width = "full",
-            desc = "Import newly available spells from Blizzard's Cooldown Manager snapshot without altering your existing layout.",
+            desc =
+            "Import newly available spells from Blizzard's Cooldown Manager snapshot without altering your existing layout.",
             func = function()
               if not (addon and addon.RescanFromCDM) then return end
               local ok, result = pcall(addon.RescanFromCDM, addon)
