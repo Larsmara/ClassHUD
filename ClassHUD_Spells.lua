@@ -15,10 +15,6 @@ local trackedBuffPool = ClassHUD._trackedBuffFramePool
 local bit_band = bit and bit.band or (bit32 and bit32.band)
 local AFFILIATION_MINE = _G.COMBATLOG_OBJECT_AFFILIATION_MINE or 0
 
-local SOUND_THROTTLE_SECONDS = 0.75
-local SOUND_CHANNEL = "Master"
-local SOUND_NONE_KEY = "None"
-
 local SUMMON_SPELLS = {
   -- Priest
   [34433]  = { fallbackDuration = 15, class = "PRIEST" },   -- Shadowfiend
@@ -451,39 +447,6 @@ local function ShouldShowCooldownNumbers()
 end
 
 ClassHUD.ShouldShowCooldownNumbers = ShouldShowCooldownNumbers
-
-local function ResolveSoundPath(soundKey)
-  if not soundKey or soundKey == "" or soundKey == SOUND_NONE_KEY then
-    return nil
-  end
-
-  if LSM then
-    local ok, path = pcall(LSM.Fetch, LSM, "sound", soundKey, true)
-    if ok and type(path) == "string" and path ~= "" then
-      return path
-    end
-  end
-
-  if type(soundKey) == "string" and soundKey ~= "" then
-    return soundKey
-  end
-
-  return nil
-end
-
-local function PlayConfiguredSound(soundKey)
-  local path = ResolveSoundPath(soundKey)
-  if not path then
-    return false
-  end
-
-  if PlaySoundFile then
-    PlaySoundFile(path, SOUND_CHANNEL)
-    return true
-  end
-
-  return false
-end
 
 local function ResolvePandemicBaseDuration(frame, aura)
   if aura then
@@ -2119,54 +2082,8 @@ local function UpdateSpellFrame(frame)
     end
   end
 
-  do
-    local state = frame._soundState
-    if state then
-      if state.lastPlayedAt == nil then
-        state.lastPlayedAt = 0
-      end
-      local soundProfile = ClassHUD.db and ClassHUD.db.profile and ClassHUD.db.profile.soundAlerts
-      if useDotStates and soundProfile and soundProfile.enabled then
-        local class, specID = ClassHUD:GetPlayerClassSpec()
-        local perClass = soundProfile[class]
-        local perSpec = perClass and perClass[specID]
-        local perSpell = perSpec and perSpec[sid]
-        if state.wasReady == nil then
-          state.wasReady = not stateOnCooldown
-        end
-        if state.auraWasActive == nil then
-          state.auraWasActive = auraActive
-        end
-        if perSpell then
-          local function tryPlay(key)
-            if not key or key == SOUND_NONE_KEY then
-              return
-            end
-            local last = state.lastPlayedAt or 0
-            if (now - last) < SOUND_THROTTLE_SECONDS then
-              return
-            end
-            if PlayConfiguredSound(key) then
-              state.lastPlayedAt = now
-            end
-          end
-          if not stateOnCooldown and state.wasReady == false then
-            tryPlay(perSpell.onReady)
-          end
-          if auraActive and not state.auraWasActive then
-            tryPlay(perSpell.onApplied)
-          end
-          if not auraActive and state.auraWasActive then
-            tryPlay(perSpell.onRemoved)
-          end
-        end
-        state.wasReady = not stateOnCooldown
-        state.auraWasActive = auraActive
-      else
-        state.wasReady = not stateOnCooldown
-        state.auraWasActive = auraActive
-      end
-    end
+  if ClassHUD.ProcessSpellSound then
+    ClassHUD:ProcessSpellSound(frame, sid, stateOnCooldown, auraActive, tracksAura)
   end
 
   local hasTarget = true

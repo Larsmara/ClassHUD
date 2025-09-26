@@ -11,6 +11,8 @@ local C_Spell, C_UnitAuras, GetTime, floor, tostring, ipairs, pairs = C_Spell, C
     ipairs, pairs
 
 local DEFAULT_TRACKED_BAR_COLOR = { r = 0.25, g = 0.65, b = 1.00, a = 1 }
+local SOUND_NONE_KEY = "None"
+local SOUND_CHANNEL = "SFX"
 
 local TMP = {}
 
@@ -133,6 +135,51 @@ function ClassHUD:GetSnapshotEntry(spellID, class, specID)
   local snapshot = self:GetSnapshotForSpec(class, specID, false)
   if not snapshot then return nil end
   return snapshot[spellID]
+end
+
+---Plays a configured alert sound value if valid.
+---@param soundKey string|number|nil
+---@return boolean played True if a sound was triggered.
+function ClassHUD:PlayAlertSound(soundKey)
+  if soundKey == nil then
+    return false
+  end
+
+  local numericID = tonumber(soundKey)
+  if numericID then
+    if PlaySound then
+      PlaySound(numericID, SOUND_CHANNEL)
+      return true
+    end
+    return false
+  end
+
+  if type(soundKey) ~= "string" then
+    return false
+  end
+
+  if soundKey == "" or soundKey == SOUND_NONE_KEY then
+    return false
+  end
+
+  local resolved = soundKey
+  if self.LSM and self.LSM.Fetch then
+    local ok, path = pcall(self.LSM.Fetch, self.LSM, "sound", soundKey, true)
+    if ok and type(path) == "string" and path ~= "" then
+      resolved = path
+    end
+  end
+
+  if resolved == "" or resolved == SOUND_NONE_KEY then
+    return false
+  end
+
+  if PlaySoundFile then
+    PlaySoundFile(resolved, SOUND_CHANNEL)
+    return true
+  end
+
+  return false
 end
 
 local function NormalizeTrackedConfigTable(config)
