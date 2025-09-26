@@ -1597,6 +1597,29 @@ local function UpdateSpellFrame(frame)
   if not baseSpellID then return end
 
   local sid = ClassHUD:GetActiveSpellID(baseSpellID) or baseSpellID
+  local resolvedBaseID = baseSpellID
+  if FindBaseSpellByID then
+    local ok, baseID = pcall(FindBaseSpellByID, baseSpellID)
+    if ok and baseID and baseID ~= 0 then
+      resolvedBaseID = baseID
+    end
+  end
+
+  local hasOverride = sid and resolvedBaseID and (sid ~= resolvedBaseID)
+  if hasOverride then
+    if not frame._overrideGlowActive then
+      if ActionButton_ShowOverlayGlow then
+        ActionButton_ShowOverlayGlow(frame)
+      end
+      frame._overrideGlowActive = true
+    end
+  elseif frame._overrideGlowActive then
+    if ActionButton_HideOverlayGlow then
+      ActionButton_HideOverlayGlow(frame)
+    end
+    frame._overrideGlowActive = nil
+  end
+
   SetFrameActiveSpell(frame, sid)
 
   local cache = frame._last
