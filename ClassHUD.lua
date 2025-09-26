@@ -45,6 +45,82 @@ function ClassHUD:GetNpcIDFromGUID(guid)
   return GetNpcIDFromGUID(guid)
 end
 
+---Resolves the active spellID for the provided spell by checking base and override mappings.
+---@param spellID number|string|nil
+---@return number|nil
+function ClassHUD:GetActiveSpellID(spellID)
+  if spellID == nil then
+    return nil
+  end
+
+  local numericID = tonumber(spellID) or spellID
+  if not numericID then
+    return nil
+  end
+
+  if FindBaseSpellByID then
+    local ok, baseID = pcall(FindBaseSpellByID, numericID)
+    if ok and baseID and baseID > 0 then
+      numericID = baseID
+    end
+  end
+
+  if FindSpellOverrideByID then
+    local ok, overrideID = pcall(FindSpellOverrideByID, numericID)
+    if ok and overrideID and overrideID > 0 then
+      numericID = overrideID
+    end
+  end
+
+  if C_Spell and C_Spell.GetOverrideSpell then
+    local ok, overrideID = pcall(C_Spell.GetOverrideSpell, numericID)
+    if ok and overrideID and overrideID > 0 and overrideID ~= numericID then
+      numericID = overrideID
+    end
+  end
+
+  return numericID
+end
+
+---@param baseID number|nil
+---@return number|nil
+function ClassHUD:GetPermanentOverrideID(baseID)
+  local resolvedBase = tonumber(baseID)
+  if not resolvedBase or resolvedBase <= 0 then
+    return nil
+  end
+
+  if not FindSpellOverrideByID then
+    return nil
+  end
+
+  local ok, overrideID = pcall(FindSpellOverrideByID, resolvedBase)
+  if ok and overrideID and overrideID > 0 and overrideID ~= resolvedBase then
+    return overrideID
+  end
+
+  return nil
+end
+
+---@param baseID number|nil
+---@return boolean
+function ClassHUD:HasTemporaryOverride(baseID)
+  local resolvedBase = tonumber(baseID)
+  if not resolvedBase or resolvedBase <= 0 then
+    return false
+  end
+
+  local permanent = self:GetPermanentOverrideID(resolvedBase)
+  if C_Spell and C_Spell.GetOverrideSpell then
+    local ok, overrideID = pcall(C_Spell.GetOverrideSpell, resolvedBase)
+    if ok and overrideID and overrideID > 0 and overrideID ~= resolvedBase and overrideID ~= permanent then
+      return true
+    end
+  end
+
+  return false
+end
+
 local function FormatLogValue(value)
   if value == nil or value == "" then
     return "-"
@@ -423,7 +499,6 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
       frame._linkedBuffActive = false
       frame._linkedBuffCount = nil
       RestoreBuffLinkCount(frame)
-      ActionButton_HideOverlayGlow(frame)
       frame._linkedBuffRestoreText = cache.countText
       frame._linkedBuffRestoreShown = cache.countShown
     end
@@ -437,17 +512,18 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
 
   for i = 1, #list do
     local buffID = list[i]
+    local normalizedBuffID = self:GetActiveSpellID(buffID) or buffID
     local isHarmful = false
     if C_Spell and C_Spell.IsSpellHarmful then
-      local ok, harmfulFlag = pcall(C_Spell.IsSpellHarmful, buffID)
+      local ok, harmfulFlag = pcall(C_Spell.IsSpellHarmful, normalizedBuffID)
       if ok and harmfulFlag then
         isHarmful = true
       end
     end
     local units = isHarmful and BUFF_LINK_HARMFUL_UNITS or BUFF_LINK_HELPFUL_UNITS
-    local aura = self:GetAuraForSpell(buffID, units)
+    local aura = self:GetAuraForSpell(normalizedBuffID, units)
     if not aura and isHarmful then
-      aura = self:FindAuraByName(buffID, BUFF_LINK_HARMFUL_UNITS)
+      aura = self:FindAuraByName(normalizedBuffID, BUFF_LINK_HARMFUL_UNITS)
     end
 
     if aura then
@@ -464,7 +540,7 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
         if info and info.swapIcon then
           swapIconID = aura.icon
           if not swapIconID and C_Spell and C_Spell.GetSpellInfo then
-            local spellInfo = C_Spell.GetSpellInfo(buffID)
+            local spellInfo = C_Spell.GetSpellInfo(normalizedBuffID)
             swapIconID = spellInfo and spellInfo.iconID or swapIconID
           end
         end
@@ -475,11 +551,8 @@ function ClassHUD:EvaluateBuffLinks(frame, spellID)
   frame._linkedBuffActive = anyActive
   frame._linkedBuffCount = highestCount
 
-  if anyActive then
-    ActionButton_ShowOverlayGlow(frame)
-  else
+  if not anyActive then
     RestoreBuffLinkCount(frame)
-    ActionButton_HideOverlayGlow(frame)
   end
 
   if anyActive and highestCount and highestCount > 0 then
@@ -1854,8 +1927,9 @@ function ClassHUD:UpdateCDMSnapshot()
         local raw = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
         local sid = raw and (raw.spellID or raw.overrideSpellID or (raw.linkedSpellIDs and raw.linkedSpellIDs[1]))
         if sid then
-          local info = C_Spell.GetSpellInfo(sid)
-          local desc = C_Spell.GetSpellDescription(sid)
+          local normalizedSid = self:GetActiveSpellID(sid) or sid
+          local info = C_Spell.GetSpellInfo(normalizedSid)
+          local desc = C_Spell.GetSpellDescription(normalizedSid)
 
           local entry = snapshot[sid]
           if not entry then
@@ -2041,6 +2115,7 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     ClassHUD:ApplyAnchorPosition()
     local snapshotUpdated = ClassHUD:UpdateCDMSnapshot()
     if ClassHUD.BuildFramesForSpec then ClassHUD:BuildFramesForSpec() end
+    if ClassHUD.RefreshActiveSpellMap then ClassHUD:RefreshActiveSpellMap() end
     if snapshotUpdated or ClassHUD._opts then ClassHUD:RefreshRegisteredOptions() end
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
@@ -2063,12 +2138,16 @@ eventFrame:SetScript("OnEvent", function(_, event, unit, ...)
     end
     if ClassHUD.UpdateAllFrames then ClassHUD:UpdateAllFrames() end
     if ClassHUD.RefreshSpellFrameVisibility then ClassHUD:RefreshSpellFrameVisibility() end
+    if ClassHUD.RefreshActiveSpellMap then ClassHUD:RefreshActiveSpellMap() end
     if ClassHUD.RefreshAllTotems then ClassHUD:RefreshAllTotems() end
     return
   end
 
   if (event == "PLAYER_TALENT_UPDATE" and (unit == nil or unit == "player"))
       or event == "TRAIT_CONFIG_UPDATED" then
+    if ClassHUD.RefreshActiveSpellMap then
+      ClassHUD:RefreshActiveSpellMap()
+    end
     if ClassHUD.UpdateAllFrames then
       ClassHUD:UpdateAllFrames()
     end

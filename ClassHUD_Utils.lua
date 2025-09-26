@@ -265,6 +265,26 @@ end
 local DEFAULT_AURA_UNITS = { "player", "pet", "target", "focus", "mouseover" }
 local CATEGORY_PRIORITY = { "bar", "buff", "essential", "utility" }
 
+local function AppendCandidate(self, list, seen, spellID)
+  if not spellID then return end
+
+  local numericID = tonumber(spellID) or spellID
+  if type(numericID) ~= "number" or numericID <= 0 then
+    return
+  end
+
+  if not seen[numericID] then
+    list[#list + 1] = numericID
+    seen[numericID] = true
+  end
+
+  local activeID = self and self.GetActiveSpellID and self:GetActiveSpellID(numericID)
+  if activeID and type(activeID) == "number" and activeID > 0 and not seen[activeID] then
+    list[#list + 1] = activeID
+    seen[activeID] = true
+  end
+end
+
 ---Finds the first relevant aura for the given spell ID across a list of units.
 ---@param spellID number
 ---@param units string[]|nil
@@ -272,10 +292,12 @@ local CATEGORY_PRIORITY = { "bar", "buff", "essential", "utility" }
 function ClassHUD:GetAuraForSpell(spellID, units)
   if not C_UnitAuras then return nil end
 
+  local normalizedSpellID = self:GetActiveSpellID(spellID) or spellID
+
   units = units or DEFAULT_AURA_UNITS
 
   if C_UnitAuras.GetPlayerAuraBySpellID then
-    local aura = C_UnitAuras.GetPlayerAuraBySpellID(spellID)
+    local aura = C_UnitAuras.GetPlayerAuraBySpellID(normalizedSpellID)
     if aura then return aura, "player" end
   end
 
@@ -283,7 +305,7 @@ function ClassHUD:GetAuraForSpell(spellID, units)
     for i = 1, #units do
       local unit = units[i]
       if unit ~= "player" and UnitExists(unit) then
-        local aura = C_UnitAuras.GetAuraDataBySpellID(unit, spellID)
+        local aura = C_UnitAuras.GetAuraDataBySpellID(unit, normalizedSpellID)
         if aura and (aura.isFromPlayer or aura.sourceUnit == "player" or aura.sourceUnit == "pet") then
           return aura, unit
         end
@@ -311,46 +333,24 @@ function ClassHUD:_AssembleAuraCandidates(entry, spellID)
     end
   end
 
-  local count = 0
+  local seen = {}
 
   if entry.categories then
     for _, catData in pairs(entry.categories) do
-      local overrideID = catData.overrideSpellID
-      if overrideID then
-        count = count + 1
-        candidates[count] = overrideID
-      end
+      AppendCandidate(self, candidates, seen, catData.overrideSpellID)
 
       local linked = catData.linkedSpellIDs
       if linked then
         for i = 1, #linked do
-          count = count + 1
-          candidates[count] = linked[i]
+          AppendCandidate(self, candidates, seen, linked[i])
         end
       end
 
-      local catSpellID = catData.spellID
-      if catSpellID then
-        count = count + 1
-        candidates[count] = catSpellID
-      end
+      AppendCandidate(self, candidates, seen, catData.spellID)
     end
   end
 
-  if spellID then
-    local seen = false
-    for i = 1, count do
-      if candidates[i] == spellID then
-        seen = true
-        break
-      end
-    end
-
-    if not seen then
-      count = count + 1
-      candidates[count] = spellID
-    end
-  end
+  AppendCandidate(self, candidates, seen, spellID)
 
   return candidates
 end
@@ -370,17 +370,12 @@ function ClassHUD:GetAuraCandidatesForEntry(entry, spellID)
           TMP[i] = cached[i]
         end
 
-        local seen = false
+        local seen = {}
         for i = 1, count do
-          if TMP[i] == spellID then
-            seen = true
-            break
-          end
+          seen[TMP[i]] = true
         end
 
-        if not seen then
-          TMP[count + 1] = spellID
-        end
+        AppendCandidate(self, TMP, seen, spellID)
 
         return TMP
       end
@@ -399,7 +394,8 @@ function ClassHUD:GetAuraCandidatesForEntry(entry, spellID)
     TMP[i] = nil
   end
 
-  TMP[1] = spellID
+  local seen = {}
+  AppendCandidate(self, TMP, seen, spellID)
   return TMP
 end
 
@@ -427,11 +423,13 @@ end
 ---@return boolean tracksAura, boolean auraActive
 function ClassHUD:IsHarmfulAuraSpell(spellID, entry)
   if not (C_Spell and C_Spell.IsSpellHarmful) then return false, false end
-  if not C_Spell.IsSpellHarmful(spellID) then return false, false end
+  local normalizedSpellID = self:GetActiveSpellID(spellID) or spellID
+  local ok, harmful = pcall(C_Spell.IsSpellHarmful, normalizedSpellID)
+  if not ok or not harmful then return false, false end
 
   -- Case 1: snapshot sier dette er en buff/debuff (klassisk DoT)
   if entry and entry.categories and entry.categories.buff then
-    local candidates = self:GetAuraCandidatesForEntry(entry, spellID)
+    local candidates = self:GetAuraCandidatesForEntry(entry, normalizedSpellID)
     local aura = self:FindAuraFromCandidates(candidates, { "target", "focus" })
     if aura and aura.expirationTime and aura.expirationTime > 0 then
       return true, true
@@ -443,7 +441,7 @@ function ClassHUD:IsHarmfulAuraSpell(spellID, entry)
   -- Case 2: spell er lagt inn manuelt (ingen snapshot-entry)
   -- Her antar vi at brukeren vil tracke det som en aura på target
   if not entry then
-    local info = C_Spell.GetSpellInfo(spellID)
+    local info = C_Spell.GetSpellInfo(normalizedSpellID)
     if info then
       local aura = C_UnitAuras.GetAuraDataBySpellName("target", info.name, "HARMFUL")
           or C_UnitAuras.GetAuraDataBySpellName("focus", info.name, "HARMFUL")
@@ -459,7 +457,8 @@ function ClassHUD:IsHarmfulAuraSpell(spellID, entry)
 end
 
 function ClassHUD:FindAuraByName(castSpellID, units)
-  local info = C_Spell.GetSpellInfo(castSpellID)
+  local normalizedSpellID = self:GetActiveSpellID(castSpellID) or castSpellID
+  local info = C_Spell.GetSpellInfo(normalizedSpellID)
   if not info or not info.name then return nil end
   local spellName = info.name
 
@@ -481,8 +480,9 @@ end
 
 function ClassHUD:LacksResources(spellID)
   -- Både gamle og nye API-navn støttes
-  local costs = (C_Spell and C_Spell.GetSpellPowerCost and C_Spell.GetSpellPowerCost(spellID))
-      or (GetSpellPowerCost and GetSpellPowerCost(spellID))
+  local normalizedSpellID = self:GetActiveSpellID(spellID) or spellID
+  local costs = (C_Spell and C_Spell.GetSpellPowerCost and C_Spell.GetSpellPowerCost(normalizedSpellID))
+      or (GetSpellPowerCost and GetSpellPowerCost(normalizedSpellID))
 
   if type(costs) ~= "table" then return false end
 

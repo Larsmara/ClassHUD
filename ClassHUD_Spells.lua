@@ -7,6 +7,7 @@ local LSM = LibStub("LibSharedMedia-3.0", true)
 ClassHUD.spellFrames = ClassHUD.spellFrames or {}
 ClassHUD.trackedBuffFrames = ClassHUD.trackedBuffFrames or {}
 ClassHUD._trackedBuffFramePool = ClassHUD._trackedBuffFramePool or {}
+ClassHUD._spellFrameActiveMap = ClassHUD._spellFrameActiveMap or {}
 
 local activeFrames = {}
 local trackedBuffPool = ClassHUD._trackedBuffFramePool
@@ -194,6 +195,81 @@ end
 ClassHUD.ClearFrameAuraWatchers = ClearFrameAuraWatchers
 ClassHUD.RegisterFrameAuraWatchers = RegisterFrameAuraWatchers
 
+local function SetFrameActiveSpell(frame, activeSpellID)
+  if not frame then return end
+
+  local map = ClassHUD._spellFrameActiveMap
+  if not map then
+    map = {}
+    ClassHUD._spellFrameActiveMap = map
+  end
+
+  local previous = frame._activeSpellID
+  if previous and map[previous] == frame then
+    map[previous] = nil
+  end
+
+  frame._activeSpellID = activeSpellID
+  if activeSpellID then
+    map[activeSpellID] = frame
+  end
+end
+
+function ClassHUD:RefreshActiveSpellMap()
+  local map = self._spellFrameActiveMap
+  if map then
+    wipe(map)
+  else
+    map = {}
+    self._spellFrameActiveMap = map
+  end
+
+  if not self.spellFrames then
+    return
+  end
+
+  for baseSpellID, frame in pairs(self.spellFrames) do
+    if frame and frame.spellID then
+      local activeID = self:GetActiveSpellID(baseSpellID) or baseSpellID
+      frame._activeSpellID = nil
+      SetFrameActiveSpell(frame, activeID)
+    end
+  end
+end
+
+function ClassHUD:GetSpellFrameForSpellID(spellID)
+  if not spellID or not self.spellFrames then
+    return nil, nil
+  end
+
+  local numericID = tonumber(spellID) or spellID
+  if not numericID then
+    return nil, nil
+  end
+
+  local frame = self.spellFrames[numericID]
+  if frame then
+    return frame, numericID
+  end
+
+  local map = self._spellFrameActiveMap
+  if map then
+    frame = map[numericID]
+    if frame then
+      return frame, frame.spellID
+    end
+  end
+
+  if FindBaseSpellByID then
+    local ok, baseID = pcall(FindBaseSpellByID, numericID)
+    if ok and baseID and self.spellFrames[baseID] then
+      return self.spellFrames[baseID], baseID
+    end
+  end
+
+  return nil, nil
+end
+
 local function MarkFrameForAuraUpdate(frame)
   if not frame then return end
 
@@ -279,14 +355,15 @@ end
 
 local function ShouldTrackRange(spellID)
   if not spellID then return false end
+  local normalizedSpellID = ClassHUD:GetActiveSpellID(spellID) or spellID
   if C_Spell and C_Spell.IsSpellHarmful then
-    local ok, result = pcall(C_Spell.IsSpellHarmful, spellID)
+    local ok, result = pcall(C_Spell.IsSpellHarmful, normalizedSpellID)
     if ok and result ~= nil then
       return result
     end
   end
   if IsHarmfulSpell then
-    local ok, result = pcall(IsHarmfulSpell, spellID)
+    local ok, result = pcall(IsHarmfulSpell, normalizedSpellID)
     if ok and result ~= nil then
       return result
     end
@@ -296,8 +373,9 @@ end
 
 local function SpellUsesResource(spellID)
   if not spellID then return false end
-  local costs = (C_Spell and C_Spell.GetSpellPowerCost and C_Spell.GetSpellPowerCost(spellID))
-      or (GetSpellPowerCost and GetSpellPowerCost(spellID))
+  local normalizedSpellID = ClassHUD:GetActiveSpellID(spellID) or spellID
+  local costs = (C_Spell and C_Spell.GetSpellPowerCost and C_Spell.GetSpellPowerCost(normalizedSpellID))
+      or (GetSpellPowerCost and GetSpellPowerCost(normalizedSpellID))
   if type(costs) ~= "table" then return false end
 
   for _, costInfo in ipairs(costs) do
@@ -477,7 +555,14 @@ local function UpdateGlow(frame, aura, sid, data)
   local shouldGlow = (aura ~= nil)
   local allowExtraGlowLogic = true
 
-  local isHarmfulSpell = C_Spell and C_Spell.IsSpellHarmful and C_Spell.IsSpellHarmful(sid)
+  local normalizedSpellID = ClassHUD:GetActiveSpellID(sid) or sid
+  local isHarmfulSpell = false
+  if C_Spell and C_Spell.IsSpellHarmful then
+    local ok, result = pcall(C_Spell.IsSpellHarmful, normalizedSpellID)
+    if ok and result then
+      isHarmfulSpell = true
+    end
+  end
 
   if isHarmfulSpell then
     allowExtraGlowLogic = false
@@ -485,7 +570,7 @@ local function UpdateGlow(frame, aura, sid, data)
     if aura and aura.expirationTime and aura.expirationTime > 0 then
       frame._harmfulGlowExpiration = aura.expirationTime
       frame._harmfulGlowWatching = true
-      frame._harmfulGlowAuraSpellID = aura.spellId or sid
+      frame._harmfulGlowAuraSpellID = aura.spellId or normalizedSpellID
       frame._harmfulGlowNextAuraCheck = nil
 
       local remain = aura.expirationTime - GetTime()
@@ -512,11 +597,16 @@ local function UpdateGlow(frame, aura, sid, data)
   -- 3) Auto-mapping fallback (som i originalens "keepGlow")
   if allowExtraGlowLogic and not shouldGlow and ClassHUD.trackedBuffToSpell then
     for buffID, mappedSpellID in pairs(ClassHUD.trackedBuffToSpell) do
-      if mappedSpellID == sid and ClassHUD:GetAuraForSpell(buffID) then
+      if (mappedSpellID == normalizedSpellID or (frame and frame.spellID and mappedSpellID == frame.spellID))
+          and ClassHUD:GetAuraForSpell(buffID) then
         shouldGlow = true
         break
       end
     end
+  end
+
+  if frame then
+    frame._harmfulGlowPendingState = shouldGlow
   end
 
   return shouldGlow
@@ -599,6 +689,7 @@ local function CreateSpellFrame(spellID)
   frame._gcdActive = false
 
   ClassHUD.spellFrames[spellID] = frame
+  SetFrameActiveSpell(frame, ClassHUD:GetActiveSpellID(spellID) or spellID)
 
   frame:SetScript("OnUpdate", function(selfFrame)
     if not selfFrame._harmfulGlowWatching then
@@ -610,6 +701,7 @@ local function CreateSpellFrame(spellID)
     local threshold = selfFrame._harmfulGlowThreshold or HARMFUL_GLOW_THRESHOLD
     local auraSpellID = selfFrame._harmfulGlowAuraSpellID or selfFrame.spellID
     local auraStillPresent = true
+    local shouldGlow = false
 
     local nextCheck = selfFrame._harmfulGlowNextAuraCheck
     if not nextCheck or now >= nextCheck then
@@ -620,6 +712,9 @@ local function CreateSpellFrame(spellID)
       end
       if not auraCheck then
         auraStillPresent = false
+      else
+        expiration = auraCheck.expirationTime or expiration
+        selfFrame._harmfulGlowExpiration = expiration
       end
       selfFrame._harmfulGlowNextAuraCheck = now + HARMFUL_GLOW_AURA_CHECK_INTERVAL
     end
@@ -629,24 +724,27 @@ local function CreateSpellFrame(spellID)
       selfFrame._harmfulGlowExpiration = nil
       selfFrame._harmfulGlowAuraSpellID = nil
       selfFrame._harmfulGlowNextAuraCheck = nil
-      SetFrameGlow(selfFrame, false)
     elseif expiration and expiration > 0 then
       local remain = expiration - now
       if remain > 0 then
-        SetFrameGlow(selfFrame, remain <= threshold)
+        shouldGlow = remain <= threshold
       else
         selfFrame._harmfulGlowWatching = false
         selfFrame._harmfulGlowExpiration = nil
         selfFrame._harmfulGlowAuraSpellID = nil
         selfFrame._harmfulGlowNextAuraCheck = nil
-        SetFrameGlow(selfFrame, false)
       end
     else
       selfFrame._harmfulGlowWatching = false
       selfFrame._harmfulGlowExpiration = nil
       selfFrame._harmfulGlowAuraSpellID = nil
       selfFrame._harmfulGlowNextAuraCheck = nil
-      SetFrameGlow(selfFrame, false)
+    end
+
+    local previous = selfFrame._harmfulGlowPendingState
+    if previous ~= shouldGlow then
+      selfFrame._harmfulGlowPendingState = shouldGlow
+      MarkFrameForAuraUpdate(selfFrame)
     end
   end)
 
@@ -835,8 +933,10 @@ local function SpellMatchesPlayer(spellID)
     return false
   end
 
+  local normalizedSpellID = ClassHUD:GetActiveSpellID(spellID) or spellID
+
   if C_Spell and C_Spell.GetSpellInfo then
-    local info = C_Spell.GetSpellInfo(spellID)
+    local info = C_Spell.GetSpellInfo(normalizedSpellID)
     if not info then
       return false
     end
@@ -845,23 +945,14 @@ local function SpellMatchesPlayer(spellID)
   local hasCheck = false
   if IsPlayerSpell then
     hasCheck = true
-    if IsPlayerSpell(spellID) then
+    if IsPlayerSpell(normalizedSpellID) then
       return true
     end
   end
   if IsSpellKnown then
     hasCheck = true
-    if IsSpellKnown(spellID) then
+    if IsSpellKnown(normalizedSpellID) then
       return true
-    end
-  end
-  if FindSpellOverrideByID then
-    hasCheck = true
-    local overrideID = FindSpellOverrideByID(spellID)
-    if overrideID and overrideID ~= spellID then
-      if (IsPlayerSpell and IsPlayerSpell(overrideID)) or (IsSpellKnown and IsSpellKnown(overrideID)) then
-        return true
-      end
     end
   end
 
@@ -877,14 +968,39 @@ local function SpellIsKnown(spellID)
     return false
   end
 
-  if C_SpellBook and C_SpellBook.IsSpellKnown then
-    local ok, known = pcall(C_SpellBook.IsSpellKnown, spellID)
+  local normalizedSpellID = ClassHUD:GetActiveSpellID(spellID) or spellID
+
+  if C_SpellBook then
+    if C_SpellBook.IsSpellInSpellBook then
+      local ok, inBook = pcall(C_SpellBook.IsSpellInSpellBook, normalizedSpellID)
+      if ok and inBook then
+        return true
+      end
+    end
+
+    if C_SpellBook.IsSpellKnownOrOverridesKnown then
+      local ok, known = pcall(C_SpellBook.IsSpellKnownOrOverridesKnown, normalizedSpellID)
+      if ok then
+        return known == true
+      end
+    end
+
+    if C_SpellBook.IsSpellKnown then
+      local ok, known = pcall(C_SpellBook.IsSpellKnown, normalizedSpellID)
+      if ok then
+        return known == true
+      end
+    end
+  end
+
+  if IsSpellKnownOrOverridesKnown then
+    local ok, known = pcall(IsSpellKnownOrOverridesKnown, normalizedSpellID)
     if ok then
       return known == true
     end
   end
 
-  return SpellMatchesPlayer(spellID)
+  return SpellMatchesPlayer(normalizedSpellID)
 end
 
 local function SpellIsCurrentlyUsable(spellID)
@@ -892,8 +1008,10 @@ local function SpellIsCurrentlyUsable(spellID)
     return false, false
   end
 
+  local normalizedSpellID = ClassHUD:GetActiveSpellID(spellID) or spellID
+
   if C_Spell and C_Spell.IsSpellUsable then
-    local usable, insufficient = C_Spell.IsSpellUsable(spellID)
+    local usable, insufficient = C_Spell.IsSpellUsable(normalizedSpellID)
     return usable == true, insufficient and true or false
   end
 
@@ -1084,12 +1202,22 @@ local function PopulateBuffIconFrame(frame, buffID, aura, entry)
     frame._last = cache
   end
 
-  local iconID = entry and entry.iconID
-  if not iconID then
-    local info = C_Spell.GetSpellInfo(buffID)
-    iconID = info and info.iconID
+  local normalizedBuffID = ClassHUD:GetActiveSpellID(buffID) or buffID
+  local snapshotIconID = entry and entry.iconID
+  local info = C_Spell.GetSpellInfo(normalizedBuffID)
+  local activeIconID = (C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(normalizedBuffID)) or (info and info.iconID)
+  frame.icon:SetTexture(activeIconID or snapshotIconID or 134400)
+
+  local tooltipName = entry and entry.name or (info and info.name) or (C_Spell.GetSpellName and C_Spell.GetSpellName(normalizedBuffID))
+  local tooltipDesc = entry and entry.desc
+  if not tooltipDesc and C_Spell.GetSpellDescription then
+    tooltipDesc = C_Spell.GetSpellDescription(normalizedBuffID)
   end
-  frame.icon:SetTexture(iconID or C_Spell.GetSpellTexture(buffID) or 134400)
+
+  frame.tooltipSpellID = normalizedBuffID
+  frame._tooltipSpellID = normalizedBuffID
+  frame.tooltipTitle = tooltipName
+  frame.tooltipText = tooltipDesc
 
   if aura and aura.expirationTime and aura.duration and aura.duration > 0 then
     frame.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration, aura.modRate or 1)
@@ -1196,16 +1324,26 @@ local function UpdateTrackedIconFrame(frame)
   end
 
   if aura then
-    local iconID = entry and entry.iconID
-    if not iconID then
-      local info = C_Spell.GetSpellInfo(buffID)
-      iconID = info and info.iconID
-    end
-    iconID = iconID or C_Spell.GetSpellTexture(buffID) or 134400
+    local normalizedBuffID = ClassHUD:GetActiveSpellID(buffID) or buffID
+    local snapshotIconID = entry and entry.iconID
+    local info = C_Spell.GetSpellInfo(normalizedBuffID)
+    local activeIconID = (C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(normalizedBuffID)) or (info and info.iconID)
+    local iconID = activeIconID or snapshotIconID or 134400
     if cache.iconID ~= iconID then
       frame.icon:SetTexture(iconID)
       cache.iconID = iconID
     end
+
+    local tooltipName = entry and entry.name or (info and info.name) or (C_Spell.GetSpellName and C_Spell.GetSpellName(normalizedBuffID))
+    local tooltipDesc = entry and entry.desc
+    if not tooltipDesc and C_Spell.GetSpellDescription then
+      tooltipDesc = C_Spell.GetSpellDescription(normalizedBuffID)
+    end
+
+    frame.tooltipSpellID = normalizedBuffID
+    frame._tooltipSpellID = normalizedBuffID
+    frame.tooltipTitle = tooltipName
+    frame.tooltipText = tooltipDesc
 
     if aura.expirationTime and aura.duration and aura.duration > 0 then
       frame.cooldown:SetCooldown(aura.expirationTime - aura.duration, aura.duration, aura.modRate or 1)
@@ -1272,6 +1410,10 @@ local function UpdateTrackedIconFrame(frame)
   ClassHUD:ApplyCooldownText(frame, ShouldShowCooldownNumbers(), nil)
   frame:Hide()
   frame._layoutActive = false
+  frame.tooltipSpellID = nil
+  frame._tooltipSpellID = nil
+  frame.tooltipTitle = nil
+  frame.tooltipText = nil
   return false
 end
 
@@ -1380,7 +1522,8 @@ function ClassHUD:BuildTrackedBuffFrames()
           order = math.min(order, entry.categories.buff.order)
         end
       end
-      local name = entry and entry.name or C_Spell.GetSpellName(buffID) or ("Spell " .. buffID)
+      local activeBuffID = self:GetActiveSpellID(buffID) or buffID
+      local name = entry and entry.name or C_Spell.GetSpellName(activeBuffID) or ("Spell " .. activeBuffID)
       local manualIndex = orderLookup[buffID]
       if not manualIndex then
         orderArray[#orderArray + 1] = buffID
@@ -1461,8 +1604,21 @@ end
 -- UpdateSpellFrame
 -- ==================================================
 local function UpdateSpellFrame(frame)
-  local sid = frame.spellID
-  if not sid then return end
+  local originalSpellID = frame.spellID
+  if not originalSpellID then return end
+
+  local baseSpellID = originalSpellID
+  if FindBaseSpellByID then
+    local ok, baseID = pcall(FindBaseSpellByID, originalSpellID)
+    if ok and baseID and baseID ~= 0 then
+      baseSpellID = baseID
+    end
+  end
+
+  local sid = ClassHUD:GetActiveSpellID(baseSpellID) or baseSpellID
+  frame._overrideGlowActive = nil
+
+  SetFrameActiveSpell(frame, sid)
 
   local cache = frame._last
   if not cache then
@@ -1470,8 +1626,8 @@ local function UpdateSpellFrame(frame)
     frame._last = cache
   end
 
-  local data              = ClassHUD.cdmSpells and ClassHUD.cdmSpells[sid]
-  local entry             = ClassHUD:GetSnapshotEntry(sid)
+  local data              = ClassHUD.cdmSpells and ClassHUD.cdmSpells[baseSpellID]
+  local entry             = ClassHUD:GetSnapshotEntry(baseSpellID)
   local auraCandidates    = ClassHUD:GetAuraCandidatesForEntry(entry, sid)
   frame._auraCandidates   = auraCandidates
 
@@ -1489,7 +1645,7 @@ local function UpdateSpellFrame(frame)
   end
   frame._auraUnitList = auraUnits
 
-  local linkedBuffIDs, linkedBuffMeta = ClassHUD:GetLinkedBuffIDsForSpell(sid, frame._linkedBuffIDs, frame._linkedBuffMeta)
+  local linkedBuffIDs, linkedBuffMeta = ClassHUD:GetLinkedBuffIDsForSpell(baseSpellID, frame._linkedBuffIDs, frame._linkedBuffMeta)
   if frame then
     frame._linkedBuffIDs = linkedBuffIDs
     frame._linkedBuffMeta = linkedBuffMeta
@@ -1576,17 +1732,26 @@ local function UpdateSpellFrame(frame)
 
   RegisterFrameAuraWatchers(frame, watcherCandidates, watcherUnits)
 
-  local iconID = entry and entry.iconID
-  if not iconID then
-    local info = C_Spell.GetSpellInfo(sid)
-    iconID = info and info.iconID
-  end
-  iconID = iconID or 134400
+  local snapshotIconID = entry and entry.iconID
+  local info = C_Spell.GetSpellInfo(sid)
+  local activeIconID = (C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid)) or (info and info.iconID)
+  local iconID = activeIconID or snapshotIconID or 134400
   local baseIconID = iconID
   if cache.iconID ~= iconID then
     frame.icon:SetTexture(iconID)
     cache.iconID = iconID
   end
+
+  local tooltipName = entry and entry.name or (info and info.name) or (C_Spell.GetSpellName and C_Spell.GetSpellName(sid))
+  local tooltipDesc = entry and entry.desc
+  if not tooltipDesc and C_Spell.GetSpellDescription then
+    tooltipDesc = C_Spell.GetSpellDescription(sid)
+  end
+
+  frame.tooltipSpellID = sid
+  frame._tooltipSpellID = sid
+  frame.tooltipTitle = tooltipName
+  frame.tooltipText = tooltipDesc
 
   local aura, auraSpellID, auraUnit = nil, nil, nil
   if auraCandidates then
@@ -1703,7 +1868,7 @@ local function UpdateSpellFrame(frame)
   end
 
   if not chargesShown then
-    local manualCount = ClassHUD.GetManualCountForSpell and ClassHUD:GetManualCountForSpell(sid)
+    local manualCount = ClassHUD.GetManualCountForSpell and ClassHUD:GetManualCountForSpell(baseSpellID)
     if manualCount ~= nil then
       if manualCount > 0 then
         countText = tostring(manualCount)
@@ -2046,18 +2211,25 @@ local function UpdateSpellFrame(frame)
     cache.vertexR, cache.vertexG, cache.vertexB = vertexR, vertexG, vertexB
   end
 
+  ClassHUD:EvaluateBuffLinks(frame, baseSpellID)
+
   local shouldGlow = UpdateGlow(frame, aura, sid, data) or false
+  if frame._linkedBuffActive then
+    shouldGlow = true
+  end
   if frame._totemGlowActive then
     shouldGlow = true
   end
+  if ClassHUD.HasTemporaryOverride and ClassHUD:HasTemporaryOverride(baseSpellID) then
+    shouldGlow = true
+  end
+
   if cache.glow ~= shouldGlow then
     SetFrameGlow(frame, shouldGlow)
     cache.glow = shouldGlow
   else
     cache.glow = shouldGlow
   end
-
-  ClassHUD:EvaluateBuffLinks(frame, sid)
 
   local overrideIconID = frame._linkedBuffSwapIconID
   if overrideIconID and overrideIconID ~= cache.iconID then
@@ -2077,7 +2249,7 @@ function ClassHUD:UpdateCooldown(spellID)
   if not self.spellFrames then return end
 
   if spellID then
-    local frame = self.spellFrames[spellID]
+    local frame = select(1, self:GetSpellFrameForSpellID(spellID))
     if frame then
       UpdateSpellFrame(frame)
       return
@@ -2257,9 +2429,10 @@ function ClassHUD:RebuildTrackedBuffFrames()
     ClassHUD:NormalizeBuffLinkTable(links)
 
     for buffID in pairs(links) do
-      local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(buffID)
+      local normalizedBuffID = self:GetActiveSpellID(buffID) or buffID
+      local aura = C_UnitAuras.GetPlayerAuraBySpellID and C_UnitAuras.GetPlayerAuraBySpellID(normalizedBuffID)
       if not aura and UnitExists("pet") and C_UnitAuras and C_UnitAuras.GetAuraDataBySpellID then
-        aura = C_UnitAuras.GetAuraDataBySpellID("pet", buffID)
+        aura = C_UnitAuras.GetAuraDataBySpellID("pet", normalizedBuffID)
       end
     end
   end
@@ -2461,8 +2634,10 @@ function ClassHUD:BuildFramesForSpec()
           or (b.snapshotEntry.categories.utility and b.snapshotEntry.categories.utility.order))) or math.huge
 
       if ao == bo then
-        local na = a.snapshotEntry and a.snapshotEntry.name or C_Spell.GetSpellName(a.spellID) or ""
-        local nb = b.snapshotEntry and b.snapshotEntry.name or C_Spell.GetSpellName(b.spellID) or ""
+        local activeA = ClassHUD:GetActiveSpellID(a.spellID) or a.spellID
+        local activeB = ClassHUD:GetActiveSpellID(b.spellID) or b.spellID
+        local na = a.snapshotEntry and a.snapshotEntry.name or C_Spell.GetSpellName(activeA) or ""
+        local nb = b.snapshotEntry and b.snapshotEntry.name or C_Spell.GetSpellName(activeB) or ""
         return na < nb
       end
       return ao < bo
@@ -2500,11 +2675,13 @@ function ClassHUD:BuildFramesForSpec()
 
   for buffID, entry in pairs(snapshot) do
     if entry.categories and entry.categories.buff then
-      local desc = entry.desc or C_Spell.GetSpellDescription(buffID)
+      local normalizedBuffID = ClassHUD:GetActiveSpellID(buffID) or buffID
+      local desc = entry.desc or C_Spell.GetSpellDescription(normalizedBuffID)
       if desc then
         for spellID, frame in pairs(self.spellFrames) do
           if frame and frame.snapshotEntry then
-            local spellName = C_Spell.GetSpellName(spellID)
+            local activeSpellID = self:GetActiveSpellID(spellID) or spellID
+            local spellName = C_Spell.GetSpellName(activeSpellID)
             if spellName and string.find(desc, spellName, 1, true) then
               self.trackedBuffToSpell[buffID] = spellID
 
@@ -2522,6 +2699,7 @@ function ClassHUD:BuildFramesForSpec()
     end
   end
 
+  self:RefreshActiveSpellMap()
   self:UpdateAllFrames()
 
   if self.Layout then

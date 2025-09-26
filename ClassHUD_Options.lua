@@ -8,15 +8,16 @@ local ACR = LibStub("AceConfigRegistry-3.0", true)
 local LSM = LibStub("LibSharedMedia-3.0", true)
 
 local function GetSpellInfoSafe(spellID)
+  local normalizedSpellID = (ClassHUD and ClassHUD.GetActiveSpellID and ClassHUD:GetActiveSpellID(spellID)) or spellID
   if C_Spell and C_Spell.GetSpellInfo then
-    local info = C_Spell.GetSpellInfo(spellID)
+    local info = C_Spell.GetSpellInfo(normalizedSpellID)
     if info then
       return info
     end
   end
 
   if type(GetSpellInfo) == "function" then
-    local name, _, icon = GetSpellInfo(spellID)
+    local name, _, icon = GetSpellInfo(normalizedSpellID)
     if name or icon then
       return { name = name, iconID = icon }
     end
@@ -1580,6 +1581,12 @@ local function BuildBuffLinkArgs(addon, container)
       get = function() return "" end,
       set = function(_, value)
         local newID = tonumber(value)
+        if FindBaseSpellByID and newID then
+          local baseID = FindBaseSpellByID(newID)
+          if baseID and baseID ~= 0 then
+            newID = baseID
+          end
+        end
         if newID then
           EnsureBuffLinkConfig(links, buffID, newID)
           addon:BuildFramesForSpec()
@@ -1818,6 +1825,12 @@ function ClassHUD_BuildOptions(addon)
         set = function(_, value)
           local spellID = tonumber(value)
           if not spellID then return end
+          if FindBaseSpellByID then
+            local baseID = FindBaseSpellByID(spellID)
+            if baseID and baseID ~= 0 then
+              spellID = baseID
+            end
+          end
           local class, specID = addon:GetPlayerClassSpec()
           local lists = EnsurePlacementLists(addon, class, specID)
           SetSpellPlacement(addon, class, specID, spellID, "TOP", #lists.TOP + 1)
@@ -1853,15 +1866,21 @@ function ClassHUD_BuildOptions(addon)
       get = function()
         return ""
       end,
-      set = function(_, value)
-        local spellID = tonumber(value)
-        if not spellID then return end
-        local class, specID = addon:GetPlayerClassSpec()
-        local lists = EnsurePlacementLists(addon, class, specID)
-        SetSpellPlacement(addon, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
-        addon:BuildFramesForSpec()
-        RefreshSpellEditors()
-        NotifyOptionsChanged()
+        set = function(_, value)
+          local spellID = tonumber(value)
+          if not spellID then return end
+          if FindBaseSpellByID then
+            local baseID = FindBaseSpellByID(spellID)
+            if baseID and baseID ~= 0 then
+              spellID = baseID
+            end
+          end
+          local class, specID = addon:GetPlayerClassSpec()
+          local lists = EnsurePlacementLists(addon, class, specID)
+          SetSpellPlacement(addon, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
+          addon:BuildFramesForSpec()
+          RefreshSpellEditors()
+          NotifyOptionsChanged()
       end,
     },
     empty = {
@@ -3057,6 +3076,12 @@ function ClassHUD:GetUtilityOptions()
         set = function(_, value)
           local spellID = tonumber(value)
           if not spellID then return end
+          if FindBaseSpellByID then
+            local baseID = FindBaseSpellByID(spellID)
+            if baseID and baseID ~= 0 then
+              spellID = baseID
+            end
+          end
           local class, specID = self:GetPlayerClassSpec()
           local lists = EnsurePlacementLists(self, class, specID)
           SetSpellPlacement(self, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
