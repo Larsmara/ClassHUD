@@ -7,6 +7,48 @@ local ClassHUD = _G.ClassHUD or LibStub("AceAddon-3.0"):GetAddon("ClassHUD")
 local ACR = LibStub("AceConfigRegistry-3.0", true)
 local LSM = LibStub("LibSharedMedia-3.0", true)
 
+local function SafeCall(fn, ...)
+  if type(fn) ~= "function" then
+    return false
+  end
+
+  local ok, err = pcall(fn, ...)
+  if not ok then
+    local handler = type(geterrorhandler) == "function" and geterrorhandler()
+    if type(handler) == "function" then
+      handler(err)
+    else
+      print("|cff00ff88ClassHUD|r options refresh error:", err)
+    end
+  end
+
+  return ok
+end
+
+local function EnsureAddonOptionsRefreshWrapper(addon)
+  if type(addon) ~= "table" then return end
+  if type(addon.SafeRefreshOptions) == "function" then return end
+
+  function addon:SafeRefreshOptions()
+    if SafeCall(rawget(self, "_optionsRefreshCallback"), self) then
+      return true
+    end
+
+    if SafeCall(self.RefreshRegisteredOptions, self) then
+      return true
+    end
+
+    if ACR then
+      ACR:NotifyChange("ClassHUD")
+      return true
+    end
+
+    return false
+  end
+end
+
+EnsureAddonOptionsRefreshWrapper(ClassHUD)
+
 local function GetSpellInfoSafe(spellID)
   local normalizedSpellID = (ClassHUD and ClassHUD.GetActiveSpellID and ClassHUD:GetActiveSpellID(spellID)) or spellID
   if C_Spell and C_Spell.GetSpellInfo then
@@ -1835,8 +1877,7 @@ function ClassHUD_BuildOptions(addon)
           local lists = EnsurePlacementLists(addon, class, specID)
           SetSpellPlacement(addon, class, specID, spellID, "TOP", #lists.TOP + 1)
           addon:BuildFramesForSpec()
-          RefreshSpellEditors()
-          NotifyOptionsChanged()
+          addon:SafeRefreshOptions()
         end,
       },
       empty = {
@@ -1879,8 +1920,7 @@ function ClassHUD_BuildOptions(addon)
           local lists = EnsurePlacementLists(addon, class, specID)
           SetSpellPlacement(addon, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
           addon:BuildFramesForSpec()
-          RefreshSpellEditors()
-          NotifyOptionsChanged()
+          addon:SafeRefreshOptions()
       end,
     },
     empty = {
@@ -1927,8 +1967,7 @@ function ClassHUD_BuildOptions(addon)
           orderList[#orderList + 1] = buffID
         end
         addon:BuildTrackedBuffFrames()
-        RefreshSpellEditors()
-        NotifyOptionsChanged()
+        addon:SafeRefreshOptions()
       end,
     },
     empty = {
@@ -3043,6 +3082,11 @@ function ClassHUD_BuildOptions(addon)
     },
   }
 
+  addon._optionsRefreshCallback = function()
+    RefreshDynamicOptionEditors()
+    NotifyOptionsChanged()
+  end
+
   RefreshDynamicOptionEditors()
 
   return opts
@@ -3087,7 +3131,7 @@ function ClassHUD:GetUtilityOptions()
           SetSpellPlacement(self, class, specID, spellID, "HIDDEN", #lists.HIDDEN + 1)
           if self.BuildFramesForSpec then self:BuildFramesForSpec() end
           refresh()
-          NotifyOptionsChanged()
+          self:SafeRefreshOptions()
         end,
       },
       empty = {
