@@ -1483,7 +1483,8 @@ function ClassHUD:BuildTrackedBuffFrames()
           order = math.min(order, entry.categories.buff.order)
         end
       end
-      local name = entry and entry.name or C_Spell.GetSpellName(buffID) or ("Spell " .. buffID)
+      local activeBuffID = self:GetActiveSpellID(buffID) or buffID
+      local name = entry and entry.name or C_Spell.GetSpellName(activeBuffID) or ("Spell " .. activeBuffID)
       local manualIndex = orderLookup[buffID]
       if not manualIndex then
         orderArray[#orderArray + 1] = buffID
