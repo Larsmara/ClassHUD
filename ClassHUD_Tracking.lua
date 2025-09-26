@@ -1097,12 +1097,21 @@ function ClassHUD:FlushTotemChanges()
   end
 
   if not self:IsTotemDurationTextEnabled() then
+    local now = GetTime()
     for frame in pairs(bucket) do
       bucket[frame] = nil
       if frame then
         frame._nextTotemTimerUpdate = nil
+        local remaining = nil
+        local state = frame._activeTotemState
+        if state and state.expiration then
+          remaining = state.expiration - now
+          if remaining <= 0 then
+            remaining = nil
+          end
+        end
         if frame._cooldownTextVisible or frame._lastCooldownText ~= nil then
-          self:ApplyCooldownText(frame, nil)
+          self:ApplyCooldownText(frame, remaining, true)
         end
       end
     end
@@ -1131,7 +1140,7 @@ function ClassHUD:FlushTotemChanges()
             end
           else
             if frame._cooldownTextVisible or frame._lastCooldownText ~= nil then
-              self:ApplyCooldownText(frame, nil)
+              self:ApplyCooldownText(frame, remaining, true)
             end
           end
           frame._nextTotemTimerUpdate = now + TOTEM_DURATION_UPDATE_INTERVAL
@@ -1223,7 +1232,10 @@ function ClassHUD:ApplyTotemOverlay(state)
     end
   end
 
-  if self:IsTotemDurationTextEnabled() and self:HasTotemDuration(state) then
+  local showDuration = self:IsTotemDurationTextEnabled()
+  local hasDuration = self:HasTotemDuration(state)
+
+  if showDuration and hasDuration then
     local now = GetTime()
     local remaining = state.expiration - now
     if remaining and remaining > 0 then
@@ -1236,8 +1248,18 @@ function ClassHUD:ApplyTotemOverlay(state)
       frame._nextTotemTimerUpdate = nil
     end
   else
+    local suppress = (not showDuration) and hasDuration
+    local remaining = nil
+    if hasDuration and state and state.expiration then
+      local now = GetTime()
+      remaining = state.expiration - now
+      if remaining and remaining <= 0 then
+        remaining = nil
+      end
+    end
+
     if frame._cooldownTextVisible or frame._lastCooldownText ~= nil then
-      self:ApplyCooldownText(frame, nil)
+      self:ApplyCooldownText(frame, remaining, suppress)
     end
     frame._nextTotemTimerUpdate = nil
   end

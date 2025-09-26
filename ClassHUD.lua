@@ -819,7 +819,7 @@ function ClassHUD:UnregisterCooldownTextFrame(frame)
   EnsureTicker(self, "_cooldownTickerToken", "TickCooldownText", COOLDOWN_TICK_INTERVAL, frames)
 end
 
-function ClassHUD:ApplyCooldownText(frame, remaining)
+function ClassHUD:ApplyCooldownText(frame, remaining, suppressDisplay)
   if not frame or not frame.cooldownText then return end
 
   frame._last = frame._last or {}
@@ -829,28 +829,23 @@ function ClassHUD:ApplyCooldownText(frame, remaining)
     showNumbers = self:ShouldShowCooldownNumbers()
   end
 
-  if frame._gcdActive then
-    if frame._cooldownTextVisible then
-      frame.cooldownText:Hide()
-      frame._cooldownTextVisible = false
-    end
-    if frame._lastCooldownText ~= nil then
-      frame.cooldownText:SetText("")
-      frame._lastCooldownText = nil
-    end
-    self:UnregisterCooldownTextFrame(frame)
-    return
-  end
+  local cooldownText = frame.cooldownText
+  local wasVisible = frame._cooldownTextVisible == true
 
-  if not showNumbers then
-    if frame._cooldownTextVisible then
-      frame.cooldownText:Hide()
+  local numbersSuppressed = suppressDisplay or frame._gcdActive or not showNumbers
+  if numbersSuppressed then
+    if wasVisible then
+      cooldownText:Hide()
       frame._cooldownTextVisible = false
     end
-    if frame._lastCooldownText ~= nil then
-      frame.cooldownText:SetText("")
-      frame._lastCooldownText = nil
+
+    if not remaining or remaining <= 0 then
+      if frame._lastCooldownText ~= nil then
+        cooldownText:SetText("")
+        frame._lastCooldownText = nil
+      end
     end
+
     self:UnregisterCooldownTextFrame(frame)
     return
   end
@@ -858,21 +853,21 @@ function ClassHUD:ApplyCooldownText(frame, remaining)
   if remaining and remaining > 0 then
     local formatted = ClassHUD.FormatSeconds(remaining)
     if frame._lastCooldownText ~= formatted then
-      frame.cooldownText:SetText(formatted or "")
+      cooldownText:SetText(formatted or "")
       frame._lastCooldownText = formatted
     end
-    if not frame._cooldownTextVisible then
-      frame.cooldownText:Show()
+    if not wasVisible then
+      cooldownText:Show()
       frame._cooldownTextVisible = true
     end
     self:RegisterCooldownTextFrame(frame)
   else
-    if frame._cooldownTextVisible then
-      frame.cooldownText:Hide()
+    if wasVisible then
+      cooldownText:Hide()
       frame._cooldownTextVisible = false
     end
     if frame._lastCooldownText ~= nil then
-      frame.cooldownText:SetText("")
+      cooldownText:SetText("")
       frame._lastCooldownText = nil
     end
     self:UnregisterCooldownTextFrame(frame)
@@ -895,10 +890,6 @@ function ClassHUD:TickCooldownText()
     for frame in pairs(frames) do
       frames[frame] = nil
       if frame and frame.cooldownText then
-        if frame._lastCooldownText ~= nil then
-          frame.cooldownText:SetText("")
-          frame._lastCooldownText = nil
-        end
         if frame._cooldownTextVisible then
           frame.cooldownText:Hide()
           frame._cooldownTextVisible = false
