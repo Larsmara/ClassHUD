@@ -60,17 +60,24 @@ function ClassHUD:OnEnable()
 
   ensureBars()
 
+  if self.Cooldowns and self.Cooldowns.Initialize then
+    self.Cooldowns:Initialize()
+  end
+
   self:RegisterUnitEvent("UNIT_HEALTH", "player")
   self:RegisterUnitEvent("UNIT_MAXHEALTH", "player")
   self:RegisterUnitEvent("UNIT_POWER_UPDATE", "player")
   self:RegisterUnitEvent("UNIT_MAXPOWER", "player")
   self:RegisterUnitEvent("UNIT_DISPLAYPOWER", "player")
+  self:RegisterUnitEvent("UNIT_AURA", "player")
   self:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
   self:RegisterUnitEvent("UNIT_SPELLCAST_STOP", "player")
   self:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTED", "player")
   self:RegisterUnitEvent("UNIT_SPELLCAST_FAILED", "player")
   self:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_START", "player")
   self:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_STOP", "player")
+  self:RegisterEvent("ACTIONBAR_UPDATE_COOLDOWN")
+  self:RegisterEvent("BAG_UPDATE_COOLDOWN")
   self:RegisterEvent("PLAYER_ENTERING_WORLD")
 end
 
@@ -138,6 +145,10 @@ end
 
 function ClassHUD:PLAYER_ENTERING_WORLD()
   ensureBars()
+
+  if self.Cooldowns and self.Cooldowns.HandleEvent then
+    self.Cooldowns:HandleEvent("PLAYER_ENTERING_WORLD")
+  end
 end
 
 function ClassHUD:UNIT_HEALTH(_, unit)
@@ -174,6 +185,16 @@ function ClassHUD:UNIT_DISPLAYPOWER(_, unit)
   end
 
   ensureBars()
+end
+
+function ClassHUD:UNIT_AURA(_, unit)
+  if unit ~= "player" then
+    return
+  end
+
+  if self.Cooldowns and self.Cooldowns.HandleEvent then
+    self.Cooldowns:HandleEvent("UNIT_AURA")
+  end
 end
 
 function ClassHUD:UNIT_SPELLCAST_START(_, unit, castGUID)
@@ -234,6 +255,32 @@ function ClassHUD:UNIT_SPELLCAST_CHANNEL_STOP(_, unit)
   if self.Castbar and self.Castbar.HandleSpellcastStop then
     self.Castbar:HandleSpellcastStop(unit)
   end
+end
+
+function ClassHUD:ACTIONBAR_UPDATE_COOLDOWN()
+  if self.Cooldowns and self.Cooldowns.HandleEvent then
+    self.Cooldowns:HandleEvent("ACTIONBAR_UPDATE_COOLDOWN")
+  end
+end
+
+function ClassHUD:BAG_UPDATE_COOLDOWN()
+  if self.Cooldowns and self.Cooldowns.HandleEvent then
+    self.Cooldowns:HandleEvent("BAG_UPDATE_COOLDOWN")
+  end
+end
+
+function ClassHUD:UpdateFromCM(data)
+  local summary
+  if type(data) == "table" then
+    local list = data.list ~= nil and tostring(data.list) or "?"
+    local kind = data.kind ~= nil and tostring(data.kind) or "?"
+    local spellID = data.spellID or data.spellId or "?"
+    summary = string.format("CM update: list=%s kind=%s spellID=%s", list, kind, tostring(spellID))
+  else
+    summary = "CM update received."
+  end
+
+  self:Debug(summary)
 end
 
 return ClassHUD
