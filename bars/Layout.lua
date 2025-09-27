@@ -12,6 +12,24 @@ local orderedBars = {
   { key = "power", module = "ClassBar" },
 }
 
+local function isBarEnabled(key)
+  if not key then
+    return true
+  end
+
+  local profile = ClassHUD.db and ClassHUD.db.profile
+  if not profile then
+    return true
+  end
+
+  local layout = profile.layout
+  if layout and layout.show and layout.show[key] == false then
+    return false
+  end
+
+  return true
+end
+
 local function resolveHolder(entry)
   local module = ClassHUD[entry.module]
   if not module then
@@ -53,6 +71,10 @@ local function collectStatusBars()
       end
 
       if shouldInclude then
+        shouldInclude = isBarEnabled(entry.key)
+      end
+
+      if shouldInclude then
         table.insert(bars, {
           holder = holder,
           bar = bar,
@@ -62,6 +84,9 @@ local function collectStatusBars()
       else
         if holder.Hide then
           holder:Hide()
+        end
+        if bar and bar.Hide then
+          bar:Hide()
         end
       end
     end

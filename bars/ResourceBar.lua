@@ -5,6 +5,20 @@ ClassHUD.ResourceBar = ClassHUD.ResourceBar or {}
 
 local ResourceBar = ClassHUD.ResourceBar
 
+local function isEnabled()
+  local profile = ClassHUD.db and ClassHUD.db.profile
+  if not profile then
+    return true
+  end
+
+  local layout = profile.layout
+  if layout and layout.show and layout.show.resource == false then
+    return false
+  end
+
+  return true
+end
+
 local function formatResourceText(value, maxValue)
   local formattedValue = BreakUpLargeNumbers(value or 0)
   local formattedMax = BreakUpLargeNumbers(maxValue or 0)
@@ -48,9 +62,18 @@ function ResourceBar:CreateResourceBar()
 
   applyColor(bar)
 
-  bar:Show()
   if bar._holder then
-    bar._holder:Show()
+    if isEnabled() then
+      bar._holder:Show()
+    else
+      bar._holder:Hide()
+    end
+  end
+
+  if isEnabled() then
+    bar:Show()
+  else
+    bar:Hide()
   end
 
   if ClassHUD.Layout and ClassHUD.Layout.RequestLayoutUpdate then
@@ -80,9 +103,20 @@ function ResourceBar:UpdatePrimaryResource()
     bar.text:SetText(formatResourceText(current, maxValue))
   end
 
+  if not isEnabled() then
+    if bar._holder then
+      bar._holder:Hide()
+    end
+    bar:Hide()
+  end
+
   if ClassHUD.Layout and ClassHUD.Layout.RequestLayoutUpdate then
     ClassHUD.Layout:RequestLayoutUpdate()
   end
+end
+
+function ResourceBar:ShouldLayout()
+  return isEnabled()
 end
 
 return ResourceBar

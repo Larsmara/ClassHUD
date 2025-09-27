@@ -101,8 +101,12 @@ end
 
 function ClassHUD:HandleSlashCommand(input)
   local cleaned = trim(input)
-  if cleaned == "" then
-    printMessage(self, "Usage: /chud debug on|off|toggle")
+  if cleaned == "" or cleaned == "open" or cleaned == "options" or cleaned == "config" then
+    if self.Options and type(self.Options.Open) == "function" then
+      self.Options:Open()
+    else
+      printMessage(self, "Options UI is not available.")
+    end
     return
   end
 
@@ -139,7 +143,7 @@ function ClassHUD:HandleSlashCommand(input)
       printMessage(self, "Usage: /chud debug on|off|toggle")
     end
   else
-    printMessage(self, "Unknown command. Usage: /chud debug on|off|toggle")
+    printMessage(self, "Unknown command. Usage: /chud [options|config] or /chud debug on|off|toggle")
   end
 end
 

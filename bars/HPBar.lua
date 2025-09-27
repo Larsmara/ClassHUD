@@ -5,6 +5,20 @@ ClassHUD.HPBar = ClassHUD.HPBar or {}
 
 local HPBar = ClassHUD.HPBar
 
+local function isEnabled()
+  local profile = ClassHUD.db and ClassHUD.db.profile
+  if not profile then
+    return true
+  end
+
+  local layout = profile.layout
+  if layout and layout.show and layout.show.hp == false then
+    return false
+  end
+
+  return true
+end
+
 local function formatPercent(value, maxValue)
   if not maxValue or maxValue == 0 then
     return "0%"
@@ -45,9 +59,18 @@ function HPBar:CreateHPBar()
     bar.bg:SetColorTexture(r * 0.2, g * 0.2, b * 0.2, 0.75)
   end
 
-  bar:Show()
   if bar._holder then
-    bar._holder:Show()
+    if isEnabled() then
+      bar._holder:Show()
+    else
+      bar._holder:Hide()
+    end
+  end
+
+  if isEnabled() then
+    bar:Show()
+  else
+    bar:Hide()
   end
 
   if ClassHUD.Layout and ClassHUD.Layout.RequestLayoutUpdate then
@@ -79,9 +102,20 @@ function HPBar:UpdateHP()
     bar.text:SetText(formatHealthString(current, maxValue))
   end
 
+  if not isEnabled() then
+    if bar._holder then
+      bar._holder:Hide()
+    end
+    bar:Hide()
+  end
+
   if ClassHUD.Layout and ClassHUD.Layout.RequestLayoutUpdate then
     ClassHUD.Layout:RequestLayoutUpdate()
   end
+end
+
+function HPBar:ShouldLayout()
+  return isEnabled()
 end
 
 return HPBar

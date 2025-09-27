@@ -7,6 +7,20 @@ local Castbar = ClassHUD.Castbar
 
 local UPDATE_THROTTLE = 0.1
 
+local function isCastEnabled()
+  local profile = ClassHUD.db and ClassHUD.db.profile
+  if not profile then
+    return true
+  end
+
+  local layout = profile.layout
+  if layout and layout.show and layout.show.cast == false then
+    return false
+  end
+
+  return true
+end
+
 local function formatTime(seconds)
   if not seconds or seconds < 0 then
     seconds = 0
@@ -148,7 +162,15 @@ function Castbar:GetLayoutFrame()
   return self.holder
 end
 
+function Castbar:IsEnabled()
+  return isCastEnabled()
+end
+
 function Castbar:ShouldLayout()
+  if not self:IsEnabled() then
+    return false
+  end
+
   return self.active == true
 end
 
@@ -219,8 +241,13 @@ function Castbar:StartCast(name, iconTexture, startMS, endMS, isChannel, castGUI
     bar:SetValue(math.max(0, now - self.startTime))
   end
 
-  holder:Show()
-  bar:Show()
+  if self:IsEnabled() then
+    holder:Show()
+    bar:Show()
+  else
+    holder:Hide()
+    bar:Hide()
+  end
 
   ensureOnUpdate(self)
 
