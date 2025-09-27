@@ -52,16 +52,6 @@ function ClassHUD.UI:EnsureAnchor()
     frame:StopMovingOrSizing()
   end)
 
-  local background = anchor:CreateTexture(nil, "BACKGROUND")
-  background:SetAllPoints()
-  background:SetColorTexture(0, 1, 0, 0.15)
-  anchor.background = background
-
-  local label = anchor:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  label:SetPoint("CENTER")
-  label:SetText("ClassHUD Anchor")
-  anchor.label = label
-
   anchor:Show()
 
   self.anchor = anchor
