@@ -9,11 +9,18 @@
 
 embeds.xml
 
-ClassHUD.lua
-ClassHUD_Utils.lua
-ClassHUD_Bars.lua
-ClassHUD_Classbar.lua
-ClassHUD_Spells.lua
-ClassHUD_Tracking.lua
-ClassHUD_Options.lua
-ClassHUD_SpellSuggestions.lua
+core/Init.lua
+core/DB.lua
+core/Debug.lua
+
+utils/UIUtils.lua
+
+bars/Castbar.lua
+bars/HPBar.lua
+bars/ResourceBar.lua
+bars/ClassBar.lua
+bars/Layout.lua
+
+cooldowns/CooldownLayer.lua
+
+options/Config.lua
