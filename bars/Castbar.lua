@@ -125,13 +125,13 @@ function Castbar:CreateCastbar()
   bg:SetColorTexture(0, 0, 0, 0.6)
   status.bg = bg
 
-  local nameText = status:CreateFontString(nil, "OVERLAY")
+  local nameText = status:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   nameText:SetPoint("LEFT", status, "LEFT", 4, 0)
   nameText:SetJustifyH("LEFT")
   nameText:SetTextColor(1, 1, 1)
   nameText:SetText("")
 
-  local timeText = status:CreateFontString(nil, "OVERLAY")
+  local timeText = status:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   timeText:SetPoint("RIGHT", status, "RIGHT", -4, 0)
   timeText:SetJustifyH("RIGHT")
   timeText:SetTextColor(1, 1, 1)

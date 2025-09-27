@@ -128,10 +128,12 @@ local function getAuraPayload(spellID)
     aura = C_UnitAuras.GetPlayerAuraBySpellID(spellID)
   elseif AuraUtil and AuraUtil.FindAuraBySpellID then
     local filterUsed = "HELPFUL"
-    local name, icon, count, debuffType, duration, expirationTime, source, _, _, spellId = AuraUtil.FindAuraBySpellID(spellID, "player", filterUsed)
+    local name, icon, count, debuffType, duration, expirationTime, source, _, _, spellId = AuraUtil.FindAuraBySpellID(
+      spellID, "player", filterUsed)
     if not name then
       filterUsed = "HARMFUL"
-      name, icon, count, debuffType, duration, expirationTime, source, _, _, spellId = AuraUtil.FindAuraBySpellID(spellID, "player", filterUsed)
+      name, icon, count, debuffType, duration, expirationTime, source, _, _, spellId = AuraUtil.FindAuraBySpellID(
+        spellID, "player", filterUsed)
     end
 
     if name then
@@ -154,8 +156,8 @@ end
 
 function Cooldowns:IsAPIAvailable()
   return type(C_CooldownViewer) == "table"
-    and type(C_CooldownViewer.GetCooldownViewerCategorySet) == "function"
-    and type(C_CooldownViewer.GetCooldownViewerCooldownInfo) == "function"
+      and type(C_CooldownViewer.GetCooldownViewerCategorySet) == "function"
+      and type(C_CooldownViewer.GetCooldownViewerCooldownInfo) == "function"
 end
 
 function Cooldowns:GetListIdentifier(categorySet, fallbackIndex)
@@ -226,24 +228,20 @@ function Cooldowns:BuildEntries()
   end
 
   local entries = {}
-  local index = 1
-  while true do
-    local categorySet = C_CooldownViewer.GetCooldownViewerCategorySet(index)
-    if not categorySet then
-      break
-    end
 
-    local listID = self:GetListIdentifier(categorySet, index)
-    local cooldownIDs = self:CollectCooldownIDs(categorySet)
-    for _, cooldownID in ipairs(cooldownIDs) do
-      local info = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
-      local normalized = self:NormalizeEntry(listID, info)
-      if normalized then
-        entries[#entries + 1] = normalized
+  for category = 0, 3 do
+    local set = C_CooldownViewer.GetCooldownViewerCategorySet(category)
+    if set then
+      local listID = self:GetListIdentifier(set, category)
+      local cooldownIDs = self:CollectCooldownIDs(set)
+      for _, cooldownID in ipairs(cooldownIDs) do
+        local info = C_CooldownViewer.GetCooldownViewerCooldownInfo(cooldownID)
+        local normalized = self:NormalizeEntry(listID, info)
+        if normalized then
+          entries[#entries + 1] = normalized
+        end
       end
     end
-
-    index = index + 1
   end
 
   return entries
