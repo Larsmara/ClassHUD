@@ -25,6 +25,13 @@ local function ensureBars()
     ClassHUD.UI:EnsureAnchor()
   end
 
+  if ClassHUD.Castbar and ClassHUD.Castbar.CreateCastbar then
+    ClassHUD.Castbar:CreateCastbar()
+    if ClassHUD.Castbar.RefreshActiveCast then
+      ClassHUD.Castbar:RefreshActiveCast()
+    end
+  end
+
   if ClassHUD.HPBar and ClassHUD.HPBar.CreateHPBar then
     ClassHUD.HPBar:CreateHPBar()
     if ClassHUD.HPBar.UpdateHP then
@@ -58,12 +65,22 @@ function ClassHUD:OnEnable()
   self:RegisterUnitEvent("UNIT_POWER_UPDATE", "player")
   self:RegisterUnitEvent("UNIT_MAXPOWER", "player")
   self:RegisterUnitEvent("UNIT_DISPLAYPOWER", "player")
+  self:RegisterUnitEvent("UNIT_SPELLCAST_START", "player")
+  self:RegisterUnitEvent("UNIT_SPELLCAST_STOP", "player")
+  self:RegisterUnitEvent("UNIT_SPELLCAST_INTERRUPTED", "player")
+  self:RegisterUnitEvent("UNIT_SPELLCAST_FAILED", "player")
+  self:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_START", "player")
+  self:RegisterUnitEvent("UNIT_SPELLCAST_CHANNEL_STOP", "player")
   self:RegisterEvent("PLAYER_ENTERING_WORLD")
 end
 
 function ClassHUD:OnDisable()
   printMessage(self, "ClassHUD disabled.")
   self:UnregisterAllEvents()
+
+  if self.Castbar and self.Castbar.StopCast then
+    self.Castbar:StopCast()
+  end
 end
 
 local function setDebugState(addon, enabled)
@@ -157,6 +174,66 @@ function ClassHUD:UNIT_DISPLAYPOWER(_, unit)
   end
 
   ensureBars()
+end
+
+function ClassHUD:UNIT_SPELLCAST_START(_, unit, castGUID)
+  if unit ~= "player" then
+    return
+  end
+
+  if self.Castbar and self.Castbar.HandleSpellcastStart then
+    self.Castbar:HandleSpellcastStart(unit, castGUID)
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_STOP(_, unit)
+  if unit ~= "player" then
+    return
+  end
+
+  if self.Castbar and self.Castbar.HandleSpellcastStop then
+    self.Castbar:HandleSpellcastStop(unit)
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_INTERRUPTED(_, unit)
+  if unit ~= "player" then
+    return
+  end
+
+  if self.Castbar and self.Castbar.HandleSpellcastStop then
+    self.Castbar:HandleSpellcastStop(unit)
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_FAILED(_, unit)
+  if unit ~= "player" then
+    return
+  end
+
+  if self.Castbar and self.Castbar.HandleSpellcastStop then
+    self.Castbar:HandleSpellcastStop(unit)
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_CHANNEL_START(_, unit)
+  if unit ~= "player" then
+    return
+  end
+
+  if self.Castbar and self.Castbar.HandleChannelStart then
+    self.Castbar:HandleChannelStart(unit)
+  end
+end
+
+function ClassHUD:UNIT_SPELLCAST_CHANNEL_STOP(_, unit)
+  if unit ~= "player" then
+    return
+  end
+
+  if self.Castbar and self.Castbar.HandleSpellcastStop then
+    self.Castbar:HandleSpellcastStop(unit)
+  end
 end
 
 return ClassHUD

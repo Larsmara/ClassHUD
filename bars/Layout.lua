@@ -15,42 +15,55 @@ local orderedBars = {
 local function resolveHolder(entry)
   local module = ClassHUD[entry.module]
   if not module then
-    return nil, nil
+    return nil, nil, nil
   end
 
   if type(module.GetLayoutFrame) == "function" then
     local frame = module:GetLayoutFrame()
     if frame and frame.IsObjectType and frame:IsObjectType("Frame") then
-      return frame, frame
+      return frame, frame, module
     end
   end
 
   if module.bar and module.bar._holder and module.bar._holder.IsObjectType and module.bar._holder:IsObjectType("Frame") then
-    return module.bar._holder, module.bar
+    return module.bar._holder, module.bar, module
   end
 
   if module.holder and module.holder.IsObjectType and module.holder:IsObjectType("Frame") then
-    return module.holder, module.bar or module.holder
+    return module.holder, module.bar or module.holder, module
   end
 
   if module.frame and module.frame.IsObjectType and module.frame:IsObjectType("Frame") then
-    return module.frame, module.bar or module.frame
+    return module.frame, module.bar or module.frame, module
   end
 
-  return nil, nil
+  return nil, nil, module
 end
 
 local function collectStatusBars()
   local bars = {}
 
   for _, entry in ipairs(orderedBars) do
-    local holder, bar = resolveHolder(entry)
+    local holder, bar, module = resolveHolder(entry)
     if holder then
-      table.insert(bars, {
-        holder = holder,
-        bar = bar,
-        heightKey = entry.key,
-      })
+      local shouldInclude = true
+
+      if module and type(module.ShouldLayout) == "function" then
+        shouldInclude = module:ShouldLayout() and true or false
+      end
+
+      if shouldInclude then
+        table.insert(bars, {
+          holder = holder,
+          bar = bar,
+          heightKey = entry.key,
+          module = module,
+        })
+      else
+        if holder.Hide then
+          holder:Hide()
+        end
+      end
     end
   end
 
@@ -106,6 +119,9 @@ function Layout:Layout()
 
     if width or height then
       holder:SetSize(width or holder:GetWidth(), height or holder:GetHeight())
+      if info.module and type(info.module.OnSizeChanged) == "function" then
+        info.module:OnSizeChanged(width or holder:GetWidth(), height or holder:GetHeight())
+      end
     end
 
     holder:ClearAllPoints()
